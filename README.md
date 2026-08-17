@@ -10,7 +10,7 @@
 
 在飞书里发消息 = 给 Mac 上当前 Harness 服务发消息；agent 要审批 → 飞书卡片点批准/拒绝；一个飞书话题 = 一个并行 session。
 
-**状态：方案已定案并通过 Codex（gpt-5.6-sol）独立 review，尚未开始编码。**
+**状态：方案已定案并通过三方独立 review（DeepSeek + Claude Opus 5 + Codex gpt-5.6-sol），尚未开始编码。**
 
 与姊妹项目 `deepseek-harness-mac-app`（Mac 壳 App）完全独立，互不混淆。
 
@@ -20,18 +20,22 @@
 | --- | --- |
 | [docs/01-requirements.md](docs/01-requirements.md) | 需求清单（P0/P1/P2 与非目标） |
 | [docs/02-research.md](docs/02-research.md) | 调研报告（dsh 内部能力 + 社区项目对比） |
-| [docs/03-architecture.md](docs/03-architecture.md) | 架构决策记录（D1-D6） |
+| [docs/03-architecture.md](docs/03-architecture.md) | 架构决策记录（D1-D8） |
 | [docs/04-roadmap.md](docs/04-roadmap.md) | 路线图与工作量 |
 | [docs/05-implementation-plan.md](docs/05-implementation-plan.md) | 实现方案（当前方案单一事实源） |
 | [docs/06-codex-review.md](docs/06-codex-review.md) | Codex（gpt-5.6-sol）独立 review 报告 |
 | [docs/07-ecosystem-research.md](docs/07-ecosystem-research.md) | 生态调研：Claude Tag 类项目与远程桥（30+ 仓库） |
+| [docs/08-triple-review.md](docs/08-triple-review.md) | 三方复审（DeepSeek/Claude Opus 5/Codex）共识与修订对照 |
 
 ## 关键决策速览
 
 - **插件内嵌 `dsh web` profile**（会话与 GUI 互通），而非独立进程
 - 飞书**长连接模式**，无需公网服务器
 - **话题 ↔ session** 多会话映射
-- **审批卡片 + 文字兜底**（/approve /reject）
-- 白名单只认本人 open_id
+- **审批卡片 + 文字兜底**（/approve /reject，按钮重复点击被 SDK 去重 → 文字兜底是必需路径）
+- 审批 answerer 以 **`{prepend:true}` 注册 + 回合归属路由**（cordis.patch.yml 无排序能力；GUI 与飞书双写回合各归各的审批）
+- 飞书会话 **屏蔽 ask-user 类工具**（防结构化提问打进无超时的浏览器通道导致远端挂起）
+- **`apply()` 永不 reject**，channel 连接后台重试（飞书断网不得拖崩 web profile）
+- 白名单只认本人 open_id；**群范围 fail-closed**（`allowedChatIds` 空=仅私聊）
 - **锁死 dsh 0.1.0-rc.6**（本机当前版本）
 - 借鉴两个 MIT 项目：[dsh-im-hub](https://github.com/ThreeBody6666/dsh-im-hub)（形态）+ [dsh-lark-bridge](https://github.com/imetn/dsh-lark-bridge)（功能）

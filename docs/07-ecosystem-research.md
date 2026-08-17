@@ -12,7 +12,7 @@
 | [Claude Tag](https://claude.com/docs/claude-tag)（官方，闭源） | 云端沙箱 + Slack | thread=session+sandbox、quiet-period 惰性重建、checklist 原地更新进度卡、agent identity 服务账户。**可借理念**：惰性重建=我们的 persistence+resume；进度卡=节流卡；团队级安全模型单用户不适用 |
 | [open-claude-tag](https://github.com/Anil-matcha/open-claude-tag)（MIT） | Python + Slack | channel=单 session（话题不隔离，反例）；MEMORY.md 自 curation 是 P2+ 范畴 |
 | [Zilliz MFS + Open Tag](https://github.com/zilliztech/mfs)（Apache-2.0） | 检索 harness + 极薄 glue | MFS（多源文件式检索，server+600MB 嵌入模型）对 P0/P1 过重；P2 做飞书文档/消息索引时再评估 |
-| [lark-coding-agent-bridge](https://github.com/cv-cat/lark-coding-agent-bridge)（MIT）★ | Node + 官方 SDK | **架构与我们最像**：`chatId:threadId` 话题 scope + ChatModeCache、流式卡（streaming_mode+reasoning 面板+工具折叠+footer 终态）、PendingQueue 600ms 合并、owner/admin/allowedChats 分层、policyFingerprint（cwd+access+attachments 摘要） |
+| [lark-coding-agent-bridge](https://github.com/zarazhangrui/lark-coding-agent-bridge)（MIT）★ | Node + 官方 SDK | **架构与我们最像**：`chatId:threadId` 话题 scope + ChatModeCache、流式卡（streaming_mode+reasoning 面板+工具折叠+footer 终态）、PendingQueue 600ms 合并、owner/admin/allowedChats 分层、policyFingerprint（cwd+access+attachments 摘要） |
 | [feishu-bridge](https://github.com/feir/feishu-bridge)（MIT）★ | Python 多后端 | **唯一有真审批闭环的开源实现**：agent 输出内嵌 confirm/ask/choices marker → 卡片按钮；bg_supervisor cancel/timeout 状态机（Cancel SLO≤10s、崩溃续跑）；sentinel probe 探测 `/resume` 可续性；CardKit 100ms 级 patch 证明卡片可承受高频更新 |
 | [devbot](https://github.com/pangbit/devbot)（无 LICENSE） | Go | 必填白名单 fail-closed（与我们同款）；每 chat 队列；目录↔会话关联 |
 | [agent-bridge](https://github.com/Ken-Chy129/agent-bridge)（MIT） | Node 守护 | SessionStart hook **接管全部本地会话**——与我们"不接管 GUI 会话"相反（反例）；JSONL→卡片渲染管线可参考 |
@@ -50,10 +50,10 @@
 | --- | --- | --- |
 | 审批状态机骨架（cancel/timeout/reap、Cancel SLO、崩溃续跑） | feishu-bridge bg_supervisor | §2.3 五条结算路径的落地模板 |
 | `/resume` 预检（sentinel probe 探测会话可续性） | feishu-bridge | §2.6/命令集 |
-| cwd 恢复校验（policyFingerprint：cwd+access 摘要） | cv-cat | §5.4 workspaceRoot/cwd 校验强化 |
-| 话题群判定缓存（ChatModeCache） | cv-cat | §2.6 实现细节 |
-| 流式卡结构（streaming_mode+reasoning 面板+工具折叠+footer 终态） | cv-cat / cc-connect | §2.5 卡片模板 |
-| 卡片按钮一次性 value 约定 + 回调内原地回填状态（省一次 API） | cc-connect | §2.3 |
+| cwd 恢复校验（policyFingerprint：cwd+access 摘要） | zarazhangrui/lark-coding-agent-bridge | §2.6 cwd 校验强化 |
+| 话题群判定缓存（ChatModeCache） | zarazhangrui/lark-coding-agent-bridge | §2.6 实现细节 |
+| 流式卡结构（streaming_mode+reasoning 面板+工具折叠+footer 终态） | zarazhangrui/lark-coding-agent-bridge / jiangkuo888/cc-connect | §2.5 卡片模板 |
+| 卡片按钮一次性 value 约定（perm:allow/deny） | jiangkuo888/cc-connect | §2.3 |
 | 工具参数卡片摘要（不展全量） | cc-connect | §2.9 群聊公开假设 |
 | 入站 durable queue + 每话题 lane FIFO | OpenClaw | §2.8 控制队列 |
 | 白名单 fail-closed 必填 | devbot | §2.9（已定案） |
@@ -62,4 +62,4 @@
 
 ## 五、一句话结论
 
-30+ 仓库里**没有一个**做"内嵌 dsh web profile 进程内对接"（全是外部 CLI 桥/云端沙箱）——这正是我们的差异点；但其周边模式（审批闭环状态机、流式卡、话题键、持久化事实源）全有成熟实现可抄，模板首选 **cv-cat lark-coding-agent-bridge + cc-connect + feishu-bridge** 三家 MIT 项目。
+30+ 仓库里**没有一个**做"内嵌 dsh web profile 进程内对接"（全是外部 CLI 桥/云端沙箱）——这正是我们的差异点；但其周边模式（审批闭环状态机、流式卡、话题键、持久化事实源）全有成熟实现可抄，模板首选 **zarazhangrui/lark-coding-agent-bridge + jiangkuo888/cc-connect + feishu-bridge** 三家 MIT 项目。
