@@ -1437,6 +1437,10 @@ export class FeishuRemoteBridge {
       })
       if (result === 'sent' && sentMessageId !== undefined) {
         progress.progressMessageId = sentMessageId
+        // Each card gets its own fallback chance: a fresh card must not
+        // inherit a consumed fallback flag from the dead one (Codex final
+        // verify: stale-fallback flag must not starve the terminal fallback).
+        progress.cardFallbackAttempted = false
       }
       return
     }
@@ -1444,12 +1448,18 @@ export class FeishuRemoteBridge {
     const result = await this.enqueuePatch(entry, messageId, card, terminal, sessionId)
     if (result === 'permanent' && !progress.cardFallbackAttempted) {
       // patch 永久失败 → 改发新终态卡（docs/05 §1.3/§2.5）。
-      // The fallback is a fresh SEND: rejoin the chain (via the public method)
-      // so only one card is sent per turn (Round 12 F2 复核).
+      // DIRECT recursion, never the public chaining method: this may be
+      // running inside the sendChain, and re-chaining would self-wait
+      // (P1 → P2 → P1 deadlock, Codex final verify P1). The fresh SEND
+      // targets a NEW messageId, so no ordering constraint with the dead
+      // card remains; the scheduler serializes outbound ops globally.
       progress.cardFallbackAttempted = true
       progress.progressMessageId = undefined
       this.ctx.logger?.warn?.('dsh-feishu-remote: 卡片 patch 永久失败，改发新终态卡（session=%s）', sessionId)
-      await this.upsertTurnCard(entry, progress, resolvedOutcome, resolvedDetail)
+      // Render the CURRENT best state: if the turn ended while this patch was
+      // in flight, the fallback must be the terminal card, not a stale live one.
+      const fallbackOutcome = resolvedOutcome ?? (progress.terminal ? progress.outcome : undefined)
+      await this.upsertTurnCardInner(entry, progress, fallbackOutcome, resolvedDetail)
     }
   }
 

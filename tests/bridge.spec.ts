@@ -853,6 +853,31 @@ describe('streaming aggregation', () => {
     expect(h.channel.patched[1]!.messageId).toBe(h.channel.patched[0]!.messageId)
   })
 
+  it('re-sends the terminal card when a CHAINED terminal patch fails permanently (final verify P1, no self-wait)', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('stream')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    // Hold the initial live-card SEND in flight so the terminal card is
+    // CHAINED behind it (the bypass needs a settled messageId).
+    let release!: () => void
+    h.channel.cardGate = new Promise<void>(resolve => { release = resolve })
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    await waitFor(() => h.scheduler.pendingCount > 0, 'initial send in flight')
+    // The chained terminal PATCH will fail permanently (230031: 超 14 天).
+    h.channel.patchErrors.push({
+      cause: { response: { status: 400, data: { code: 230031 }, message: 'too late' } },
+    } as never)
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    release()
+    // Fallback = a fresh TERMINAL card SEND (streaming_mode: false). If the
+    // fallback re-chained behind itself, this would deadlock and never land.
+    await waitFor(() => h.channel.sent.filter(item => item.input.card !== undefined).length >= 2, 'fresh terminal card after chained-patch permanent failure')
+    const cards = h.channel.sent.filter(item => item.input.card !== undefined)
+    expect((cards.at(-1)!.input.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+  })
+
   it('drops replayed events by the seq watermark', async () => {
     const h = await makeHarness()
     await h.emitMessage('hello')
