@@ -35,7 +35,12 @@ describe('classifyOutboundError', () => {
   it('classifies permanent business failures as non-retryable', () => {
     expect(classifyOutboundError(feishuError(230025)).kind).toBe('permanent') // 超长
     expect(classifyOutboundError(feishuError(230031)).kind).toBe('permanent') // 超 14 天
-    expect(classifyOutboundError(feishuError(230010)).kind).toBe('permanent') // 已撤回
+    expect(classifyOutboundError(feishuError(230010)).kind).toBe('permanent') // 消息不存在
+    expect(classifyOutboundError(feishuError(230011)).kind).toBe('permanent') // 已撤回（Round 12 F5）
+    expect(classifyOutboundError(feishuError(230110)).kind).toBe('permanent') // 已删除（Round 12 F5）
+    expect(classifyOutboundError(feishuError(230013)).kind).toBe('permanent') // 机器人对用户不可用（Round 12 F5）
+    expect(classifyOutboundError(feishuError(230027)).kind).toBe('permanent') // 无权限（Round 12 F5）
+    expect(classifyOutboundError(feishuError(232009)).kind).toBe('permanent') // 群已解散（Round 12 F5）
     expect(classifyOutboundError({ cause: { response: { status: 404, data: {} } } }).kind).toBe('permanent')
   })
 

@@ -119,6 +119,11 @@ interface PendingApproval {
   resolve: (outcome: ApprovalOutcome) => void
 }
 
+interface TurnCardUpsertOptions {
+  /** Explicit re-render (e.g. /view preset switch): bypasses the stale-progress guard. */
+  explicit?: boolean
+}
+
 function errorMessage(error: unknown): string {
   try {
     return redactSecrets(error instanceof Error ? error.message : String(error))
@@ -815,7 +820,8 @@ export class FeishuRemoteBridge {
         entry.cardPreset = argument
         await this.state.setCardView(origin.key, argument)
         if (entry.progress !== undefined && entry.progress.progressMessageId !== undefined) {
-          void this.upsertTurnCard(entry, entry.progress)
+          // Explicit re-render: /view works on a settled turn too (Round 12 F2).
+          void this.upsertTurnCard(entry, entry.progress, undefined, undefined, { explicit: true })
         }
         await this.safeSend(message.chatId, { markdown: `✅ 当前 Session 已切换为 \`${argument}\` 视图。` }, message)
         return
@@ -1369,15 +1375,22 @@ export class FeishuRemoteBridge {
   /**
    * Serialize this turn's card operations through the progress's own chain:
    * the initial send and its patches can never race (Codex P1-4).
+   *
+   * Stale-progress guard (Codex Round 12 F2): a progress tick queued after
+   * turn/end is dead work — the terminal card is a complete snapshot that
+   * supersedes it. Dropping it at the gate keeps the chain and the outbound
+   * scheduler free for the terminal card instead of queueing behind it.
    */
   private async upsertTurnCard(
     entry: BridgeSession,
     progress: TurnProgress,
     outcome?: 'completed' | 'cancelled' | 'blocked' | 'error',
     detail?: string,
+    options: TurnCardUpsertOptions = {},
   ): Promise<void> {
+    if (outcome === undefined && progress.terminal && options.explicit !== true) return
     const job = (progress.sendChain ?? Promise.resolve()).then(() => (
-      this.upsertTurnCardInner(entry, progress, outcome, detail)
+      this.upsertTurnCardInner(entry, progress, outcome, detail, options)
     ))
     progress.sendChain = job.catch(() => undefined)
     return job
@@ -1388,7 +1401,10 @@ export class FeishuRemoteBridge {
     progress: TurnProgress,
     outcome?: 'completed' | 'cancelled' | 'blocked' | 'error',
     detail?: string,
+    options: TurnCardUpsertOptions = {},
   ): Promise<void> {
+    // Re-check at run time: terminal may have landed while this was chained.
+    if (outcome === undefined && progress.terminal && options.explicit !== true) return
     const resolvedOutcome = outcome ?? progress.outcome
     const resolvedDetail = detail ?? progress.outcomeDetail
     const terminal = resolvedOutcome !== undefined
@@ -1461,8 +1477,10 @@ export class FeishuRemoteBridge {
     if (Buffer.byteLength(JSON.stringify(card), 'utf8') > 28_000) {
       // Pathological dynamic fields (tool names, detail, cwd, model…) — a
       // constant-size fallback card with a guaranteed byte postcondition.
+      // Running turns keep live-card semantics (Round 12 F4): streaming mode
+      // + stop button, never a premature "completed" header.
       truncated = true
-      card = buildOversizeCard(outcome ?? 'completed', outcome === undefined)
+      card = buildOversizeCard(outcome ?? 'running', outcome === undefined, entry.sessionId)
     }
     return { card, truncated }
   }
@@ -1666,7 +1684,8 @@ export class FeishuRemoteBridge {
       entry.cardPreset = nextCardPreset(entry.cardPreset)
       await this.state.setCardView(entry.key, entry.cardPreset)
       if (entry.progress !== undefined && entry.progress.progressMessageId !== undefined) {
-        await this.upsertTurnCard(entry, entry.progress)
+        // Explicit re-render: /view works on a settled turn too (Round 12 F2).
+        await this.upsertTurnCard(entry, entry.progress, undefined, undefined, { explicit: true })
       } else {
         await this.safeSend(entry.route.chatId, { markdown: `卡片视图已切换为 \`${entry.cardPreset}\`。` }, undefined, this.replyFor(entry))
       }

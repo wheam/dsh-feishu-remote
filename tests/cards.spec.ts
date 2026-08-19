@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildApprovalCard, buildStatusCard, buildTurnCard, parseBridgeAction } from '../src/cards.js'
+import { buildApprovalCard, buildOversizeCard, buildStatusCard, buildTurnCard, parseBridgeAction } from '../src/cards.js'
 import type { TurnProgress } from '../src/types.js'
 
 function progress(partial: Partial<TurnProgress> = {}): TurnProgress {
@@ -85,6 +85,37 @@ describe('card templates', () => {
     }) as { config: Record<string, unknown> }
     expect(card.config.streaming_mode).toBe(false)
     expect(card.config).not.toHaveProperty('streaming_config')
+  })
+
+  it('closes streaming mode for every terminal outcome (Round 12 F6)', () => {
+    for (const outcome of ['completed', 'cancelled', 'blocked', 'error'] as const) {
+      const card = buildTurnCard({
+        progress: progress(),
+        sessionId: 'feishu-abc-1',
+        cwd: '/tmp/work',
+        model: 'v4-pro',
+        preset: 'standard',
+        maxBodyChars: 12000,
+        outcome,
+      }) as { config: Record<string, unknown> }
+      expect(card.config.streaming_mode, outcome).toBe(false)
+    }
+  })
+
+  it('keeps live semantics on the running oversize fallback card (Round 12 F4)', () => {
+    const running = buildOversizeCard('running', true, 'feishu-abc-1') as {
+      config: Record<string, unknown>
+      header: { title: { content: string } }
+      body: { elements: object[] }
+    }
+    expect(running.config.streaming_mode).toBe(true)
+    expect(running.header.title.content).toContain('生成中')
+    expect(JSON.stringify(running.body)).toContain('停止任务')
+    for (const outcome of ['completed', 'cancelled', 'blocked', 'error'] as const) {
+      const card = buildOversizeCard(outcome) as { config: Record<string, unknown>; body: { elements: object[] } }
+      expect(card.config.streaming_mode).toBe(false)
+      expect(JSON.stringify(card.body)).not.toContain('停止任务')
+    }
   })
 
   it('keeps non-progress cards out of streaming mode entirely', () => {

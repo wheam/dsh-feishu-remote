@@ -74,9 +74,16 @@ export function classifyOutboundError(error: unknown): {
   if (status === 400 && code === 99991400) return { kind: 'rate-limit', status, code, resetMs: readResetHeader(response) }
 
   // Permanent business failures — never retry; caller falls back to a new card.
+  // Codes verified against the official im/v1/message/patch error table
+  // (Codex Round 12 finding F5).
   if (code === 230025) return { kind: 'permanent', status, code }   // 超长
   if (code === 230031) return { kind: 'permanent', status, code }   // 超 14 天
-  if (code === 230010) return { kind: 'permanent', status, code }   // 消息不存在/已撤回
+  if (code === 230010) return { kind: 'permanent', status, code }   // 消息不存在
+  if (code === 230011) return { kind: 'permanent', status, code }   // 消息已撤回
+  if (code === 230110) return { kind: 'permanent', status, code }   // 消息已删除
+  if (code === 230013) return { kind: 'permanent', status, code }   // 机器人对用户不可用（离职/禁用）
+  if (code === 230027) return { kind: 'permanent', status, code }   // 无权限
+  if (code === 232009) return { kind: 'permanent', status, code }   // 群已解散
   if (status === 404) return { kind: 'permanent', status, code }    // 目标失效
   if (code === 99991400 || code === 99991401) return { kind: 'permanent', status, code } // 权限错误不重试
 

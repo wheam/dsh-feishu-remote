@@ -10,9 +10,9 @@
 
 ## 状态
 
-**Phase 1（docs/05 步骤 0-6 + P1 设置卡片 + P1 流式卡片）已实现并经 Codex 十一轮独立 review 终审 APPROVE**：
+**Phase 1（docs/05 步骤 0-6 + P1 设置卡片 + P1 流式卡片）已实现，经 Codex 十一轮 review 终审 APPROVE，流式卡片经 Round 12 独立 review 修复后关闭**：
 核心链路（通道层 / 调度器 / 回合归属账本 / 审批闭环 / 话题映射 / 流式卡片）全部落地，
-108 个契约测试全绿，构建产物约 2.4MB（SDK 构建期 bundle，external 仅 `@deepseek-ai/*`），
+112 个契约测试全绿，构建产物约 2.4MB（SDK 构建期 bundle，external 仅 `@deepseek-ai/*`），
 mock 冒烟（真实 dsh web 进程内加载）通过。
 **真实飞书租户端到端初验已通过（2026-08-19）**：私聊 `/help` 回命令卡，白名单/长连接/
 事件订阅全链路正常（见 docs/09 §7 验收记录）。
@@ -24,8 +24,8 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 - **话题 ↔ session**：三支路 originKey（p2p / 群话题 thread_id / 群非话题拒绝），确定性前缀 `feishu-<24hex>-<base36ts>`，session persistence 为唯一事实源；`/new` pending 标记协议、`/resume` 原子切换（先探测后交换）、cwd 漂移防护、GUI 归档过滤。
 - **审批闭环**：answerer 以 `{ prepend: true }` 注册 + **回合归属账本**（飞书回合才认领、GUI 回合放行）；六条结算路径（按钮 / 文字 / abort / 超时 / 停机 / 通道终态失效）均有测试；终态显式 `updateCard`；卡片 pending 绑定操作者/会话/截止时间。
 - **交互隔离**：飞书会话 setup 内先 `presets.mount` 再 `tools.restrict({deny:['ask_user_question','exit_plan_mode']})`——飞书会话不存在通往浏览器的提问路径。
-- **流式卡片**：进度卡运行期携带 `streaming_mode: true`（+`streaming_config` 打字机参数），`session/event` 按回合聚合、约 600ms patch 同一张卡片，客户端对文本增量打字机渲染（同 zarazhangrui/lark-coding-agent-bridge 的卡片流式方案）；完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；终态卡显式 `streaming_mode: false` 关闭流式并切换标题/按钮；`turn/end.reason.kind` 六枚举二次映射。
-- **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230025/230031/撤回）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
+- **流式卡片**：进度卡运行期携带 `streaming_mode: true`（+`streaming_config` 打印参数），`session/event` 按回合聚合、约 600ms patch 同一张卡片（与 zarazhangrui/lark-coding-agent-bridge 卡片模式同路径：整卡 patch + streaming_mode）；完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；turn 结束后跳过排队的陈旧进度更新（终态不再排队，Round 12 F2）；终态卡显式 `streaming_mode: false` 关闭流式并切换标题/按钮；`turn/end.reason.kind` 六枚举二次映射。官方契约化的 token 级打字机需 cardkit 实体（`cardElement.content`），留作可选后续升级；客户端视觉行为以真实租户验收为准（docs/09 §7）。
+- **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230025/230031/230010/230011/230110/230013/230027/232009/404/99991400）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
 - **安全**：白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围 fail-closed（`allowedChatIds` 空 = 群聊全拒）；白名单外消息在宿主日志回显发送者 open_id 自举；出站脱敏；状态文件 0600 原子写、损坏隔离为 `.corrupt-<ts>` 从空重建。
 - **命令集**：`/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/view` `/help` `/commands`；Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
 - **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
@@ -59,14 +59,14 @@ dsh plugin --profile web add link:/path/to/dsh-feishu-remote
 # 4. 重启 web 进程（改码后重跑 build + 重启）
 ```
 
-改码后：`pnpm run check`（typecheck + 108 tests + bundle 构建），然后重启 web 进程验证。
+改码后：`pnpm run check`（typecheck + 112 tests + bundle 构建），然后重启 web 进程验证。
 
 ## 开发
 
 ```bash
 pnpm install
 pnpm run typecheck   # tsc --noEmit
-pnpm run test        # vitest：10 个 spec / 108 用例（契约测试，无真实凭据）
+pnpm run test        # vitest：10 个 spec / 112 用例（契约测试，无真实凭据）
 pnpm run build       # esbuild bundle → lib/index.js（~2.4MB）+ lib/client.js + THIRD_PARTY_NOTICES
 ```
 
@@ -90,6 +90,7 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
 | [docs/11-incident-rc7-keyed-slot.md](docs/11-incident-rc7-keyed-slot.md) | 事故记录：rc.7 keyed slot 契约导致 Mac App 无法进入界面（已修复勿回退） |
 | [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md) | 插件安装/更新/升级固定检查规则（强制流程，端到端验收才算成功） |
 | [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（话题全量 + 私聊回溯，官方 lark-cli + SDK 兜底；方案定案待实现） |
+| [docs/14-context-codex-review.md](docs/14-context-codex-review.md) | docs/13 的 Codex 独立 review 记录（15 项 findings 处置对照，修订已并入规格） |
 
 ## 许可
 

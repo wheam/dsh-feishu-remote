@@ -308,16 +308,31 @@ export function parseBridgeAction(value: unknown): BridgeAction | undefined {
  * Constant-size fallback card for pathological payloads that still exceed the
  * 28KB patch budget after every shrink (Codex P1-12/review #2 finding 8):
  * no dynamic metadata beyond a bounded title — guaranteed far below the limit.
+ * `state: 'running'` keeps the live-card semantics (streaming mode + stop
+ * button) instead of mislabeling an in-flight turn as completed (Round 12 F4).
  */
-export function buildOversizeCard(outcome: 'completed' | 'cancelled' | 'blocked' | 'error', streaming = false): object {
+export function buildOversizeCard(
+  state: 'running' | 'completed' | 'cancelled' | 'blocked' | 'error',
+  streaming = false,
+  sessionId?: string,
+): object {
   const titles = {
+    running: ['⏳ DeepSeek Harness 生成中', 'blue'],
     completed: ['✅ DeepSeek Harness 已完成', 'green'],
     cancelled: ['⏹️ DeepSeek Harness 已停止', 'grey'],
     blocked: ['⚠️ DeepSeek Harness 等待处理', 'orange'],
     error: ['❌ DeepSeek Harness 执行失败', 'red'],
   } as const
-  const [title, template] = titles[outcome]
-  return card(title, template, [
+  const [title, template] = titles[state]
+  const elements: object[] = [
     markdown('输出过大，无法在卡片中呈现；请到 Web GUI 的会话记录中查看完整输出。'),
-  ], title, streaming)
+  ]
+  if (state === 'running' && sessionId !== undefined) {
+    elements.push(buttonRow([{
+      label: '停止任务',
+      type: 'danger',
+      value: { bridge: 'dsh-feishu-remote', action: 'stop', sessionId },
+    }], 'bridge_turn_actions'))
+  }
+  return card(title, template, elements, title, streaming)
 }

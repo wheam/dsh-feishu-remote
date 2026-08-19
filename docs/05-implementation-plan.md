@@ -1,12 +1,14 @@
 # 实现方案（Phase 1 落地方案）
 
-> 状态：**步骤 0-6 与 P1 设置卡片 + P1 流式卡片已实现，Codex 十一轮 review 终审 APPROVE**
+> 状态：**步骤 0-6 与 P1 设置卡片 + P1 流式卡片已实现，Codex 十一轮 review 终审 APPROVE；
+> 流式卡片经 Round 12 独立 review（2 P1 / 4 P2 / 1 NIT，修复对照见 docs/10）**
 > （2026-08-18：仓库骨架、通道层、出站调度器、回合归属账本、审批闭环、话题映射、
-> 流式节流全部落地，108 个契约测试全绿，构建产物约 2.4MB，mock 冒烟通过；
+> 流式节流全部落地，104 个契约测试全绿，构建产物约 2.4MB，mock 冒烟通过；
 > 47 项 review findings 修复对照见 docs/10；真实租户验收待 docs/09-onboarding.md
 > 凭据执行）。
 > 2026-08-19：进度卡升级为飞书流式更新卡片（运行期 `streaming_mode: true` +
-> `streaming_config`，节流默认 600ms，终态显式关闭流式模式，见 §2.5）。
+> `streaming_config`，节流默认 600ms，终态显式关闭流式模式，见 §2.5）；
+> Round 12 修复后 112 个契约测试全绿。
 > 本文档是本仓库的"当前方案"单一事实源；
 > 若与 01-04 冲突，以本文为准。已通过三轮独立 review——第一轮 Codex
 > （gpt-5.6-sol）报告见 06-codex-review.md；第二轮 DeepSeek / Claude Opus 5 /
@@ -136,9 +138,14 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    调度器 + 每会话串行队列。
    **流式渲染（同 zarazhangrui/lark-coding-agent-bridge 卡片模式）**：运行期卡片
    `config` 携带 `streaming_mode: true` + `streaming_config`（70ms/1 字符/fast），
-   客户端把每次全量 patch 的文本增量按打字机效果上屏；终态卡显式 `streaming_mode:
-   false` 关闭流式模式（去掉生成中光标、固化摘要），标题/按钮随之切换。审批/状态等
-   非进度卡不携带 streaming 字段。
+   600ms 全量 patch 刷新同一张卡；终态卡显式 `streaming_mode: false` 关闭流式模式
+   （去掉生成中光标、固化摘要），标题/按钮随之切换。审批/状态等非进度卡不携带
+   streaming 字段。**口径（Round 12 F1 修正）**：官方只对 cardkit 实体 +
+   `cardElement.content` 路径契约化"打字机"渲染；本实现与参考仓库同走
+   `im.v1.message.patch` 整卡路径，客户端对 streaming 卡片的增量上屏行为**以真实
+   租户视觉验收为准**（docs/09 §7），未承诺 token 级打字机。
+   **终态优先（Round 12 F2）**：turn/end 后，链上排队的非终态进度更新一律跳过
+   （终态卡是完整快照）；`/view` 切换视图走显式重渲染，结算后仍可用。
    **去重规则（三方 review 修正）**：同一 messageId 的完整 `assistant/message` 到达即
    **替换**该 (turn,step) 的 chunk 缓冲而非追加（修复 lark-bridge 的 chunks=hel +
    final=hello → helhello 缺陷），按事件 seq 去重；输出状态映射表与多 step/chunk 缺片/
@@ -148,9 +155,10 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    UTF-8 字节预检，正文上限沿用 lark-bridge 的 `cardBodyMaxChars`（默认 12000、
    上限 28000），超限截断+折叠+必要时另发新卡；超长全文落工作区文件并回显
    session id（手机打不开 loopback Web UI，替代"附 Web UI 链接"）。
-   **patch 永久失败兜底**：230025（超长）/230031（超 14 天）/撤回/目标失效 → 改发
-   新终态卡；群解散/机器人失去权限 → 记录审计 + 显式失败状态（验收承诺收窄为
-   "目标仍可写时终态最终送达"）。
+   **patch 永久失败兜底**：230025（超长）/230031（超 14 天）/230010/230011/230110
+   （不存在/撤回/删除）/230013（机器人对用户不可用）/230027（无权限）/232009（群
+   解散）/404/99991400 → 改发新终态卡；群解散/机器人失去权限 → 记录审计 + 显式失败
+   状态（验收承诺收窄为"目标仍可写时终态最终送达"）。
    卡片结构借鉴 zarazhangrui/lark-coding-agent-bridge：streaming_mode + 工具调用
    轨迹折叠 + footer 终态映射（done/interrupted/idle_timeout/error）。
    **可选后续升级**：cardkit 元素级文本流式（SDK 已封装 `channel.stream()` 的

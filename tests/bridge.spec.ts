@@ -165,7 +165,7 @@ class FakePersistence {
 
 class FakeChannel implements LarkChannelLike {
   readonly handlers = new Map<string, Array<(payload: never) => void | Promise<void>>>()
-  readonly sent: Array<{ to: string; input: Record<string, unknown>; options?: unknown }> = []
+  readonly sent: Array<{ to: string; input: Record<string, unknown>; options?: unknown; messageId: string }> = []
   readonly patched: Array<{ messageId: string; card: Record<string, unknown> }> = []
   status: { state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed'; reconnectAttempts: number } = { state: 'idle', reconnectAttempts: 0 }
   connectCalls = 0
@@ -754,6 +754,61 @@ describe('streaming aggregation', () => {
     await waitFor(() => h.channel.patched.length > 0)
     const terminal = h.channel.patched.at(-1)!.card as { config: Record<string, unknown> }
     expect(terminal.config.streaming_mode).toBe(false)
+  })
+
+  it('patches live updates on the same message at streaming_mode:true, terminal closes it (Round 12 F6)', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('stream')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'first' } })
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    const live = h.channel.sent.find(item => item.input.card !== undefined)!
+    const messageId = live.messageId
+    expect((live.input.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
+    // More output → a live PATCH on the SAME message, still in streaming mode.
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' more' } })
+    await waitFor(() => h.channel.patched.length > 0)
+    const livePatch = h.channel.patched.at(-1)!
+    expect(livePatch.messageId).toBe(messageId)
+    expect((livePatch.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
+    // Terminal patch closes streaming mode on that same card.
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.patched.length > 1)
+    const terminal = h.channel.patched.at(-1)!
+    expect(terminal.messageId).toBe(messageId)
+    expect((terminal.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+  })
+
+  it('drops stale queued progress work after turn/end and still serves /view (Round 12 F2)', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('stream')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    // Hold the initial live-card SEND open so the turn can end while it is in flight.
+    let release!: () => void
+    h.channel.cardGate = new Promise<void>(resolve => { release = resolve })
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    await waitFor(() => h.scheduler.pendingCount > 0, 'live send dispatched')
+    // One more progress tick while the chain is busy: let its timer fire so
+    // the upsert is CHAINED behind the blocked send, then the turn ends.
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' x' } })
+    await new Promise(resolve => setTimeout(resolve, 15))
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    release()
+    await waitFor(() => h.channel.patched.length > 0)
+    // Exactly one live SEND; the queued progress update was dropped, so the
+    // FIRST patch is already the terminal one (streaming_mode: false).
+    expect(h.channel.sent.filter(item => item.input.card !== undefined)).toHaveLength(1)
+    expect(h.channel.patched).toHaveLength(1)
+    expect((h.channel.patched[0]!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+    // /view explicit re-render still works after the turn settled.
+    const before = h.channel.patched.length
+    await h.emitCardAction({ bridge: 'dsh-feishu-remote', action: 'view', sessionId })
+    await waitFor(() => h.channel.patched.length > before)
+    expect((h.channel.patched.at(-1)!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
   })
 
   it('drops replayed events by the seq watermark', async () => {
