@@ -16,7 +16,7 @@ describe('resolveConfig (single project, fail-closed)', () => {
     expect(config.workspaceRoot).toBe('/tmp/workspace')
     expect(config.allowAllUsers).toBe(false)
     expect(config.requireMention).toBe(true)
-    expect(config.progressUpdateMs).toBe(1000)
+    expect(config.progressUpdateMs).toBe(600)
     expect(config.interactiveTimeoutMs).toBe(10 * 60 * 1000)
     expect(config.cardBodyMaxChars).toBe(12000)
     expect(config.statePath).toMatch(/feishu-remote[\\/]cli_test\.json$/u)
@@ -77,7 +77,7 @@ describe('resolveConfig (single project, fail-closed)', () => {
   it('ConfigSchema validates its own defaults (regression: min(1) rejected the 0 default)', () => {
     const resolved = ConfigSchema({})
     expect(resolved.maxLiveAgents).toBe(0)
-    expect(resolved.progressUpdateMs).toBe(1000)
+    expect(resolved.progressUpdateMs).toBe(600)
     expect(resolved.interactiveTimeoutMs).toBe(10 * 60 * 1000)
   })
 })

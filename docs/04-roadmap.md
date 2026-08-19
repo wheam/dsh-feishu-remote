@@ -7,7 +7,12 @@
 > **进度（2026-08-18）**：Phase 0 步骤 0-1（mock 链路）与 Phase 1 步骤 2-6
 > 已实现并测试全绿；设置卡片（Phase 2 首项）已随 P1 落地。剩余 = 真实租户
 > 端到端验收（docs/09-onboarding.md）与 Phase 2 其余项（免 @、结构化提问
-> multiplexer、cardkit 流式）。
+> multiplexer、cardkit 元素级文本流式）。
+>
+> **进度（2026-08-19）**：进度卡升级为飞书流式更新卡片（同
+> zarazhangrui/lark-coding-agent-bridge 卡片模式：运行期 `streaming_mode: true` +
+> `streaming_config`，600ms patch 打字机渲染，终态显式关闭流式模式）；
+> Phase 2 的“cardkit 流式升级”相应收窄为元素级文本流式（token 级打字机）。
 
 ## Phase 0：环境与链路验证（1-2 天）
 
@@ -36,7 +41,7 @@
 - 话题内免 @（更高权限档位）
 - 结构化提问恢复（userQuestions multiplexer / agent-scoped 覆盖，验证后）
 - `maxLiveAgents` 硬上限 + idle/LRU dispose
-- cardkit 流式升级、审计与失败状态展示增强
+- cardkit 元素级文本流式（`channel.stream()` markdown 模式）、审计与失败状态展示增强
 
 ## Phase 3：按需（视使用情况）
 

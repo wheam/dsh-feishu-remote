@@ -738,6 +738,24 @@ describe('streaming aggregation', () => {
     expect(lastCard).toContain('已完成')
   })
 
+  it('keeps the live card in streaming mode and closes it on the terminal patch', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('stream')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    // The first card lands as a SEND while the turn runs → streaming mode on.
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    const live = h.channel.sent.find(item => item.input.card !== undefined)!
+    expect((live.input.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
+    // The terminal update patches the same card with streaming_mode: false.
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.patched.length > 0)
+    const terminal = h.channel.patched.at(-1)!.card as { config: Record<string, unknown> }
+    expect(terminal.config.streaming_mode).toBe(false)
+  })
+
   it('drops replayed events by the seq watermark', async () => {
     const h = await makeHarness()
     await h.emitMessage('hello')

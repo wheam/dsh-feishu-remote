@@ -49,12 +49,32 @@ function markdown(content: string, elementId?: string): object {
   }
 }
 
-function card(title: string, template: CardTemplate, elements: object[], summary = title): object {
+/**
+ * Feishu 卡片流式更新模式（streaming updates, docs/05 §2.5 + official
+ * streaming-updates-openapi-overview）：卡片 config 带 `streaming_mode: true`
+ * 后，客户端会把后续全量 patch 的文本增量按打字机效果渲染；终态 patch 显式
+ * 置 `streaming_mode: false` 关闭模式（去掉生成中光标并固化摘要）。
+ * 参数与官方文档/参考实现一致：70ms / 1 字符 / fast（快速上屏）。
+ */
+const STREAMING_CONFIG = {
+  print_frequency_ms: { default: 70 },
+  print_step: { default: 1 },
+  print_strategy: 'fast',
+} as const
+
+/**
+ * @param streaming `true` = 流式模式（运行中）；`false` = 显式关闭（终态）；
+ *   `undefined` = 普通卡片，不携带 streaming 字段（审批/状态等非流式卡）。
+ */
+function card(title: string, template: CardTemplate, elements: object[], summary = title, streaming?: boolean): object {
   return {
     schema: '2.0',
     config: {
       update_multi: true,
       summary: { content: bounded(summary.replace(/\s+/g, ' ').trim(), 80) },
+      ...(streaming === undefined ? {} : streaming
+        ? { streaming_mode: true, streaming_config: STREAMING_CONFIG }
+        : { streaming_mode: false }),
     },
     header: {
       title: { tag: 'plain_text', content: bounded(title, 80) },
@@ -188,7 +208,7 @@ export function buildTurnCard(input: TurnCardInput): object {
     ], 'bridge_turn_actions'))
   }
 
-  return card(title, template, elements, cleanText || title)
+  return card(title, template, elements, cleanText || title, !done)
 }
 
 export interface ApprovalCardInput {
@@ -289,7 +309,7 @@ export function parseBridgeAction(value: unknown): BridgeAction | undefined {
  * 28KB patch budget after every shrink (Codex P1-12/review #2 finding 8):
  * no dynamic metadata beyond a bounded title — guaranteed far below the limit.
  */
-export function buildOversizeCard(outcome: 'completed' | 'cancelled' | 'blocked' | 'error'): object {
+export function buildOversizeCard(outcome: 'completed' | 'cancelled' | 'blocked' | 'error', streaming = false): object {
   const titles = {
     completed: ['✅ DeepSeek Harness 已完成', 'green'],
     cancelled: ['⏹️ DeepSeek Harness 已停止', 'grey'],
@@ -299,5 +319,5 @@ export function buildOversizeCard(outcome: 'completed' | 'cancelled' | 'blocked'
   const [title, template] = titles[outcome]
   return card(title, template, [
     markdown('输出过大，无法在卡片中呈现；请到 Web GUI 的会话记录中查看完整输出。'),
-  ])
+  ], title, streaming)
 }

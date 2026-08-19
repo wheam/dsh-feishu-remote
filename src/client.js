@@ -498,7 +498,7 @@ window.__ModuleLoader__.load({
 			"f.model": "Model", "f.modelHint": "Override model; empty = deployment default.",
 			"f.agentPreset": "Agent preset", "f.agentPresetHint": "Preset id to mount (empty = deployment default, usually standard).",
 			"f.cardPreset": "Card density", "f.cardPresetHint": "compact / standard / developer.",
-			"f.progressUpdateMs": "Card update throttle (ms)", "f.progressUpdateMsHint": "Batch card updates; default 1000ms.",
+			"f.progressUpdateMs": "Card update throttle (ms)", "f.progressUpdateMsHint": "Streaming card patch cadence; default 600ms.",
 			"f.interactiveTimeoutMs": "Approval timeout (ms)", "f.interactiveTimeoutMsHint": "Pending approvals settle as unavailable after this; default 10min.",
 			"f.maxLiveAgents": "Max live agents", "f.maxLiveAgentsHint": "Hard cap on live sessions (0 = unlimited).",
 			"f.commandAllowlist": "Native command allowlist", "f.commandAllowlistHint": "Comma-separated Harness command names allowed to pass through; anything else is rejected."
@@ -530,7 +530,7 @@ window.__ModuleLoader__.load({
 			"f.model": "模型", "f.modelHint": "覆盖模型；留空 = 部署默认。",
 			"f.agentPreset": "Agent preset", "f.agentPresetHint": "要挂载的 preset id（留空 = 部署默认，通常 standard）。",
 			"f.cardPreset": "卡片密度", "f.cardPresetHint": "compact / standard / developer。",
-			"f.progressUpdateMs": "卡片更新节流（毫秒）", "f.progressUpdateMsHint": "批量更新卡片；默认 1000ms。",
+			"f.progressUpdateMs": "卡片更新节流（毫秒）", "f.progressUpdateMsHint": "流式卡片 patch 节奏；默认 600ms。",
 			"f.interactiveTimeoutMs": "审批超时（毫秒）", "f.interactiveTimeoutMsHint": "待审批超过该时长结算为 unavailable；默认 10 分钟。",
 			"f.maxLiveAgents": "live agent 上限", "f.maxLiveAgentsHint": "live 会话硬上限（0 = 不限）。",
 			"f.commandAllowlist": "原生命令透传白名单", "f.commandAllowlistHint": "逗号分隔的 Harness 命令名；其余命令一律拒绝。"
@@ -547,7 +547,7 @@ window.__ModuleLoader__.load({
 				"p.provider": "Example: deepseek",
 				"p.model": "Example: deepseek-v4-flash",
 				"p.agentPreset": "Example: standard",
-				"p.progressUpdateMs": "Example: 1000",
+				"p.progressUpdateMs": "Example: 600",
 				"p.interactiveTimeoutMs": "Example: 600000",
 				"p.maxLiveAgents": "Example: 8 (0 = unlimited)",
 				"p.commandAllowlist": "Example: status, sessions"
@@ -562,7 +562,7 @@ window.__ModuleLoader__.load({
 				"p.provider": "例如：deepseek",
 				"p.model": "例如：deepseek-v4-flash",
 				"p.agentPreset": "例如：standard",
-				"p.progressUpdateMs": "例如：1000",
+				"p.progressUpdateMs": "例如：600",
 				"p.interactiveTimeoutMs": "例如：600000",
 				"p.maxLiveAgents": "例如：8（0 = 不限）",
 				"p.commandAllowlist": "例如：status, sessions"

@@ -54,6 +54,60 @@ describe('card templates', () => {
     expect(JSON.stringify(card.body)).not.toContain('停止任务')
   })
 
+  it('runs in Feishu streaming mode while the turn is live (typewriter updates)', () => {
+    const card = buildTurnCard({
+      progress: progress(),
+      sessionId: 'feishu-abc-1',
+      cwd: '/tmp/work',
+      model: 'v4-pro',
+      preset: 'standard',
+      maxBodyChars: 12000,
+    }) as { config: Record<string, unknown>; body: { elements: Array<{ element_id?: string }> } }
+    expect(card.config.streaming_mode).toBe(true)
+    expect(card.config.streaming_config).toEqual({
+      print_frequency_ms: { default: 70 },
+      print_step: { default: 1 },
+      print_strategy: 'fast',
+    })
+    // The output markdown element keeps a stable id so the client can diff it.
+    expect(card.body.elements.some(element => element.element_id === 'bridge_output')).toBe(true)
+  })
+
+  it('closes streaming mode on the terminal card', () => {
+    const card = buildTurnCard({
+      progress: progress(),
+      sessionId: 'feishu-abc-1',
+      cwd: '/tmp/work',
+      model: 'v4-pro',
+      preset: 'standard',
+      maxBodyChars: 12000,
+      outcome: 'completed',
+    }) as { config: Record<string, unknown> }
+    expect(card.config.streaming_mode).toBe(false)
+    expect(card.config).not.toHaveProperty('streaming_config')
+  })
+
+  it('keeps non-progress cards out of streaming mode entirely', () => {
+    const approval = buildApprovalCard({
+      token: 't1',
+      toolName: 'bash',
+      sessionId: 'feishu-abc-1',
+    }) as { config: Record<string, unknown> }
+    expect(approval.config).not.toHaveProperty('streaming_mode')
+    const status = buildStatusCard({
+      sessionId: 'feishu-abc-1',
+      status: 'idle',
+      cwd: '/tmp/work',
+      provider: 'deepseek',
+      model: 'v4-pro',
+      connected: true,
+      pendingApprovals: 0,
+      failedDeliveries: 0,
+      preset: 'standard',
+    }) as { config: Record<string, unknown> }
+    expect(status.config).not.toHaveProperty('streaming_mode')
+  })
+
   it('shows the approval card with the text-fallback notice', () => {
     const card = buildApprovalCard({
       token: 't1',

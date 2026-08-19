@@ -1312,6 +1312,12 @@ export class FeishuRemoteBridge {
     progress.visibleText = progress.steps.map(step => step.final ?? step.chunks).join('')
   }
 
+  /**
+   * Progress-card cadence: while the turn runs every tick patches the same
+   * card, which buildTurnCard renders with `streaming_mode: true` so the
+   * Feishu client types out the text delta between patches; the terminal
+   * card (finalizeTurn) flips it to `streaming_mode: false` (docs/05 §2.5).
+   */
   private scheduleProgress(entry: BridgeSession, progress: TurnProgress): void {
     if (!this.config.progressCards || progress.terminal || entry.progressTimer !== undefined) return
     entry.progressTimer = setTimeout(() => {
@@ -1456,7 +1462,7 @@ export class FeishuRemoteBridge {
       // Pathological dynamic fields (tool names, detail, cwd, model…) — a
       // constant-size fallback card with a guaranteed byte postcondition.
       truncated = true
-      card = buildOversizeCard(outcome ?? 'completed')
+      card = buildOversizeCard(outcome ?? 'completed', outcome === undefined)
     }
     return { card, truncated }
   }

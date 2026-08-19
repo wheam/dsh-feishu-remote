@@ -1,10 +1,12 @@
 # 实现方案（Phase 1 落地方案）
 
-> 状态：**步骤 0-6 与 P1 设置卡片已实现，Codex 十一轮 review 终审 APPROVE**
+> 状态：**步骤 0-6 与 P1 设置卡片 + P1 流式卡片已实现，Codex 十一轮 review 终审 APPROVE**
 > （2026-08-18：仓库骨架、通道层、出站调度器、回合归属账本、审批闭环、话题映射、
-> 流式节流全部落地，102 个契约测试全绿，构建产物约 2.4MB，mock 冒烟通过；
+> 流式节流全部落地，108 个契约测试全绿，构建产物约 2.4MB，mock 冒烟通过；
 > 47 项 review findings 修复对照见 docs/10；真实租户验收待 docs/09-onboarding.md
 > 凭据执行）。
+> 2026-08-19：进度卡升级为飞书流式更新卡片（运行期 `streaming_mode: true` +
+> `streaming_config`，节流默认 600ms，终态显式关闭流式模式，见 §2.5）。
 > 本文档是本仓库的"当前方案"单一事实源；
 > 若与 01-04 冲突，以本文为准。已通过三轮独立 review——第一轮 Codex
 > （gpt-5.6-sol）报告见 06-codex-review.md；第二轮 DeepSeek / Claude Opus 5 /
@@ -125,12 +127,18 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    备选：`$DSH_HOME/.agent-presets` 放 `feishu` preset = standard 去掉 ask-user
    （GUI 打开该 session 时同样无提问，因为恢复按记录的 preset 组合）。
    P1：provider multiplexer 或 agent-scoped 覆盖方案验证后恢复原生结构化提问。
-5. **流式节流**：监听 `session/event`，按回合聚合 `TurnProgress`（`assistant/chunk`
-   text-delta + `assistant/message` 兜底 + `tool/call`/`tool/result` 轨迹 + usage）；
-   `scheduleProgress` 节流默认 **1000ms**；首条发卡、之后 `updateCard` 更新同一
-   messageId；`turn/end` 终态卡（`turn/end.reason.kind` 为 completed/aborted/blocked/
-   error/max-tokens/interrupted，需二次映射，不是直接 cancelled）。出站走 §1.3 的
-   应用级调度器 + 每会话串行队列。
+5. **流式卡片（原“流式节流”，Phase 1 已升级为飞书流式更新模式）**：监听 `session/event`，
+   按回合聚合 `TurnProgress`（`assistant/chunk` text-delta + `assistant/message` 兜底 +
+   `tool/call`/`tool/result` 轨迹 + usage）；`scheduleProgress` 节流默认 **600ms**
+   （单消息 patch 5 QPS 内留裕量）；首条发卡、之后 `updateCard` 更新同一 messageId；
+   `turn/end` 终态卡（`turn/end.reason.kind` 为 completed/aborted/blocked/error/
+   max-tokens/interrupted，需二次映射，不是直接 cancelled）。出站走 §1.3 的应用级
+   调度器 + 每会话串行队列。
+   **流式渲染（同 zarazhangrui/lark-coding-agent-bridge 卡片模式）**：运行期卡片
+   `config` 携带 `streaming_mode: true` + `streaming_config`（70ms/1 字符/fast），
+   客户端把每次全量 patch 的文本增量按打字机效果上屏；终态卡显式 `streaming_mode:
+   false` 关闭流式模式（去掉生成中光标、固化摘要），标题/按钮随之切换。审批/状态等
+   非进度卡不携带 streaming 字段。
    **去重规则（三方 review 修正）**：同一 messageId 的完整 `assistant/message` 到达即
    **替换**该 (turn,step) 的 chunk 缓冲而非追加（修复 lark-bridge 的 chunks=hel +
    final=hello → helhello 缺陷），按事件 seq 去重；输出状态映射表与多 step/chunk 缺片/
@@ -143,10 +151,12 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    **patch 永久失败兜底**：230025（超长）/230031（超 14 天）/撤回/目标失效 → 改发
    新终态卡；群解散/机器人失去权限 → 记录审计 + 显式失败状态（验收承诺收窄为
    "目标仍可写时终态最终送达"）。
-   卡片结构借鉴 zarazhangrui/lark-coding-agent-bridge：streaming_mode + reasoning 面板
-   + 工具调用分组折叠 + footer 终态映射（done/interrupted/idle_timeout/error）；
-   **P1 升级**：cardkit 流式（SDK 已封装 `channel.stream()`，默认 100ms/50 字符节流，
-   需 sequence/uuid 幂等与收尾 summary）。
+   卡片结构借鉴 zarazhangrui/lark-coding-agent-bridge：streaming_mode + 工具调用
+   轨迹折叠 + footer 终态映射（done/interrupted/idle_timeout/error）。
+   **可选后续升级**：cardkit 元素级文本流式（SDK 已封装 `channel.stream()` 的
+   markdown 模式 = cardkit 实体 + `cardElement.content`，100ms/50 字符节流 +
+   sequence/uuid 幂等 + 收尾 summary），token 级打字机更细腻，但会绕过本插件
+   出站调度器（无限流退避/合并/终态优先），需评估后再引入。
 6. **话题↔session 映射（三方 review 修订）**：**不建显式映射表**，持久化本身即事实源。
    `originKey` 三支路：p2p → `p2p:<chatId>`；群话题 → `group:<chatId>:thread:<thread_id>`
    （thread_id 优先，omt_ 前缀；缺失回退 root_id 需真实租户验证）；群非话题（两者皆缺）
