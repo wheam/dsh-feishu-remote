@@ -136,16 +136,21 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    `turn/end` 终态卡（`turn/end.reason.kind` 为 completed/aborted/blocked/error/
    max-tokens/interrupted，需二次映射，不是直接 cancelled）。出站走 §1.3 的应用级
    调度器 + 每会话串行队列。
-   **流式渲染（同 zarazhangrui/lark-coding-agent-bridge 卡片模式）**：运行期卡片
+   **流式渲染（同 zarazhangrui/lark-coding-agent-bridge run 卡片的
+   `channel.stream({card})` 模式）**：运行期卡片
    `config` 携带 `streaming_mode: true` + `streaming_config`（70ms/1 字符/fast），
    600ms 全量 patch 刷新同一张卡；终态卡显式 `streaming_mode: false` 关闭流式模式
    （去掉生成中光标、固化摘要），标题/按钮随之切换。审批/状态等非进度卡不携带
-   streaming 字段。**口径（Round 12 F1 修正）**：官方只对 cardkit 实体 +
-   `cardElement.content` 路径契约化"打字机"渲染；本实现与参考仓库同走
-   `im.v1.message.patch` 整卡路径，客户端对 streaming 卡片的增量上屏行为**以真实
-   租户视觉验收为准**（docs/09 §7），未承诺 token 级打字机。
-   **终态优先（Round 12 F2）**：turn/end 后，链上排队的非终态进度更新一律跳过
-   （终态卡是完整快照）；`/view` 切换视图走显式重渲染，结算后仍可用。
+   streaming 字段。**口径（Round 12 F1 修正 + 复核）**：官方只对 cardkit 实体 +
+   `cardElement.content` 路径契约化"打字机"渲染；参考仓库 run 卡片的流式路径
+   （`@larksuite/channel` 的 card 模式）内部即 `im.v1.message.patch` 整卡刷新，
+   其 CardKit 管理卡（createCard/updateCardById）用于配置类卡片、与本卡无关；
+   客户端对 streaming 卡片的增量上屏行为**以真实租户视觉验收为准**（docs/09 §7），
+   未承诺 token 级打字机。
+   **终态优先（Round 12 F2 + 复核）**：turn/end 后，链上排队的非终态进度更新
+   一律跳过（终态卡是完整快照）；终态 patch **绕过**每回合 sendChain 直接入调度器
+   （同 messageId 的 patch 由调度器按代际串行/合并，终态必胜过仍排队的陈旧
+   patch）；`/view` 切换视图走显式重渲染，结算后仍可用。
    **去重规则（三方 review 修正）**：同一 messageId 的完整 `assistant/message` 到达即
    **替换**该 (turn,step) 的 chunk 缓冲而非追加（修复 lark-bridge 的 chunks=hel +
    final=hello → helhello 缺陷），按事件 seq 去重；输出状态映射表与多 step/chunk 缺片/

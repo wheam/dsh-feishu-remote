@@ -195,6 +195,8 @@ class FakeChannel implements LarkChannelLike {
 
   /** When set, CARD sends wait on this gate (markdown replies pass through). */
   cardGate?: Promise<void>
+  /** When set, updateCard calls wait on this gate (round-12 F2 bypass test). */
+  patchGate?: Promise<void>
   /** Queued errors thrown by updateCard (one per call). */
   readonly patchErrors: Error[] = []
 
@@ -209,9 +211,20 @@ class FakeChannel implements LarkChannelLike {
   }
 
   async updateCard(messageId: string, card: object): Promise<void> {
+    if (this.patchGate !== undefined) await this.patchGate
     const error = this.patchErrors.shift()
     if (error !== undefined) throw error
     this.patched.push({ messageId, card: card as Record<string, unknown> })
+  }
+
+  async listMessages(params: { containerIdType: string; containerId: string; pageToken?: string }): Promise<{ items: Array<Record<string, unknown>>; hasMore: boolean; pageToken?: string }> {
+    this.listed.push(params)
+    if (this.historyError !== undefined) throw this.historyError
+    const page = this.historyPages.shift()
+    if (page !== undefined) {
+      return { items: page, hasMore: this.historyPages.length > 0, pageToken: this.historyPages.length > 0 ? `token_${this.listed.length}` : undefined }
+    }
+    return { items: this.historyItems, hasMore: false }
   }
 
   async downloadMessageResource(): Promise<Buffer> {
@@ -809,6 +822,35 @@ describe('streaming aggregation', () => {
     await h.emitCardAction({ bridge: 'dsh-feishu-remote', action: 'view', sessionId })
     await waitFor(() => h.channel.patched.length > before)
     expect((h.channel.patched.at(-1)!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+  })
+
+  it('enqueues the terminal patch while a stale progress patch is mid-flight (Round 12 F2 bypass)', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('stream')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    // Hold the next live PATCH in flight (dispatched but not settled).
+    let release!: () => void
+    h.channel.patchGate = new Promise<void>(resolve => { release = resolve })
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' x' } })
+    // Let the throttled upsert enqueue AND the scheduler dispatch it (the
+    // dispatch then blocks on patchGate) — a settled in-flight patch cannot
+    // be coalesced away, so the terminal patch must queue alongside it.
+    await new Promise(resolve => setTimeout(resolve, 60))
+    await waitFor(() => h.scheduler.pendingCount >= 1, 'stale patch in flight')
+    // Turn ends while the stale patch is mid-flight: the terminal patch must
+    // be enqueued immediately (chain bypass) instead of waiting behind it.
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.scheduler.pendingCount >= 2, 'terminal patch enqueued despite stale patch in flight')
+    release()
+    await waitFor(() => h.channel.patched.length === 2)
+    // Per-messageId scheduler ordering: stale patch first, terminal last.
+    expect((h.channel.patched[0]!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
+    expect((h.channel.patched[1]!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+    expect(h.channel.patched[1]!.messageId).toBe(h.channel.patched[0]!.messageId)
   })
 
   it('drops replayed events by the seq watermark', async () => {

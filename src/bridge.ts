@@ -1321,8 +1321,9 @@ export class FeishuRemoteBridge {
   /**
    * Progress-card cadence: while the turn runs every tick patches the same
    * card, which buildTurnCard renders with `streaming_mode: true` so the
-   * Feishu client types out the text delta between patches; the terminal
-   * card (finalizeTurn) flips it to `streaming_mode: false` (docs/05 §2.5).
+   * Feishu client renders the incremental update (exact visuals verified on
+   * the real tenant, docs/09 §7); the terminal card (finalizeTurn) flips it
+   * to `streaming_mode: false` (docs/05 §2.5).
    */
   private scheduleProgress(entry: BridgeSession, progress: TurnProgress): void {
     if (!this.config.progressCards || progress.terminal || entry.progressTimer !== undefined) return
@@ -1380,6 +1381,13 @@ export class FeishuRemoteBridge {
    * turn/end is dead work — the terminal card is a complete snapshot that
    * supersedes it. Dropping it at the gate keeps the chain and the outbound
    * scheduler free for the terminal card instead of queueing behind it.
+   *
+   * Terminal PATCH also bypasses the chain entirely (Round 12 F2 复核):
+   * patches for one messageId are serialized by the scheduler with monotonic
+   * generations, so the terminal patch supersedes any still-queued stale
+   * progress patch instead of waiting for it (its retries are generation-
+   * checked and lose). The initial SEND path must stay chained — send-before-
+   * patch and one-card-per-turn ordering.
    */
   private async upsertTurnCard(
     entry: BridgeSession,
@@ -1389,6 +1397,10 @@ export class FeishuRemoteBridge {
     options: TurnCardUpsertOptions = {},
   ): Promise<void> {
     if (outcome === undefined && progress.terminal && options.explicit !== true) return
+    const terminal = (outcome ?? progress.outcome) !== undefined
+    if (terminal && progress.progressMessageId !== undefined) {
+      return this.upsertTurnCardInner(entry, progress, outcome, detail, options)
+    }
     const job = (progress.sendChain ?? Promise.resolve()).then(() => (
       this.upsertTurnCardInner(entry, progress, outcome, detail, options)
     ))
@@ -1431,11 +1443,13 @@ export class FeishuRemoteBridge {
     const messageId = progress.progressMessageId
     const result = await this.enqueuePatch(entry, messageId, card, terminal, sessionId)
     if (result === 'permanent' && !progress.cardFallbackAttempted) {
-      // patch 永久失败 → 改发新终态卡（docs/05 §1.3/§2.5）
+      // patch 永久失败 → 改发新终态卡（docs/05 §1.3/§2.5）。
+      // The fallback is a fresh SEND: rejoin the chain (via the public method)
+      // so only one card is sent per turn (Round 12 F2 复核).
       progress.cardFallbackAttempted = true
       progress.progressMessageId = undefined
       this.ctx.logger?.warn?.('dsh-feishu-remote: 卡片 patch 永久失败，改发新终态卡（session=%s）', sessionId)
-      await this.upsertTurnCardInner(entry, progress, resolvedOutcome, resolvedDetail)
+      await this.upsertTurnCard(entry, progress, resolvedOutcome, resolvedDetail)
     }
   }
 

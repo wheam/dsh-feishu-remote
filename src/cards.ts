@@ -50,10 +50,13 @@ function markdown(content: string, elementId?: string): object {
 }
 
 /**
- * Feishu 卡片流式更新模式（streaming updates, docs/05 §2.5 + official
- * streaming-updates-openapi-overview）：卡片 config 带 `streaming_mode: true`
- * 后，客户端会把后续全量 patch 的文本增量按打字机效果渲染；终态 patch 显式
- * 置 `streaming_mode: false` 关闭模式（去掉生成中光标并固化摘要）。
+ * Feishu 卡片流式更新模式（docs/05 §2.5 + official streaming-updates
+ * overview）：运行期卡片 config 携带 `streaming_mode: true`，600ms 全量 patch
+ * 刷新同一张卡（与参考仓库 run 卡片的 channel.stream card 模式同路径——其内部
+ * 即 im.v1.message.patch 整卡刷新）；终态 patch 显式置 `streaming_mode: false`
+ * 关闭流式模式（去掉生成中光标并固化摘要）。客户端对增量上屏的具体视觉行为
+ * 以真实租户验收为准（docs/09 §7）——官方只对 cardkit 实体 +
+ * `cardElement.content` 契约化 token 级打字机，留作可选后续升级。
  * 参数与官方文档/参考实现一致：70ms / 1 字符 / fast（快速上屏）。
  */
 const STREAMING_CONFIG = {

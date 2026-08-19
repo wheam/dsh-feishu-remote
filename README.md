@@ -24,11 +24,12 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 - **话题 ↔ session**：三支路 originKey（p2p / 群话题 thread_id / 群非话题拒绝），确定性前缀 `feishu-<24hex>-<base36ts>`，session persistence 为唯一事实源；`/new` pending 标记协议、`/resume` 原子切换（先探测后交换）、cwd 漂移防护、GUI 归档过滤。
 - **审批闭环**：answerer 以 `{ prepend: true }` 注册 + **回合归属账本**（飞书回合才认领、GUI 回合放行）；六条结算路径（按钮 / 文字 / abort / 超时 / 停机 / 通道终态失效）均有测试；终态显式 `updateCard`；卡片 pending 绑定操作者/会话/截止时间。
 - **交互隔离**：飞书会话 setup 内先 `presets.mount` 再 `tools.restrict({deny:['ask_user_question','exit_plan_mode']})`——飞书会话不存在通往浏览器的提问路径。
-- **流式卡片**：进度卡运行期携带 `streaming_mode: true`（+`streaming_config` 打印参数），`session/event` 按回合聚合、约 600ms patch 同一张卡片（与 zarazhangrui/lark-coding-agent-bridge 卡片模式同路径：整卡 patch + streaming_mode）；完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；turn 结束后跳过排队的陈旧进度更新（终态不再排队，Round 12 F2）；终态卡显式 `streaming_mode: false` 关闭流式并切换标题/按钮；`turn/end.reason.kind` 六枚举二次映射。官方契约化的 token 级打字机需 cardkit 实体（`cardElement.content`），留作可选后续升级；客户端视觉行为以真实租户验收为准（docs/09 §7）。
+- **流式卡片**：进度卡运行期携带 `streaming_mode: true`（+`streaming_config` 打印参数），`session/event` 按回合聚合、约 600ms patch 同一张卡片（与 zarazhangrui/lark-coding-agent-bridge run 卡片的 `channel.stream({card})` 模式同路径：其内部即整卡 message.patch 刷新）；完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；turn 结束后跳过排队的陈旧进度更新、终态 patch 绕过回合链直接入调度器（同 messageId 按代际合并，终态必胜，Round 12 F2）；终态卡显式 `streaming_mode: false` 关闭流式并切换标题/按钮；`turn/end.reason.kind` 六枚举二次映射。官方契约化的 token 级打字机需 cardkit 实体（`cardElement.content`），留作可选后续升级；客户端视觉行为以真实租户验收为准（docs/09 §7）。
 - **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230025/230031/230010/230011/230110/230013/230027/232009/404/99991400）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
 - **安全**：白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围 fail-closed（`allowedChatIds` 空 = 群聊全拒）；白名单外消息在宿主日志回显发送者 open_id 自举；出站脱敏；状态文件 0600 原子写、损坏隔离为 `.corrupt-<ts>` 从空重建。
 - **命令集**：`/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/view` `/help` `/commands`；Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
 - **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
+- **飞书上下文回填（docs/13 v1，2026-08-20）**：每条普通消息注入上下文——话题内全部消息、私聊尽量回溯。官方 `lark-cli` 主路径（`@larksuite/cli@1.0.88` optional 依赖 + postinstall 自动装二进制，`pnpm-workspace.yaml allowBuilds` 放行；CLI 缺失自动降级已 bundle 的 SDK 直连，`contextBackend: auto|cli|sdk`）；增量水位窗口（新会话全量注入、后续回合只注入新消息，水位按 session 持久化）+ 因果 cutoff + JSON 帧防注入 + system prompt 不可信边界规则；全局并发 2 + 熔断；控制命令零拉取；回合卡脚注与 `/status` 显示上下文统计。群历史需 `im:message.group_msg` 权限（docs/09 §3）。
 
 ## 安装
 
