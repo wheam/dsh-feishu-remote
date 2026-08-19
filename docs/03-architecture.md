@@ -48,7 +48,7 @@
 - **D7 出站调度 → 应用级全局调度器。** 全局并发上限 + 卡片更新合并 + 429/误分类限流码
   （400+99991400、230020）aware backoff + 抖动 + 终态优先；patch 永久失败改发新卡。
 
-- **D8 交互所有权 → 按回合路由。** preset 挂载按 rc.6 三条契约（`meta.agentPreset` +
+- **D8 交互所有权 → 按回合路由。** preset 挂载按三条契约（`meta.agentPreset` +（rc.6 核实，rc.7 下经 103 测试复验）
   setup 内 mount + `resolveSessionPreset({header, events})` 恢复）；飞书会话 restrict 屏蔽
   `ask_user_question`/`exit_plan_mode`（防提问打进无超时的浏览器通道导致远端挂起）。
 
@@ -61,7 +61,7 @@
 
 ## 风险
 
-- dsh rc 期内部服务接口变动 → 锁 rc.6，升级自适配。
+- dsh rc 期内部服务接口变动 → 锁 rc.7（曾锁 rc.6；rc.6→rc.7 曾破坏前端 slot 契约，见 docs/11），升级自适配。
 - 飞书限流 / 卡片长度限制 → 节流 + 全局调度器 + 体积预算 + 分片 + 全文落工作区文件回显 session id。
 - 飞书开放平台权限配置繁琐 → 一次性成本，写文档固化步骤。
 - 合规：MIT 协议，保留两个参考项目的版权声明。

@@ -2,4 +2,7 @@ node_modules/
 *.log
 .DS_Store
 .env
+.credentials.yaml
 lib/
+
+.dsh-vision-toolkit/

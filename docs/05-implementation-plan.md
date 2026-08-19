@@ -1,6 +1,11 @@
 # 实现方案（Phase 1 落地方案）
 
-> 状态：方案已定案，待开工。本文档是本仓库的"当前方案"单一事实源；
+> 状态：**步骤 0-6 与 P1 设置卡片已实现，Codex 十一轮 review 终审 APPROVE**
+> （2026-08-18：仓库骨架、通道层、出站调度器、回合归属账本、审批闭环、话题映射、
+> 流式节流全部落地，102 个契约测试全绿，构建产物约 2.4MB，mock 冒烟通过；
+> 47 项 review findings 修复对照见 docs/10；真实租户验收待 docs/09-onboarding.md
+> 凭据执行）。
+> 本文档是本仓库的"当前方案"单一事实源；
 > 若与 01-04 冲突，以本文为准。已通过三轮独立 review——第一轮 Codex
 > （gpt-5.6-sol）报告见 06-codex-review.md；第二轮 DeepSeek / Claude Opus 5 /
 > Codex gpt-5.6-sol 三方复审的共识与修订对照见 08-triple-review.md。
@@ -55,7 +60,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
   恢复且终态最终送达"。
 - **永久错误兜底**：230025（超长）/230031（超 14 天）/消息撤回/目标失效归类为 permanent，patch 失败改发新终态卡；`patchCard` 是裸调用（无重试、无 classifyError 包装），必须走本插件出站调度器。
 - **3 秒回调预算**：入站回调 handler 只做鉴权+入队即返回（chatQueue 关闭后 handler 内联执行，长任务会拖垮 SDK 事件循环）；耗时的 state I/O、agent 创建、卡片更新全部异步。
-- SDK 版本锁死（package.json 精确版本），随 rc.6 一起冻结。
+- SDK 版本锁死（package.json 精确版本），随 rc.7 一起冻结。
 - 备选通道：im-hub 手写 protobuf 帧层（约 200 行零依赖），接口隔离保证可替换。
 
 ## 2. 关键机制设计
@@ -65,8 +70,13 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    `agentDefaultModel`。**回合归属账本**：本插件每次 followup 记录"该回合由飞书发起"
    （turn/end 清除），供 approval answerer 与输出路由使用——GUI 打开飞书会话是默认可行的
    （apiproxy 直接复用 live agent），必须按**回合**而非按 agent 归属交互（§2.3）。
-2. **preset 挂载（硬缺口，rc.6 三条契约）**：web profile 宿主平面禁用了全局 bash/fs/skill 等工具，
-   每个 session 必须挂 agent preset。契约（已对照 rc.6 源码核实）：
+   **实现说明（2026-08-18，Codex P0-1 修正）**：rc.6 的 loop 在 `Inbox.claim` 之前就发
+   `turn/start`，计数器启发式在 GUI/飞书消息交错时会把回合错配给错误入口；落地实现改为
+   **精确关联**——记录每条 `createUserMessage` 的 id，监听全局 `agent/inbox/claimed`
+   （`{ agent, message, turn }`）把已认领消息映射到确切回合与回复上下文；`turn/start`
+   默认按 gui 记录、认领事件到达后升级为 feishu（审批与输出均发生在认领之后，时序安全）。
+2. **preset 挂载（硬缺口，三条契约）**：web profile 宿主平面禁用了全局 bash/fs/skill 等工具，
+   每个 session 必须挂 agent preset。契约（rc.6 源码核实；rc.7 适配后经 103 测试复验）：
    (a) 创建时 preset id 写入 `CreateAgentOptions.meta.agentPreset`（header 在 setup 之前快照）；
    (b) mount 只能在 `setup(agentCtx)` 内做（`presets.mount` 唯一受支持的调用点）；
    (c) 恢复时用公开 API `resolveSessionPreset({ header, events })` 从日志解析，绝不只读 header（空会话切过 preset 时两者不同）。
@@ -245,7 +255,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 
 ## 7. 风险
 
-- dsh rc 期内部接口变动 → 锁死 rc.6（peerDependencies 精确版本，不用 `^`），升级自适配后再解锁。
+- dsh rc 期内部接口变动 → 锁死 rc.7（peerDependencies 精确版本，不用 `^`），升级自适配后再解锁。
 - SDK 大依赖 → 接口隔离 + 版本锁死 + 构建期 bundle；断网期间审批走超时 fail-closed。
 - web profile 三项共存（preset/answerer/userQuestions）→ spike 先行，不过不写主线代码。
 - live agent 无上限 → `maxLiveAgents` 硬上限（P1），超限拒绝新话题。

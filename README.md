@@ -2,17 +2,76 @@
 
 用飞书远程操控 Mac 上**正在运行**的 DeepSeek Harness 服务——把飞书机器人变成当前 dsh 会话的遥控器。
 
-一句话定位：
-
 ```
 手机飞书 ⇄ 插件（内嵌 dsh web 进程）⇄ 与 Web GUI 同一批会话
 ```
 
-在飞书里发消息 = 给 Mac 上当前 Harness 服务发消息；agent 要审批 → 飞书卡片点批准/拒绝；一个飞书话题 = 一个并行 session。
+在飞书里发消息 = 给 Mac 上当前 Harness 服务发消息；agent 要审批 → 飞书卡片点批准/拒绝（`/approve` `/reject` 文字兜底）；一个飞书话题 = 一个并行 session；飞书创建的会话与 Web GUI 会话列表同一批共享。
 
-**状态：方案已定案并通过三方独立 review（DeepSeek + Claude Opus 5 + Codex gpt-5.6-sol），尚未开始编码。**
+## 状态
 
-与姊妹项目 `deepseek-harness-mac-app`（Mac 壳 App）完全独立，互不混淆。
+**Phase 1（docs/05 步骤 0-6 + P1 设置卡片）已实现并经 Codex 十一轮独立 review 终审 APPROVE**：
+核心链路（通道层 / 调度器 / 回合归属账本 / 审批闭环 / 话题映射 / 流式节流）全部落地，
+102 个契约测试全绿，构建产物约 2.4MB（SDK 构建期 bundle，external 仅 `@deepseek-ai/*`），
+mock 冒烟（真实 dsh web 进程内加载）通过。
+**真实飞书租户端到端初验已通过（2026-08-19）**：私聊 `/help` 回命令卡，白名单/长连接/
+事件订阅全链路正常（见 docs/09 §7 验收记录）。
+
+## 已实现的功能
+
+- **内嵌 web profile**：`apply()` 只做同步注册、**永不 reject**；飞书长连接放后台 effect，断网重连 / 通道终态失效（SDK 停止重连）→ 结算全部待审批为 `unavailable`、`/status` 标红、退避重建 channel。
+- **飞书长连接**：官方 `@larksuiteoapi/node-sdk` websocket transport，`safety.chatQueue` 关闭（修复同群两话题合并串线缺陷），SDK 版本锁死 `1.73.0`。
+- **话题 ↔ session**：三支路 originKey（p2p / 群话题 thread_id / 群非话题拒绝），确定性前缀 `feishu-<24hex>-<base36ts>`，session persistence 为唯一事实源；`/new` pending 标记协议、`/resume` 原子切换（先探测后交换）、cwd 漂移防护、GUI 归档过滤。
+- **审批闭环**：answerer 以 `{ prepend: true }` 注册 + **回合归属账本**（飞书回合才认领、GUI 回合放行）；六条结算路径（按钮 / 文字 / abort / 超时 / 停机 / 通道终态失效）均有测试；终态显式 `updateCard`；卡片 pending 绑定操作者/会话/截止时间。
+- **交互隔离**：飞书会话 setup 内先 `presets.mount` 再 `tools.restrict({deny:['ask_user_question','exit_plan_mode']})`——飞书会话不存在通往浏览器的提问路径。
+- **流式节流**：`session/event` 按回合聚合，约 1s 批量更新同一张卡片；完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；`turn/end.reason.kind` 六枚举二次映射。
+- **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230025/230031/撤回）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
+- **安全**：白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围 fail-closed（`allowedChatIds` 空 = 群聊全拒）；白名单外消息在宿主日志回显发送者 open_id 自举；出站脱敏；状态文件 0600 原子写、损坏隔离为 `.corrupt-<ts>` 从空重建。
+- **命令集**：`/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/view` `/help` `/commands`；Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
+- **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
+
+## 安装
+
+> ⚠️ **安装/更新/升级前必读 [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md)**：
+> 兼容性基准 = Mac App 实际使用的 dsh（`/opt/homebrew/bin/dsh`），不是终端 PATH；
+> `--dump-config` / HTTP 200 不能单独当作安装成功，必须完成浏览器控制台 +
+> 插件 UI 的端到端验收（事故背景见 docs/11）。
+
+前置：Node ≥ 22、pnpm（`dsh plugin` 依赖 pnpm）。本插件**锁死 dsh `0.1.0-rc.7`**（peerDependencies 精确版本）。
+
+```bash
+# 1. 安装到 web profile（本仓路径）
+dsh plugin --profile web add link:/path/to/dsh-feishu-remote
+
+# 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 启用并配置（配置也可在 Web GUI 设置卡片里做）
+# - id: dsh-feishu-remote
+#   disabled: false
+#   config:
+#     appId: 'cli_xxx'            # 或环境变量 DSH_FEISHU_APP_ID
+#     allowedOpenIds: ['ou_...']  # 你的 open_id（fail-closed，必填）
+#     allowedChatIds: []          # 群聊白名单；空 = 仅私聊可用
+#     cwd: '/Users/you/work'      # 必填
+#     workspaceRoot: '/Users/you/work'  # 必填
+
+# 3. 凭据：DSH_FEISHU_APP_SECRET 环境变量，或写入 ~/.dsh 的 .credentials.yaml
+#    （GUI 设置卡片只存 credential ref，凭据唯一来源是 .credentials.yaml）
+
+# 4. 重启 web 进程（改码后重跑 build + 重启）
+```
+
+改码后：`pnpm run check`（typecheck + 102 tests + bundle 构建），然后重启 web 进程验证。
+
+## 开发
+
+```bash
+pnpm install
+pnpm run typecheck   # tsc --noEmit
+pnpm run test        # vitest：9 个 spec / 102 用例（契约测试，无真实凭据）
+pnpm run build       # esbuild bundle → lib/index.js（~2.4MB）+ lib/client.js + THIRD_PARTY_NOTICES
+```
+
+Mock 冒烟（无真实凭据，仅文本链路）：`config.appId: 'mock'` 后启动 profile，
+stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依赖真实凭据，由单测 + 真实租户验收双跑覆盖。
 
 ## 文档
 
@@ -22,20 +81,15 @@
 | [docs/02-research.md](docs/02-research.md) | 调研报告（dsh 内部能力 + 社区项目对比） |
 | [docs/03-architecture.md](docs/03-architecture.md) | 架构决策记录（D1-D8） |
 | [docs/04-roadmap.md](docs/04-roadmap.md) | 路线图与工作量 |
-| [docs/05-implementation-plan.md](docs/05-implementation-plan.md) | 实现方案（当前方案单一事实源） |
+| [docs/05-implementation-plan.md](docs/05-implementation-plan.md) | 实现方案（单一事实源） |
 | [docs/06-codex-review.md](docs/06-codex-review.md) | Codex（gpt-5.6-sol）独立 review 报告 |
 | [docs/07-ecosystem-research.md](docs/07-ecosystem-research.md) | 生态调研：Claude Tag 类项目与远程桥（30+ 仓库） |
 | [docs/08-triple-review.md](docs/08-triple-review.md) | 三方复审（DeepSeek/Claude Opus 5/Codex）共识与修订对照 |
+| [docs/09-onboarding.md](docs/09-onboarding.md) | 飞书开放平台开通清单（Phase 0 验收用） |
+| [docs/10-implementation-reviews.md](docs/10-implementation-reviews.md) | 实现阶段十一轮 Codex review 记录（47 项 findings 修复对照，终审 APPROVE） |
+| [docs/11-incident-rc7-keyed-slot.md](docs/11-incident-rc7-keyed-slot.md) | 事故记录：rc.7 keyed slot 契约导致 Mac App 无法进入界面（已修复勿回退） |
+| [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md) | 插件安装/更新/升级固定检查规则（强制流程，端到端验收才算成功） |
 
-## 关键决策速览
+## 许可
 
-- **插件内嵌 `dsh web` profile**（会话与 GUI 互通），而非独立进程
-- 飞书**长连接模式**，无需公网服务器
-- **话题 ↔ session** 多会话映射
-- **审批卡片 + 文字兜底**（/approve /reject，按钮重复点击被 SDK 去重 → 文字兜底是必需路径）
-- 审批 answerer 以 **`{prepend:true}` 注册 + 回合归属路由**（cordis.patch.yml 无排序能力；GUI 与飞书双写回合各归各的审批）
-- 飞书会话 **屏蔽 ask-user 类工具**（防结构化提问打进无超时的浏览器通道导致远端挂起）
-- **`apply()` 永不 reject**，channel 连接后台重试（飞书断网不得拖崩 web profile）
-- 白名单只认本人 open_id；**群范围 fail-closed**（`allowedChatIds` 空=仅私聊）
-- **锁死 dsh 0.1.0-rc.6**（本机当前版本）
-- 借鉴两个 MIT 项目：[dsh-im-hub](https://github.com/ThreeBody6666/dsh-im-hub)（形态）+ [dsh-lark-bridge](https://github.com/imetn/dsh-lark-bridge)（功能）
+MIT。继承两个参考项目的版权声明（见 [LICENSE](LICENSE)）与 lark-bridge 的 `THIRD_PARTY_NOTICES.txt`（SDK 打包）。

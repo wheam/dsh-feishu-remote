@@ -1,0 +1,21 @@
+# Mount the Feishu remote plugin into any dsh profile that installs this
+# package. The row is DISABLED by default so a plain `dsh plugin add` can never
+# disturb a running profile: enable it from the profile's own cordis.patch.yml
+# (or a --patch overlay) together with the app credentials, e.g.:
+#
+#   - id: dsh-feishu-remote
+#     disabled: false
+#     config:
+#       appId: 'cli_xxx'
+#       appSecretRef: 'DSH_FEISHU_APP_SECRET'
+#       allowedOpenIds: ['ou_...']
+#       allowedChatIds: []        # fail-closed: empty = group chats refused
+#       cwd: '/Users/you/work'
+#       workspaceRoot: '/Users/you/work'
+#
+# The row id matches the package name so the profile patch can address it.
+- insert:
+    - id: dsh-feishu-remote
+      name: dsh-feishu-remote
+      disabled: true
+      config: {}

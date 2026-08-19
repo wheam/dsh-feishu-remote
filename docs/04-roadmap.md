@@ -3,6 +3,11 @@
 > 与 05-implementation-plan.md §4 的 0-6 步对齐；若与 05 冲突，以 05 为准。
 > 工作量口径见下；P0 spike 项（answerer prepend、ask-user 屏蔽、preset 三契约）
 > 通过前不写主线代码。
+>
+> **进度（2026-08-18）**：Phase 0 步骤 0-1（mock 链路）与 Phase 1 步骤 2-6
+> 已实现并测试全绿；设置卡片（Phase 2 首项）已随 P1 落地。剩余 = 真实租户
+> 端到端验收（docs/09-onboarding.md）与 Phase 2 其余项（免 @、结构化提问
+> multiplexer、cardkit 流式）。
 
 ## Phase 0：环境与链路验证（1-2 天）
 

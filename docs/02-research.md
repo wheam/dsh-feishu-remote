@@ -12,7 +12,8 @@
 - **事件流**：SSE `/api/events.mux` + `/api/events.host`；断线重连 + 指数退避已实现。
 - **插件机制**：cordis bundle；`dsh plugin --profile <name> add <pkg>`；本机已有 `web` / `headless` 两个 profile；插件可跑进 `web` profile（im-hub 的设置卡片即证明）。
 - **进程内服务**：`agents.create/resume`、`session/event`、`approval/request`、`userQuestions`——两个桥项目都直接使用，无需走 HTTP。
-- **版本**：本机 dsh = `0.1.0-rc.6`。
+- **版本**：调研时本机 dsh = `0.1.0-rc.6`；随后 Mac App 自动升级到 `0.1.0-rc.7`，
+  插件已随 rc.7 适配（事故与规则见 docs/11 / docs/12）。
 
 ## 二、社区项目对比
 
