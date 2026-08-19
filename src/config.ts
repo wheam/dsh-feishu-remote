@@ -32,6 +32,8 @@ export interface Config {
   inboundDir?: string
   progressCards?: boolean
   progressUpdateMs?: number
+  /** 飞书回合认领时给用户消息加「敲键盘」reaction、回合结束移除（装饰性，失败静默）。 */
+  workingReaction?: boolean
   maxInboundFileBytes?: number
   maxOutboundFileBytes?: number
   interactiveTimeoutMs?: number
@@ -60,6 +62,7 @@ export const ConfigSchema: Schema<Config> = Schema.object({
   inboundDir: Schema.string().default(''),
   progressCards: Schema.boolean().default(true),
   progressUpdateMs: Schema.number().step(1).min(250).default(600),
+  workingReaction: Schema.boolean().default(true),
   maxInboundFileBytes: Schema.number().step(1).min(1).default(20 * 1024 * 1024),
   maxOutboundFileBytes: Schema.number().step(1).min(1).default(30 * 1024 * 1024),
   interactiveTimeoutMs: Schema.number().step(1).min(1000).default(10 * 60 * 1000),
@@ -143,6 +146,7 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     inboundDir,
     progressCards: config.progressCards ?? true,
     progressUpdateMs: config.progressUpdateMs ?? 600,
+    workingReaction: config.workingReaction ?? true,
     maxInboundFileBytes: config.maxInboundFileBytes ?? 20 * 1024 * 1024,
     maxOutboundFileBytes: config.maxOutboundFileBytes ?? 30 * 1024 * 1024,
     interactiveTimeoutMs: config.interactiveTimeoutMs ?? 10 * 60 * 1000,

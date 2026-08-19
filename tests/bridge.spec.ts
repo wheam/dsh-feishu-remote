@@ -199,6 +199,9 @@ class FakeChannel implements LarkChannelLike {
   patchGate?: Promise<void>
   /** Queued errors thrown by updateCard (one per call). */
   readonly patchErrors: Error[] = []
+  /** Working-reaction（敲键盘）recording. */
+  readonly reactionsAdded: Array<{ messageId: string; emojiType: string }> = []
+  readonly reactionsRemoved: Array<{ messageId: string; emojiType: string }> = []
 
   async send(to: string, input: unknown, options?: unknown): Promise<{ messageId: string }> {
     const record = input as Record<string, unknown>
@@ -208,6 +211,16 @@ class FakeChannel implements LarkChannelLike {
     const messageId = `om_sent_${this.sent.length + 1}`
     this.sent.push({ to, input: record, options, messageId })
     return { messageId }
+  }
+
+  async addReaction(messageId: string, emojiType: string): Promise<string> {
+    this.reactionsAdded.push({ messageId, emojiType })
+    return `reaction_${this.reactionsAdded.length}`
+  }
+
+  async removeReactionByEmoji(messageId: string, emojiType: string): Promise<boolean> {
+    this.reactionsRemoved.push({ messageId, emojiType })
+    return true
   }
 
   async updateCard(messageId: string, card: object): Promise<void> {
@@ -894,6 +907,47 @@ describe('streaming aggregation', () => {
     await list[0]!.fn({ id: sessionId } as never, sessionEvent('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'y' } }, sessionId) as never)
     await new Promise(resolve => setTimeout(resolve, 40))
     expect(h.channel.patched.length).toBe(before)
+  })
+})
+
+describe('working reaction (敲键盘)', () => {
+  it('adds the typing reaction to the triggering message when a feishu turn is claimed, removes at turn/end', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('run')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const inboundId = `om_in_${messageSeq}`
+    const agent = h.agents.live.get(sessionId)!
+    const msg = agent.followups.at(-1) as { id?: unknown }
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitClaim(sessionId, msg!.id, 1)
+    await waitFor(() => h.channel.reactionsAdded.length === 1)
+    expect(h.channel.reactionsAdded[0]).toEqual({ messageId: inboundId, emojiType: 'Typing' })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.reactionsRemoved.length === 1)
+    expect(h.channel.reactionsRemoved[0]).toEqual({ messageId: inboundId, emojiType: 'Typing' })
+  })
+
+  it('does not react to GUI turns or when workingReaction is disabled', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('run')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    // GUI turn: no claim → no reaction.
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(h.channel.reactionsAdded).toHaveLength(0)
+
+    const h2 = await makeHarness({ workingReaction: false })
+    await h2.emitMessage('run')
+    await waitFor(() => h2.agents.created.length === 1)
+    const sessionId2 = h2.agents.created[0]!.options.sessionId!
+    const agent2 = h2.agents.live.get(sessionId2)!
+    const msg2 = agent2.followups.at(-1) as { id?: unknown }
+    await h2.emitSessionEvent(sessionId2, 'turn/start', { turn: 1 })
+    await h2.emitClaim(sessionId2, msg2!.id, 1)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(h2.channel.reactionsAdded).toHaveLength(0)
   })
 })
 

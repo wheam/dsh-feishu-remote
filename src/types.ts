@@ -31,6 +31,7 @@ export interface ResolvedConfig {
   inboundDir: string
   progressCards: boolean
   progressUpdateMs: number
+  workingReaction: boolean
   maxInboundFileBytes: number
   maxOutboundFileBytes: number
   interactiveTimeoutMs: number
@@ -76,6 +77,8 @@ export interface TurnProgress {
   truncated?: boolean
   cardFallbackAttempted?: boolean
   /** Immutable reply context for THIS turn's cards (captured once, survives route mutation). */
+  /** Feishu message this turn's "working" reaction (敲键盘) was added to — removed at turn/end. */
+  workingReaction?: { messageId: string }
   reply?: { replyTo?: string; replyInThread: boolean }
   /** Per-turn card-op chain: the initial send and its patches are strictly serialized. */
   sendChain?: Promise<unknown>
@@ -101,6 +104,10 @@ export interface LarkChannelLike {
   on<K extends keyof EventMap>(name: K, handler: EventMap[K]): () => void
   send(to: string, input: SendInput, options?: SendOptions): Promise<SendResult>
   updateCard(messageId: string, card: object): Promise<void>
+  /** Add a reaction to a message; resolves the Feishu `reaction_id`. */
+  addReaction(messageId: string, emojiType: string): Promise<string>
+  /** Remove the BOT's own reaction matching `emojiType` on the message (true = removed). */
+  removeReactionByEmoji(messageId: string, emojiType: string): Promise<boolean>
   downloadMessageResource(
     messageId: string,
     fileKey: string,

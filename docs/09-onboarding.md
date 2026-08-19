@@ -23,6 +23,7 @@
 | `im:message.p2p_msg:readonly` | 接收私聊消息 |
 | `im:message.group_at_msg:readonly` | 接收群内 @机器人 消息（P0 每条群消息必须 @） |
 | `im:message:send_as_bot` | 以机器人身份发消息 / 更新卡片 |
+| `im:message.reactions:write_only` | 发送、删除消息表情回复（「敲键盘」working reaction；`im:message` 与本品二选一即可；需随新版本发布） |
 
 ## 4. 事件订阅 = 长连接
 
@@ -72,3 +73,6 @@
    平滑切换标题与按钮；**流式中点击「停止任务」**能否在可接受延迟内收到终态卡
    （流式模式回调窗口限制，现有 transient 重试 + 新卡兜底应覆盖）；若客户端对
    `message.patch` 路径完全不呈现增量效果，评估升级 cardkit 元素级流式（docs/05 §2.5）。
+8. **「敲键盘」working reaction**：发消息后触发消息上出现 ✍️/敲键盘表情、回合结束
+   （含 /stop、reaction 取消、出错）后消失；权限缺失时仅日志告警、不影响回合
+   （`workingReaction: false` 可关闭）。

@@ -64,6 +64,8 @@ export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike
     on: (name, handler) => channel.on(name, handler),
     send: (to, input, options) => channel.send(to, input, options),
     updateCard: (messageId, card) => channel.updateCard(messageId, card),
+    addReaction: (messageId, emojiType) => channel.addReaction(messageId, emojiType),
+    removeReactionByEmoji: (messageId, emojiType) => channel.removeReactionByEmoji(messageId, emojiType),
     downloadMessageResource: async (messageId, fileKey, type, maxBytes) => {
       const response = await channel.rawClient.im.v1.messageResource.get({
         path: { message_id: messageId, file_key: fileKey },

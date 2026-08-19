@@ -65,6 +65,9 @@ const HELP_TEXT = `## DeepSeek Harness Feishu Remote
 /** Ask-user tools blocked on Feishu sessions: questions must never reach the unattended browser. */
 const BLOCKED_TOOLS = ['ask_user_question', 'exit_plan_mode'] as const
 
+/** 飞书「敲键盘」reaction（官方 emoji_type）；回合认领时加到用户消息、turn/end 移除。 */
+const WORKING_REACTION_EMOJI = 'Typing'
+
 interface RouteContext {
   chatId: string
   chatType: 'p2p' | 'group'
@@ -314,6 +317,11 @@ export class FeishuRemoteBridge {
         entry.activeTurnOrigin = 'feishu'
         entry.activeReply = reply
         entry.progress.reply = reply
+        // 「敲键盘」reaction：agent 开始工作即给用户消息一个即时反馈
+        // （装饰性，失败静默——绝不能影响回合本体）。
+        if (this.config.workingReaction && reply.replyTo !== undefined) {
+          void this.addWorkingReaction(entry.progress, reply.replyTo)
+        }
       }
     }))
     // Discarded messages can never open a turn — drop their ledger entries so
@@ -369,6 +377,8 @@ export class FeishuRemoteBridge {
       on: (name, handler) => raw.on(name, handler),
       send: (to, input, options) => raced(() => raw.send(to, input, options)),
       updateCard: (messageId, card) => raced(() => raw.updateCard(messageId, card)),
+      addReaction: (messageId, emojiType) => raced(() => raw.addReaction(messageId, emojiType)),
+      removeReactionByEmoji: (messageId, emojiType) => raced(() => raw.removeReactionByEmoji(messageId, emojiType)),
       downloadMessageResource: (messageId, fileKey, type, maxBytes) => raw.downloadMessageResource(messageId, fileKey, type, maxBytes),
     }
   }
@@ -1289,6 +1299,8 @@ export class FeishuRemoteBridge {
         const terminal = terminalOutcome(event.data.reason)
         progress.outcome = terminal.outcome
         progress.outcomeDetail = terminal.detail
+        // 移除「敲键盘」reaction（装饰性，失败静默；残留无害）。
+        void this.removeWorkingReaction(progress)
         // Track the finalizer as a CHAIN so switches/stop await every
         // predecessor too: the old turn's card work must never read a swapped
         // session (review #4 F1 + review #5 F1: no replaceable slot).
@@ -1722,6 +1734,39 @@ export class FeishuRemoteBridge {
     if (entry === undefined) return
     if (!this.isGloballyAllowed(event.operator.openId) || entry.route.ownerOpenId !== event.operator.openId) return
     entry.handle.agent.cancel({ kind: 'user' }, { keepInbox: true })
+  }
+
+  // ------------------------------------------------------- working reaction
+
+  /**
+   * 给触发本回合的飞书消息加「敲键盘」reaction（参考 lark-coding-agent-bridge
+   * 的 addWorkingReaction）。装饰性、best-effort：任何失败只记日志，绝不
+   * 影响回合本体；不经出站调度器（避免给纯装饰动作记送达失败审计）。
+   */
+  private async addWorkingReaction(progress: TurnProgress, messageId: string): Promise<void> {
+    // Set the marker SYNCHRONOUSLY before the await: turn/end may race this
+    // call on the microtask queue, and removal must always find the target.
+    progress.workingReaction = { messageId }
+    try {
+      if (this.channel === undefined) return
+      await this.channel.addReaction(messageId, WORKING_REACTION_EMOJI)
+    } catch (error) {
+      progress.workingReaction = undefined
+      this.ctx.logger?.warn?.('dsh-feishu-remote: 添加「敲键盘」表情回复失败（装饰性，忽略）：%s', errorMessage(error))
+    }
+  }
+
+  /** turn/end 时移除「敲键盘」reaction；残留无害（飞书客户端可手动清除）。 */
+  private async removeWorkingReaction(progress: TurnProgress): Promise<void> {
+    const target = progress.workingReaction
+    progress.workingReaction = undefined
+    if (target === undefined) return
+    try {
+      if (this.channel === undefined) return
+      await this.channel.removeReactionByEmoji(target.messageId, WORKING_REACTION_EMOJI)
+    } catch (error) {
+      this.ctx.logger?.warn?.('dsh-feishu-remote: 移除「敲键盘」表情回复失败（装饰性，忽略）：%s', errorMessage(error))
+    }
   }
 
   private async safeSend(

@@ -98,6 +98,12 @@ export function createMockChannel(options: MockChannelOptions = {}): LarkChannel
     async updateCard(messageId, card) {
       console.log(`[mock patch ${messageId}] ${summarizeInput(card as Record<string, unknown>)}`)
     },
+    async addReaction() {
+      return 'reaction_mock'
+    },
+    async removeReactionByEmoji() {
+      return true
+    },
     async downloadMessageResource() {
       throw new Error('mock channel does not download message resources')
     },

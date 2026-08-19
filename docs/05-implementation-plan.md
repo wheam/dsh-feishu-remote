@@ -151,6 +151,11 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    一律跳过（终态卡是完整快照）；终态 patch **绕过**每回合 sendChain 直接入调度器
    （同 messageId 的 patch 由调度器按代际串行/合并，终态必胜过仍排队的陈旧
    patch）；`/view` 切换视图走显式重渲染，结算后仍可用。
+   **working reaction（敲键盘，Round 13）**：飞书回合被认领（`agent/inbox/claimed`
+   命中 pendingClaims）时给触发消息加 `Typing` reaction、`turn/end` 移除；装饰性、
+   best-effort（标记在 await 前同步写入以防 turn/end 微任务竞态；失败静默、残留
+   无害）；不经出站调度器以免给纯装饰动作记送达失败审计；`workingReaction: false`
+   关闭；权限 `im:message.reactions:write_only`（docs/09 §3）。
    **去重规则（三方 review 修正）**：同一 messageId 的完整 `assistant/message` 到达即
    **替换**该 (turn,step) 的 chunk 缓冲而非追加（修复 lark-bridge 的 chunks=hel +
    final=hello → helhello 缺陷），按事件 seq 去重；输出状态映射表与多 step/chunk 缺片/

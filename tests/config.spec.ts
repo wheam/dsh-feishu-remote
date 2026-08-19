@@ -17,6 +17,7 @@ describe('resolveConfig (single project, fail-closed)', () => {
     expect(config.allowAllUsers).toBe(false)
     expect(config.requireMention).toBe(true)
     expect(config.progressUpdateMs).toBe(600)
+    expect(config.workingReaction).toBe(true)
     expect(config.interactiveTimeoutMs).toBe(10 * 60 * 1000)
     expect(config.cardBodyMaxChars).toBe(12000)
     expect(config.statePath).toMatch(/feishu-remote[\\/]cli_test\.json$/u)
