@@ -33,6 +33,15 @@ export const flatSchema = Schema.object({
   cardPreset: Schema.union(['compact', 'standard', 'developer'] as const).default('standard'),
   maxLiveAgents: Schema.number().step(1).min(0).default(0),
   commandAllowlist: Schema.string().default(''),
+  contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
+  contextBackend: Schema.union(['auto', 'cli', 'sdk'] as const).default('auto'),
+  // NOTE (docs/15 F-09): feishuCliPath is deliberately NOT in the GUI schema —
+  // an arbitrary executable path is equivalent to local code execution and
+  // stays a trusted-admin setting (cordis.patch.yml / DSH_FEISHU_CLI_PATH).
+  contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
+  contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
+  contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
+  contextIncludeBot: Schema.boolean().default(true),
 })
 
 export interface FlatSettings {
@@ -52,6 +61,12 @@ export interface FlatSettings {
   cardPreset: 'compact' | 'standard' | 'developer'
   maxLiveAgents: number
   commandAllowlist: string
+  contextMode: 'off' | 'auto'
+  contextBackend: 'auto' | 'cli' | 'sdk'
+  contextMaxMessages: number
+  contextMaxChars: number
+  contextTimeoutMs: number
+  contextIncludeBot: boolean
 }
 
 function splitIds(text: string | undefined): string[] {
@@ -77,6 +92,12 @@ export function flatten(config: Config): FlatSettings {
     cardPreset: config.cardPreset ?? 'standard',
     maxLiveAgents: config.maxLiveAgents ?? 0,
     commandAllowlist: (config.commandAllowlist ?? []).join(', '),
+    contextMode: config.contextMode ?? 'auto',
+    contextBackend: config.contextBackend ?? 'auto',
+    contextMaxMessages: config.contextMaxMessages ?? 150,
+    contextMaxChars: config.contextMaxChars ?? 100000,
+    contextTimeoutMs: config.contextTimeoutMs ?? 10000,
+    contextIncludeBot: config.contextIncludeBot ?? true,
   }
 }
 
@@ -105,5 +126,11 @@ export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config
     cardPreset: (value.cardPreset ?? 'standard') as CardPreset,
     maxLiveAgents: value.maxLiveAgents ?? 0,
     commandAllowlist: splitIds(value.commandAllowlist),
+    contextMode: value.contextMode ?? 'auto',
+    contextBackend: value.contextBackend ?? 'auto',
+    contextMaxMessages: value.contextMaxMessages ?? 150,
+    contextMaxChars: value.contextMaxChars ?? 100000,
+    contextTimeoutMs: value.contextTimeoutMs ?? 10000,
+    contextIncludeBot: value.contextIncludeBot ?? true,
   }
 }

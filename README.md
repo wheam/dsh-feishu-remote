@@ -91,8 +91,23 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
 | [docs/10-implementation-reviews.md](docs/10-implementation-reviews.md) | 实现阶段十一轮 Codex review 记录（47 项 findings 修复对照，终审 APPROVE） |
 | [docs/11-incident-rc7-keyed-slot.md](docs/11-incident-rc7-keyed-slot.md) | 事故记录：rc.7 keyed slot 契约导致 Mac App 无法进入界面（已修复勿回退） |
 | [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md) | 插件安装/更新/升级固定检查规则（强制流程，端到端验收才算成功） |
-| [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（话题全量 + 私聊回溯，官方 lark-cli + SDK 兜底；方案定案待实现） |
+| [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（话题全量 + 私聊回溯，官方 lark-cli + SDK 兜底；**v1 已实现，真实租户验收待跑**） |
 | [docs/14-context-codex-review.md](docs/14-context-codex-review.md) | docs/13 的 Codex 独立 review 记录（15 项 findings 处置对照，修订已并入规格） |
+| [docs/15-context-impl-review.md](docs/15-context-impl-review.md) | 飞书上下文回填实现阶段 Codex review（14 项 findings 处置对照，修订已并入实现） |
+
+## 隐私与数据流（飞书上下文回填）
+
+启用上下文回填（默认 `contextMode: auto`）后，**每条普通飞书消息**都会把所在话题/聊天的历史消息
+（含未 @ 机器人的其他群成员发言）注入到当前回合的输入中：
+
+- 注入内容会进入 dsh 会话的 durable history（**本地持久化**），并出现在 Web GUI 会话列表/会话记录中
+  （飞书与 GUI 是同一批会话），随会话归档、导出、删除一同流转；
+- 注入内容会**发送给你所配置的模型提供商**（DeepSeek 或其他 provider/model）；
+- 本插件只做密钥形态脱敏（`redactSecrets`），**不承诺**对群讨论中的个人信息/业务敏感内容做清洗——
+  群场景请只在 `allowedChatIds` 明确授权的群内使用；
+- 逃生门：`contextMode: off` 完全关闭该功能；`contextIncludeBot: false` 不注入机器人自己的历史回复。
+- 另注意：`feishuCliPath`（任意可执行路径）仅作为受信任管理员配置（cordis.patch.yml / 环境变量），
+  Web GUI 设置卡不可修改——它等价于本机代码执行权限。
 
 ## 许可
 

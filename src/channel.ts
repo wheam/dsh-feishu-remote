@@ -19,7 +19,7 @@ import {
   type LarkChannel,
 } from '@larksuiteoapi/node-sdk'
 import type { LarkChannelLike, ResolvedConfig } from './types.js'
-import { readBufferWithLimit } from './security.js'
+import { readBufferWithLimit, redactSecrets } from './security.js'
 
 export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike => {
   const channel = createLarkChannel({
@@ -66,6 +66,43 @@ export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike
     updateCard: (messageId, card) => channel.updateCard(messageId, card),
     addReaction: (messageId, emojiType) => channel.addReaction(messageId, emojiType),
     removeReactionByEmoji: (messageId, emojiType) => channel.removeReactionByEmoji(messageId, emojiType),
+    // History backfill seam (docs/13 F1/F10): one page, newest first. Business
+    // errors THROW here — the context provider treats them as fail-open.
+    listMessages: async (params) => {
+      const response = await channel.rawClient.im.v1.message.list({
+        params: {
+          container_id_type: params.containerIdType,
+          container_id: params.containerId,
+          sort_type: 'ByCreateTimeDesc',
+          page_size: 50,
+          ...(params.pageToken === undefined ? {} : { page_token: params.pageToken }),
+          with_sender_name: true,
+        },
+      })
+      if (response.code !== 0) {
+        throw new Error(`im.v1.message.list 失败：code=${response.code} msg=${redactSecrets(response.msg ?? '')}`)
+      }
+      const data = response.data
+      return {
+        items: Array.isArray(data?.items) ? data.items as Array<Record<string, unknown>> : [],
+        hasMore: data?.has_more === true,
+        ...(typeof data?.page_token === 'string' && data.page_token !== '' ? { pageToken: data.page_token } : {}),
+      }
+    },
+    // Thread-root back-fill seam (docs/13 F3 + docs/15 F-05).
+    getMessage: async (messageId) => {
+      const response = await channel.rawClient.im.v1.message.get({
+        path: { message_id: messageId },
+        params: { with_sender_name: true },
+      })
+      if (response.code !== 0) {
+        throw new Error(`im.v1.message.get 失败：code=${response.code} msg=${redactSecrets(response.msg ?? '')}`)
+      }
+      const items = response.data?.items
+      return Array.isArray(items) && items.length > 0
+        ? items[0] as Record<string, unknown>
+        : undefined
+    },
     downloadMessageResource: async (messageId, fileKey, type, maxBytes) => {
       const response = await channel.rawClient.im.v1.messageResource.get({
         path: { message_id: messageId, file_key: fileKey },

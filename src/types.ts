@@ -41,6 +41,22 @@ export interface ResolvedConfig {
   agentPreset?: string
   maxLiveAgents: number
   commandAllowlist: string[]
+  contextMode: 'off' | 'auto'
+  contextBackend: 'auto' | 'cli' | 'sdk'
+  feishuCliPath: string
+  contextMaxMessages: number
+  contextMaxChars: number
+  contextTimeoutMs: number
+  contextIncludeBot: boolean
+}
+
+/** Per-turn context-backfill stats (docs/13 F10: exact turn attribution). */
+export interface TurnContextStats {
+  backend: 'cli' | 'sdk'
+  count: number
+  chars: number
+  truncated: boolean
+  fullWindow: boolean
 }
 
 export interface ToolProgress {
@@ -77,9 +93,11 @@ export interface TurnProgress {
   truncated?: boolean
   cardFallbackAttempted?: boolean
   /** Immutable reply context for THIS turn's cards (captured once, survives route mutation). */
+  reply?: { replyTo?: string; replyInThread: boolean }
+  /** Feishu context backfill stats for THIS turn (docs/13 F10), copied at claim time. */
+  contextStats?: TurnContextStats
   /** Feishu message this turn's "working" reaction (敲键盘) was added to — removed at turn/end. */
   workingReaction?: { messageId: string }
-  reply?: { replyTo?: string; replyInThread: boolean }
   /** Per-turn card-op chain: the initial send and its patches are strictly serialized. */
   sendChain?: Promise<unknown>
 }
@@ -89,6 +107,19 @@ export type BridgeAction =
   | { bridge: 'dsh-feishu-remote'; action: 'approval'; token: string; decision: 'allow' | 'reject' }
 
 export type ChannelFactory = (config: ResolvedConfig) => LarkChannelLike
+
+export interface LarkMessageListParams {
+  containerIdType: 'chat' | 'thread'
+  containerId: string
+  pageToken?: string
+}
+
+/** Raw `GET /im/v1/messages` page (SDK shape); business errors throw in the seam. */
+export interface LarkMessageListResult {
+  items: Array<Record<string, unknown>>
+  hasMore: boolean
+  pageToken?: string
+}
 
 /**
  * Narrow seam around the official SDK, allowing deterministic bridge tests.
@@ -108,6 +139,10 @@ export interface LarkChannelLike {
   addReaction(messageId: string, emojiType: string): Promise<string>
   /** Remove the BOT's own reaction matching `emojiType` on the message (true = removed). */
   removeReactionByEmoji(messageId: string, emojiType: string): Promise<boolean>
+  /** History backfill seam (docs/13 F1/F10): one page of `GET /im/v1/messages`, newest first. */
+  listMessages(params: LarkMessageListParams): Promise<LarkMessageListResult>
+  /** One message by id (docs/13 F3: thread-root back-fill); undefined = not found. */
+  getMessage(messageId: string): Promise<Record<string, unknown> | undefined>
   downloadMessageResource(
     messageId: string,
     fileKey: string,

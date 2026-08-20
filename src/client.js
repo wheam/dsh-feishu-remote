@@ -306,6 +306,19 @@ window.__ModuleLoader__.load({
 					{ field: "maxLiveAgents", spec: numberField("maxLiveAgents"), kind: "number", labelKey: "f.maxLiveAgents", hintKey: "f.maxLiveAgentsHint", placeholderKey: "p.maxLiveAgents" },
 					{ field: "commandAllowlist", spec: textField("commandAllowlist"), kind: "text", labelKey: "f.commandAllowlist", hintKey: "f.commandAllowlistHint", placeholderKey: "p.commandAllowlist" }
 				]
+			},
+			{
+				key: "context",
+				fields: [
+					{ field: "contextMode", spec: selectField("contextMode", ["off", "auto"]), kind: "select", labelKey: "f.contextMode", hintKey: "f.contextModeHint" },
+					{ field: "contextBackend", spec: selectField("contextBackend", ["auto", "cli", "sdk"]), kind: "select", labelKey: "f.contextBackend", hintKey: "f.contextBackendHint" },
+					// feishuCliPath deliberately absent: arbitrary-exec path stays a
+					// trusted-admin setting (docs/15 F-09), not GUI-editable.
+					{ field: "contextMaxMessages", spec: numberField("contextMaxMessages"), kind: "number", labelKey: "f.contextMaxMessages", hintKey: "f.contextMaxMessagesHint", placeholderKey: "p.contextMaxMessages" },
+					{ field: "contextMaxChars", spec: numberField("contextMaxChars"), kind: "number", labelKey: "f.contextMaxChars", hintKey: "f.contextMaxCharsHint", placeholderKey: "p.contextMaxChars" },
+					{ field: "contextTimeoutMs", spec: numberField("contextTimeoutMs"), kind: "number", labelKey: "f.contextTimeoutMs", hintKey: "f.contextTimeoutMsHint", placeholderKey: "p.contextTimeoutMs" },
+					{ field: "contextIncludeBot", spec: booleanField("contextIncludeBot"), kind: "select", labelKey: "f.contextIncludeBot", hintKey: "f.contextIncludeBotHint" }
+				]
 			}
 		];
 
@@ -484,6 +497,7 @@ window.__ModuleLoader__.load({
 			"g.workspace": "Workspace (required)",
 			"g.agent": "Agent",
 			"g.behavior": "Behavior",
+			"g.context": "Feishu context",
 			"f.configured": "Configured", "f.notConfigured": "Not set",
 			"f.secretHint": "Stored server-side; never shown again. Leave blank to keep the current value.",
 			"f.appId": "App id", "f.appIdHint": "App id of the Feishu/Lark custom app (cli_…).",
@@ -501,7 +515,13 @@ window.__ModuleLoader__.load({
 			"f.progressUpdateMs": "Card update throttle (ms)", "f.progressUpdateMsHint": "Streaming card patch cadence; default 600ms.",
 			"f.interactiveTimeoutMs": "Approval timeout (ms)", "f.interactiveTimeoutMsHint": "Pending approvals settle as unavailable after this; default 10min.",
 			"f.maxLiveAgents": "Max live agents", "f.maxLiveAgentsHint": "Hard cap on live sessions (0 = unlimited).",
-			"f.commandAllowlist": "Native command allowlist", "f.commandAllowlistHint": "Comma-separated Harness command names allowed to pass through; anything else is rejected."
+			"f.commandAllowlist": "Native command allowlist", "f.commandAllowlistHint": "Comma-separated Harness command names allowed to pass through; anything else is rejected.",
+			"f.contextMode": "Context backfill", "f.contextModeHint": "auto = inject Feishu thread/chat history before each plain message (off disables it).",
+			"f.contextBackend": "Context backend", "f.contextBackendHint": "auto prefers the official lark-cli and falls back to the bundled SDK; cli/sdk force one.",
+			"f.contextMaxMessages": "Context max messages", "f.contextMaxMessagesHint": "Window size in messages per injection (1-500; default 150).",
+			"f.contextMaxChars": "Context max chars", "f.contextMaxCharsHint": "Window size in characters per injection (1000-500000; default 100000).",
+			"f.contextTimeoutMs": "Context fetch timeout (ms)", "f.contextTimeoutMsHint": "History fetch timeout; on timeout the message proceeds without context (fail-open).",
+			"f.contextIncludeBot": "Include bot replies", "f.contextIncludeBotHint": "Keep the bot's own history replies in the context window."
 		};
 
 		const zh = {
@@ -516,6 +536,7 @@ window.__ModuleLoader__.load({
 			"g.workspace": "工作区（必填）",
 			"g.agent": "智能体",
 			"g.behavior": "行为",
+			"g.context": "飞书上下文",
 			"f.configured": "已配置", "f.notConfigured": "未设置",
 			"f.secretHint": "凭据仅保存在服务端，不会回显；留空表示保持原值。",
 			"f.appId": "App ID", "f.appIdHint": "飞书/Lark 自建应用的 App ID（cli_…）。",
@@ -533,7 +554,13 @@ window.__ModuleLoader__.load({
 			"f.progressUpdateMs": "卡片更新节流（毫秒）", "f.progressUpdateMsHint": "流式卡片 patch 节奏；默认 600ms。",
 			"f.interactiveTimeoutMs": "审批超时（毫秒）", "f.interactiveTimeoutMsHint": "待审批超过该时长结算为 unavailable；默认 10 分钟。",
 			"f.maxLiveAgents": "live agent 上限", "f.maxLiveAgentsHint": "live 会话硬上限（0 = 不限）。",
-			"f.commandAllowlist": "原生命令透传白名单", "f.commandAllowlistHint": "逗号分隔的 Harness 命令名；其余命令一律拒绝。"
+			"f.commandAllowlist": "原生命令透传白名单", "f.commandAllowlistHint": "逗号分隔的 Harness 命令名；其余命令一律拒绝。",
+			"f.contextMode": "上下文回填", "f.contextModeHint": "auto = 每条普通消息前注入飞书话题/聊天历史；off 完全关闭。",
+			"f.contextBackend": "上下文获取后端", "f.contextBackendHint": "auto 优先官方 lark-cli、装不上自动降级已打包的 SDK；cli/sdk 强制其一。",
+			"f.contextMaxMessages": "上下文消息条数上限", "f.contextMaxMessagesHint": "单次注入窗口的消息条数（1-500；默认 150）。",
+			"f.contextMaxChars": "上下文字符上限", "f.contextMaxCharsHint": "单次注入窗口的字符数（1000-500000；默认 100000）。",
+			"f.contextTimeoutMs": "上下文拉取超时（毫秒）", "f.contextTimeoutMsHint": "历史拉取超时；超时后消息照常处理、本次不注入（fail-open）。",
+			"f.contextIncludeBot": "包含机器人自己的回复", "f.contextIncludeBotHint": "上下文窗口中是否保留机器人自己的历史回复。"
 		};
 
 		const placeholders = {
@@ -550,7 +577,10 @@ window.__ModuleLoader__.load({
 				"p.progressUpdateMs": "Example: 600",
 				"p.interactiveTimeoutMs": "Example: 600000",
 				"p.maxLiveAgents": "Example: 8 (0 = unlimited)",
-				"p.commandAllowlist": "Example: status, sessions"
+				"p.commandAllowlist": "Example: status, sessions",
+				"p.contextMaxMessages": "Example: 150",
+				"p.contextMaxChars": "Example: 100000",
+				"p.contextTimeoutMs": "Example: 10000"
 			},
 			zh: {
 				"p.appId": "例如：cli_xxxxxxxxxxxxx",
@@ -565,7 +595,10 @@ window.__ModuleLoader__.load({
 				"p.progressUpdateMs": "例如：600",
 				"p.interactiveTimeoutMs": "例如：600000",
 				"p.maxLiveAgents": "例如：8（0 = 不限）",
-				"p.commandAllowlist": "例如：status, sessions"
+				"p.commandAllowlist": "例如：status, sessions",
+				"p.contextMaxMessages": "例如：150",
+				"p.contextMaxChars": "例如：100000",
+				"p.contextTimeoutMs": "例如：10000"
 			}
 		};
 

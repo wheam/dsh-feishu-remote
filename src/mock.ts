@@ -104,6 +104,14 @@ export function createMockChannel(options: MockChannelOptions = {}): LarkChannel
     async removeReactionByEmoji() {
       return true
     },
+    async listMessages() {
+      // Mock history is empty: the context pipeline fetches nothing and stays
+      // silent (fail-open). Tests inject fixtures through their own channel.
+      return { items: [], hasMore: false }
+    },
+    async getMessage() {
+      return undefined
+    },
     async downloadMessageResource() {
       throw new Error('mock channel does not download message resources')
     },

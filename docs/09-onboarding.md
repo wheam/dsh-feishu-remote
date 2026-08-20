@@ -23,6 +23,8 @@
 | `im:message.p2p_msg:readonly` | 接收私聊消息 |
 | `im:message.group_at_msg:readonly` | 接收群内 @机器人 消息（P0 每条群消息必须 @） |
 | `im:message:send_as_bot` | 以机器人身份发消息 / 更新卡片 |
+| `im:message:readonly` | 上下文回填：读取私聊历史（`im:message`/`im:message:readonly`/`im:message.history:readonly` 三选一，规格见 docs/13 §1.2） |
+| `im:message.group_msg` | 上下文回填：读取群/话题全部消息（需随新版本发布；由用户另派 Codex 在开发者后台配置） |
 | `im:message.reactions:write_only` | 发送、删除消息表情回复（「敲键盘」working reaction；`im:message` 与本品二选一即可；需随新版本发布） |
 
 ## 4. 事件订阅 = 长连接

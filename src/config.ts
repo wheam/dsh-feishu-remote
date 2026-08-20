@@ -43,6 +43,13 @@ export interface Config {
   agentPreset?: string
   maxLiveAgents?: number
   commandAllowlist?: string[]
+  contextMode?: 'off' | 'auto'
+  contextBackend?: 'auto' | 'cli' | 'sdk'
+  feishuCliPath?: string
+  contextMaxMessages?: number
+  contextMaxChars?: number
+  contextTimeoutMs?: number
+  contextIncludeBot?: boolean
 }
 
 export const ConfigSchema: Schema<Config> = Schema.object({
@@ -72,6 +79,13 @@ export const ConfigSchema: Schema<Config> = Schema.object({
   agentPreset: Schema.string().default(''),
   maxLiveAgents: Schema.number().step(1).min(0).default(0),
   commandAllowlist: Schema.array(Schema.string()).default([]),
+  contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
+  contextBackend: Schema.union(['auto', 'cli', 'sdk'] as const).default('auto'),
+  feishuCliPath: Schema.string().default(''),
+  contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
+  contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
+  contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
+  contextIncludeBot: Schema.boolean().default(true),
 })
 
 function unique(values: string[]): string[] {
@@ -156,6 +170,13 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     ...(agentPreset === undefined || agentPreset === '' ? {} : { agentPreset }),
     maxLiveAgents: config.maxLiveAgents ?? 0,
     commandAllowlist: unique(config.commandAllowlist ?? []),
+    contextMode: config.contextMode ?? 'auto',
+    contextBackend: config.contextBackend ?? 'auto',
+    feishuCliPath: (config.feishuCliPath ?? env.DSH_FEISHU_CLI_PATH ?? '').trim(),
+    contextMaxMessages: config.contextMaxMessages ?? 150,
+    contextMaxChars: config.contextMaxChars ?? 100000,
+    contextTimeoutMs: config.contextTimeoutMs ?? 10000,
+    contextIncludeBot: config.contextIncludeBot ?? true,
   }
 }
 

@@ -183,6 +183,15 @@ export function buildTurnCard(input: TurnCardInput): object {
   }
   elements.push(markdown(stats.join('  ·  ')))
 
+  if (input.progress.contextStats !== undefined && input.preset !== 'compact') {
+    const context = input.progress.contextStats
+    const kChars = Math.max(1, Math.round(context.chars / 1000))
+    const tags = [`📚 飞书上下文 ${context.count} 条 · 约 ${kChars}k 字符`]
+    if (context.fullWindow) tags.push('完整窗口')
+    if (context.truncated) tags.push('已截断')
+    elements.push(markdown(tags.join(' · ')))
+  }
+
   if (input.outcomeDetail !== undefined && input.outcomeDetail.trim() !== '') {
     elements.push(markdown(`_${bounded(redactSecrets(input.outcomeDetail), 700)}_`))
   }
@@ -270,10 +279,24 @@ export interface StatusCardInput {
   pendingApprovals: number
   failedDeliveries: number
   preset: CardPreset
+  /** Context backfill status (docs/13 §3.4). */
+  context?: {
+    mode: 'off' | 'auto'
+    backend?: 'cli' | 'sdk'
+    unavailable?: string
+    circuitOpen: boolean
+  }
 }
 
 export function buildStatusCard(input: StatusCardInput): object {
   const status = input.status === 'running' ? '运行中' : '空闲'
+  const contextLine = input.context === undefined || input.context.mode === 'off'
+    ? '**飞书上下文**：已关闭'
+    : input.context.circuitOpen
+      ? '**飞书上下文**：熔断中（连续失败，稍后自动恢复）'
+      : input.context.backend === undefined
+        ? `**飞书上下文**：不可用（${input.context.unavailable ?? '未找到 lark-cli'}）`
+        : `**飞书上下文**：已启用（${input.context.backend}）`
   return card('DeepSeek Harness Feishu Remote', input.connected ? 'blue' : 'red', [
     markdown([
       `**状态**：${status}`,
@@ -284,6 +307,7 @@ export function buildStatusCard(input: StatusCardInput): object {
       `**待审批**：${input.pendingApprovals}`,
       `**送达失败（审计）**：${input.failedDeliveries}`,
       `**卡片视图**：${input.preset}`,
+      contextLine,
     ].join('\n')),
   ], `${status} · ${input.model}`)
 }

@@ -31,6 +31,7 @@
 - 结构化提问恢复（userQuestions multiplexer 或 agent-scoped 覆盖方案验证后）
 - 超长消息分片 / 截断，全文落工作区文件并回显 session id（手机打不开 loopback Web UI）
 - mock 适配器（无真实凭据可测试，仅覆盖文本链路）
+- **飞书上下文回填**（话题全量 + 私聊回溯；官方 lark-cli 主路径 + SDK 兜底；**v1 已实现（2026-08-20），规格见 docs/13**）
 
 ### P2（按需）
 

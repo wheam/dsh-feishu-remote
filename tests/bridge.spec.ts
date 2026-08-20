@@ -5,13 +5,14 @@
  * API shapes were verified against the installed dsh 0.1.0-rc.6 sources
  * (see docs/05 and docs/08).
  */
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeishuRemoteBridge, terminalOutcome } from '../src/bridge.js'
 import { sessionPrefix } from '../src/identity.js'
 import { resolveConfig, type Config } from '../src/config.js'
+import type { ContextMessage, FeishuContextProvider } from '../src/context.js'
 import { OutboundScheduler } from '../src/scheduler.js'
 import type { LarkChannelLike } from '../src/types.js'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
@@ -170,6 +171,11 @@ class FakeChannel implements LarkChannelLike {
   status: { state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed'; reconnectAttempts: number } = { state: 'idle', reconnectAttempts: 0 }
   connectCalls = 0
   botIdentity = { openId: 'ou_bot', name: 'test-bot' }
+  /** History backfill seam fixtures (docs/13 §6). */
+  historyItems: Array<Record<string, unknown>> = []
+  historyPages: Array<Array<Record<string, unknown>>> = []
+  historyError?: Error
+  readonly listed: Array<{ containerIdType: string; containerId: string; pageToken?: string }> = []
 
   async connect(): Promise<void> {
     this.connectCalls += 1
@@ -238,6 +244,14 @@ class FakeChannel implements LarkChannelLike {
       return { items: page, hasMore: this.historyPages.length > 0, pageToken: this.historyPages.length > 0 ? `token_${this.listed.length}` : undefined }
     }
     return { items: this.historyItems, hasMore: false }
+  }
+
+  readonly getMessageCalls: string[] = []
+  rootMessageItem?: Record<string, unknown>
+
+  async getMessage(messageId: string): Promise<Record<string, unknown> | undefined> {
+    this.getMessageCalls.push(messageId)
+    return this.rootMessageItem
   }
 
   async downloadMessageResource(): Promise<Buffer> {
@@ -313,13 +327,17 @@ interface Harness {
   scheduler: OutboundScheduler
   config: ReturnType<typeof resolveConfig>
   workspace: string
+  statePath: string
   emitSessionEvent: (sessionId: string, type: SessionEvent['type'], data: SessionEvent['data']) => Promise<void>
   emitClaim: (sessionId: string, messageId: unknown, turn: number) => Promise<void>
   emitMessage: (content: string, overrides?: Parameters<typeof message>[1]) => Promise<void>
   emitCardAction: (value: unknown, operatorOpenId?: string, chatId?: string, messageId?: string) => Promise<void>
 }
 
-async function makeHarness(configOverrides: Partial<Config> = {}): Promise<Harness> {
+async function makeHarness(
+  configOverrides: Partial<Config> = {},
+  bridgeOptions: { contextProvider?: FeishuContextProvider } = {},
+): Promise<Harness> {
   const workspace = await tempWorkspace()
   const statePath = await tempState()
   const config = resolveConfig({
@@ -332,6 +350,9 @@ async function makeHarness(configOverrides: Partial<Config> = {}): Promise<Harne
     allowedChatIds: ['oc_grp'],
     progressUpdateMs: 2,
     interactiveTimeoutMs: 5_000,
+    // Default OFF so existing tests never spawn/fetch history; context
+    // describe blocks re-enable it (docs/13 §6).
+    contextMode: 'off',
     ...configOverrides,
   })
   const ctx = new FakeCtx()
@@ -355,6 +376,7 @@ async function makeHarness(configOverrides: Partial<Config> = {}): Promise<Harne
     channelPollMs: 10,
     reconnectBaseMs: 5,
     teardownProducerMs: 40,
+    ...bridgeOptions,
   })
   await bridge.start()
   await waitFor(() => channel.connectCalls >= 1, 'first channel connect')
@@ -382,7 +404,7 @@ async function makeHarness(configOverrides: Partial<Config> = {}): Promise<Harne
   }
 
   return {
-    bridge, ctx, agents, persistence, channel, scheduler, config, workspace,
+    bridge, ctx, agents, persistence, channel, scheduler, config, workspace, statePath,
     emitSessionEvent, emitClaim, emitMessage, emitCardAction,
   }
 }
@@ -1421,5 +1443,254 @@ describe('terminalOutcome mapping', () => {
     expect(terminalOutcome({ kind: 'error', error: new Error('boom') } as never).outcome).toBe('error')
     expect(terminalOutcome({ kind: 'interrupted' } as never).outcome).toBe('error')
     expect(terminalOutcome({ kind: 'mystery' } as never).outcome).toBe('error')
+  })
+})
+
+// ---------------------------------------------------------------- context backfill (docs/13)
+
+function historyMessage(overrides: Partial<ContextMessage> = {}): ContextMessage {
+  return {
+    messageId: 'om_hist_1',
+    senderName: '小明',
+    senderId: 'ou_1234567890',
+    isOwnBot: false,
+    isBotApp: false,
+    msgType: 'text',
+    deleted: false,
+    text: '之前聊过的内容',
+    createdAtMs: Date.now() - 60_000,
+    ...overrides,
+  }
+}
+
+class FakeContextProvider implements FeishuContextProvider {
+  readonly kind = 'cli' as const
+  readonly calls: Array<Parameters<FeishuContextProvider['fetchHistory']>[0]> = []
+  next: ContextMessage[] | Error = []
+
+  async fetchHistory(spec: Parameters<FeishuContextProvider['fetchHistory']>[0]): Promise<ContextMessage[]> {
+    this.calls.push(spec)
+    if (this.next instanceof Error) throw this.next
+    return [...this.next]
+  }
+}
+
+function followupContent(agent: { followups: Array<{ content: Array<{ type: string; text: string }>; id: string }> }, index = 0) {
+  return agent.followups[index]!.content
+}
+
+/** Fake CLI for the docs/15 bootstrap integration test: config show/init + one im list envelope. */
+const BOOTSTRAP_CLI_FIXTURE = `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+const statePath = join(dirname(fileURLToPath(import.meta.url)), 'state.json')
+const argv = process.argv.slice(2)
+if (argv[0] === 'config' && argv[1] === 'show') {
+  if (existsSync(statePath)) { process.stdout.write(JSON.stringify({ appId: readFileSync(statePath, 'utf8').trim(), appSecret: '****', brand: 'feishu', profile: 'x' })); process.exit(0) }
+  process.stdout.write(JSON.stringify({ ok: false, error: { type: 'config', subtype: 'not_configured' } })); process.exit(0)
+} else if (argv[0] === 'config' && argv[1] === 'init') {
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', () => undefined)
+  process.stdin.on('end', () => { writeFileSync(statePath, argv[argv.indexOf('--app-id') + 1]); process.exit(0) })
+  process.stdin.resume()
+} else if (argv[0] === 'im' && argv[1] === '+chat-messages-list') {
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    data: { messages: [ { message_id: 'om_b1', msg_type: 'text', content: 'cli 引导后内容', sender: { id: 'ou_a', name: '小明', sender_type: 'user' }, create_time: '2026-08-19 10:00', deleted: false, updated: false } ] },
+    meta: { count: 1, pagination: { complete: true } },
+  }))
+  process.exit(0)
+} else {
+  process.exit(1)
+}
+`
+
+describe('context backfill (docs/13)', () => {
+  it('prepends a JSON-framed context block and attributes stats to the exact turn', async () => {
+    const provider = new FakeContextProvider()
+    provider.next = [historyMessage({ messageId: 'om_h1' })]
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    await h.emitMessage('接着干')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+    const content = followupContent(agent)
+    expect(content.length).toBe(2)
+    expect(content[0]!.type).toBe('text')
+    const frame = JSON.parse(content[0]!.text) as { type: string; count: number; messages: Array<{ n: string }> }
+    expect(frame.type).toBe('feishu-context')
+    expect(frame.count).toBe(1)
+    expect(frame.messages[0]!.n).toBe('小明')
+    expect(content[1]!.text).toBe('接着干')
+    // Stats ride the claim ledger → turn → terminal card footer (docs/13 F10).
+    await h.emitClaim(sessionId, agent.followups[0]!.id, 1)
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    const card = h.channel.sent.find(item => item.input.card !== undefined)!
+    expect(JSON.stringify(card.input.card)).toContain('飞书上下文 1 条')
+  })
+
+  it('injects incrementally: the second message carries the watermark and injects nothing new', async () => {
+    const provider = new FakeContextProvider()
+    const stamp = Date.now() - 60_000
+    provider.next = [historyMessage({ messageId: 'om_h1', createdAtMs: stamp })]
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    await h.emitMessage('第一问')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+    expect(provider.calls[0]!.watermark).toBeUndefined()
+    await h.emitMessage('第二问')
+    await waitFor(() => agent.followups.length === 2)
+    expect(provider.calls[1]!.watermark).toEqual({ messageId: 'om_h1', createdAtMs: stamp })
+    // Window empty after the watermark → NO context block on the second turn.
+    expect(followupContent(agent, 1).length).toBe(1)
+    // Watermark persisted to the owner-only state file (docs/13 F6).
+    let persisted = false
+    const deadline = Date.now() + 1_000
+    while (!persisted && Date.now() < deadline) {
+      try {
+        const raw = JSON.parse(await readFile(h.statePath, 'utf8')) as { contextWatermarks?: Record<string, { messageId: string }> }
+        persisted = raw.contextWatermarks?.[sessionId]?.messageId === 'om_h1'
+      } catch {
+        // state file not written yet
+      }
+      if (!persisted) await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(persisted).toBe(true)
+  })
+
+  it('control commands fetch ZERO history', async () => {
+    const provider = new FakeContextProvider()
+    provider.next = [historyMessage()]
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    await h.emitMessage('/status')
+    await waitFor(() => h.channel.sent.length > 0)
+    await h.emitMessage('/stop')
+    await waitFor(() => h.channel.sent.length > 1)
+    expect(provider.calls.length).toBe(0)
+  })
+
+  it('fails open: provider errors never block the message', async () => {
+    const provider = new FakeContextProvider()
+    provider.next = new Error('boom')
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    await h.emitMessage('继续干')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+    expect(followupContent(agent).length).toBe(1)
+    expect(followupContent(agent)[0]!.text).toBe('继续干')
+    expect(h.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('上下文拉取失败'), expect.anything())
+  })
+
+  it('causal cutoff: messages newer than the trigger are dropped', async () => {
+    const provider = new FakeContextProvider()
+    provider.next = [
+      historyMessage({ messageId: 'om_old' }),
+      historyMessage({ messageId: 'om_future', createdAtMs: Date.now() + 30_000 }),
+    ]
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    await h.emitMessage('问')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<Record<string, unknown>> }
+    expect(frame.messages.length).toBe(1)
+  })
+
+  it('sdk backend drives the channel seam (p2p chat container)', async () => {
+    const h = await makeHarness({ contextMode: 'auto', contextBackend: 'sdk' })
+    h.channel.historyItems = [{
+      message_id: 'om_s1',
+      msg_type: 'text',
+      body: { content: JSON.stringify({ text: 'sdk 历史' }) },
+      sender: { id: 'ou_9', sender_type: 'user', sender_name: '老王' },
+      create_time: String(Date.now() - 1_000),
+      deleted: false,
+    }]
+    await h.emitMessage('问')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ n: string; x: string }> }
+    expect(frame.messages[0]!.x).toContain('sdk 历史')
+    expect(frame.messages[0]!.n).toBe('老王')
+    expect(h.channel.listed[0]!.containerIdType).toBe('chat')
+    expect(h.channel.listed[0]!.containerId).toBe('oc_p2p')
+  })
+
+  it('sdk backend uses the thread container for group threads', async () => {
+    const h = await makeHarness({ contextMode: 'auto', contextBackend: 'sdk' })
+    await h.emitMessage('话题内提问', { chatType: 'group', chatId: 'oc_grp', threadId: 'omt_1', rootId: 'om_root_1' })
+    await waitFor(() => h.agents.created.length === 1)
+    await waitFor(() => h.channel.listed.length > 0)
+    expect(h.channel.listed[0]!.containerIdType).toBe('thread')
+    expect(h.channel.listed[0]!.containerId).toBe('omt_1')
+    // Thread-root back-fill request (docs/15 F-05) fired through the seam.
+    await waitFor(() => h.channel.getMessageCalls.includes('om_root_1'))
+  })
+
+  it('status card reports the context backend line', async () => {
+    const provider = new FakeContextProvider()
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    await h.emitMessage('/status')
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    const card = h.channel.sent.find(item => item.input.card !== undefined)!
+    expect(JSON.stringify(card.input.card)).toContain('飞书上下文')
+  })
+
+  it('auto mode downgrades to the SDK after a runtime CLI failure (docs/15 F-06)', async () => {
+    // A configured-but-missing binary: CLI resolution succeeds, the spawn
+    // fails with ENOENT, and `auto` must taint the CLI and retry via SDK.
+    const h = await makeHarness({ contextMode: 'auto', contextBackend: 'auto', feishuCliPath: '/nonexistent/lark-cli' })
+    h.channel.historyItems = [{
+      message_id: 'om_s1',
+      msg_type: 'text',
+      body: { content: JSON.stringify({ text: 'sdk 兜底内容' }) },
+      sender: { id: 'ou_9', sender_type: 'user', sender_name: '老王' },
+      create_time: String(Date.now() - 1_000),
+      deleted: false,
+    }]
+    await h.emitMessage('问')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ x: string }> }
+    expect(frame.messages[0]!.x).toContain('sdk 兜底内容')
+    expect(h.channel.listed.length).toBe(1)
+    expect(h.ctx.logger.info).toHaveBeenCalledWith(expect.stringContaining('降级 SDK'))
+    // The second message reuses the SDK directly (no second CLI attempt).
+    await h.emitMessage('再问')
+    await waitFor(() => agent.followups.length === 2)
+    expect(h.channel.listed.length).toBe(2)
+  })
+
+  it('bootstraps the CLI config once and serves context through the CLI path', async () => {
+    // A fake CLI via feishuCliPath: not configured → config init (stdin
+    // secret) → im list envelope. Verifies the docs/15 bootstrap wiring
+    // end-to-end without real credentials.
+    const root = await tempWorkspace()
+    const script = join(root, 'fake-cli.mjs')
+    await writeFile(script, BOOTSTRAP_CLI_FIXTURE, { mode: 0o755 })
+    const h = await makeHarness({ contextMode: 'auto', contextBackend: 'auto', feishuCliPath: script })
+    await h.emitMessage('问')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ x: string }> }
+    expect(frame.messages[0]!.x).toContain('cli 引导后内容')
+    // SDK seam was never touched; the CLI was the serving backend.
+    expect(h.channel.listed.length).toBe(0)
+    expect(h.ctx.logger.info).not.toHaveBeenCalledWith(expect.stringContaining('降级 SDK'))
   })
 })

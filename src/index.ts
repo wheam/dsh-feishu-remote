@@ -25,6 +25,7 @@ export * from './cards.js'
 export * from './channel.js'
 export { ConfigSchema, resolveConfig, resolveRuntimeConfig } from './config.js'
 export type Config = BridgeConfig
+export * from './context.js'
 export * from './identity.js'
 export * from './mock.js'
 export * from './scheduler.js'

@@ -8,6 +8,7 @@
 import { randomBytes } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import type { ContextWatermark } from './context.js'
 
 export const STATE_VERSION = 1
 
@@ -22,6 +23,8 @@ export interface DeliveryFailureRecord {
 }
 
 export const MAX_DELIVERY_FAILURES = 50
+/** Session-keyed context watermarks (docs/13 F6); bounded, oldest dropped. */
+export const MAX_CONTEXT_WATERMARKS = 50
 
 const DELIVERY_CLASSIFICATIONS = new Set(['rate-limit', 'permanent', 'transient'])
 const DELIVERY_DISPOSITIONS = new Set(['permanent'])
@@ -35,6 +38,8 @@ export interface BridgeState {
   cardVerifiedAt?: number
   /** Persistent audit trail of permanent outbound failures (survives restarts). */
   deliveryFailures: DeliveryFailureRecord[]
+  /** sessionId → last injected context message (docs/13 F6); bounded, LRU-ish. */
+  contextWatermarks: Record<string, ContextWatermark>
 }
 
 export interface CorruptStateEvent {
@@ -44,7 +49,7 @@ export interface CorruptStateEvent {
 }
 
 function emptyState(): BridgeState {
-  return { version: 1, pendingNew: {}, cardViewPrefs: {}, deliveryFailures: [] }
+  return { version: 1, pendingNew: {}, cardViewPrefs: {}, deliveryFailures: [], contextWatermarks: {} }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -117,11 +122,25 @@ function parseState(text: string): BridgeState {
       })
     }
   }
+  const contextWatermarks: Record<string, ContextWatermark> = {}
+  if (raw.contextWatermarks !== undefined) {
+    if (!isRecord(raw.contextWatermarks)) throw new Error('dsh-feishu-remote: invalid contextWatermarks in state file')
+    const entries = Object.entries(raw.contextWatermarks).slice(-MAX_CONTEXT_WATERMARKS)
+    for (const [sessionId, item] of entries) {
+      if (sessionId.trim() === '' || sessionId.length > 200 || !isRecord(item)
+        || typeof item.messageId !== 'string' || item.messageId === '' || item.messageId.length > 200
+        || typeof item.createdAtMs !== 'number' || !Number.isFinite(item.createdAtMs)) {
+        throw new Error('dsh-feishu-remote: invalid contextWatermark entry in state file')
+      }
+      contextWatermarks[sessionId] = { messageId: item.messageId, createdAtMs: item.createdAtMs }
+    }
+  }
   return {
     version: 1,
     pendingNew,
     cardViewPrefs,
     deliveryFailures,
+    contextWatermarks,
     ...(cardVerifiedAt === undefined ? {} : { cardVerifiedAt }),
   }
 }
@@ -240,5 +259,25 @@ export class BridgeStateStore {
       },
       result: undefined,
     }))
+  }
+
+  /** Last injected context message for a session (docs/13 F6); undefined = full window next time. */
+  contextWatermarkFor(sessionId: string): ContextWatermark | undefined {
+    return this.state.contextWatermarks[sessionId]
+  }
+
+  /** Persist a session watermark; bounded (oldest entries dropped), re-inserted for recency. */
+  async setContextWatermark(sessionId: string, watermark: ContextWatermark): Promise<void> {
+    await this.mutate(current => {
+      const entries = Object.entries(current.contextWatermarks).filter(([key]) => key !== sessionId)
+      const nextMap: Record<string, ContextWatermark> = {}
+      for (const [key, value] of entries) nextMap[key] = value
+      nextMap[sessionId] = watermark
+      const overflow = Object.keys(nextMap).length - MAX_CONTEXT_WATERMARKS
+      if (overflow > 0) {
+        for (const key of Object.keys(nextMap).slice(0, overflow)) delete nextMap[key]
+      }
+      return { next: { ...current, contextWatermarks: nextMap }, result: undefined }
+    })
   }
 }
