@@ -1,5 +1,10 @@
 # 飞书开放平台开通清单（Phase 0 验收）
 
+> 本文是**当前版本的手工开通与故障兜底流程**。目标首次体验已改为 Web GUI 调用官方
+> `registerApp()`，扫码自动创建并绑定 PersonalAgent；设计已定、功能尚未实现，见
+> [docs/16-personal-agent-qr-onboarding.md](16-personal-agent-qr-onboarding.md)。在 docs/16 的真实
+> 租户验收全部通过前，不删除本文，也不得把“二维码已生成”等同于“一扫即用已交付”。
+>
 > 目标：拿到一套可跑通"飞书 → Mac 回显 + 审批卡片"的凭据。
 > 应用形态（个人应用 PersonalAgent vs 企业自建应用）在真实租户下二选一定案：
 > 有企业管理员权限选**企业自建应用**（推荐，卡片/长连接能力最完整）；

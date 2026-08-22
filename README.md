@@ -61,6 +61,11 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 
 ## 安装
 
+> 当前版本仍使用下述手工安装/开通流程。目标 onboarding 已定为
+> **一条安装命令 + Web GUI 扫码自动创建 PersonalAgent**，无需手工创建飞书应用、复制
+> App Secret 或查找 open_id；设计与验收边界见
+> [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md)，功能尚未实现。
+>
 > ⚠️ **安装/更新/升级前必读 [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md)**：
 > 兼容性基准 = Mac App 实际使用的 dsh（`/opt/homebrew/bin/dsh`），不是终端 PATH；
 > `--dump-config` / HTTP 200 不能单独当作安装成功，必须完成浏览器控制台 +
@@ -124,6 +129,7 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
 | [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（普通群/话题 + 有界私聊回溯，官方 lark-cli + SDK 兜底；**v1.3 已实现，普通群真实租户验收待跑**） |
 | [docs/14-context-codex-review.md](docs/14-context-codex-review.md) | docs/13 的 Codex 独立 review 记录（15 项 findings 处置对照，修订已并入规格） |
 | [docs/15-context-impl-review.md](docs/15-context-impl-review.md) | 飞书上下文回填实现阶段 Codex review（14 项 findings 处置对照，修订已并入实现） |
+| [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) | PersonalAgent 一次扫码创建机器人、自动保存凭据与 owner、权限降级及发布验收方案（已定案，待实现） |
 
 ## 隐私与数据流（飞书上下文回填）
 

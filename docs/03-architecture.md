@@ -56,6 +56,12 @@
   setup 内 mount + `resolveSessionPreset({header, events})` 恢复）；飞书会话 restrict 屏蔽
   `ask_user_question`/`exit_plan_mode`（防提问打进无超时的浏览器通道导致远端挂起）。
 
+- **D9 首次开通 → PersonalAgent Device Flow，一次扫码创建并绑定。** Web GUI 通过 Host
+  调用官方 SDK `registerApp()`；浏览器只显示短期二维码，App Secret 只进入 DSH credential
+  provider，扫码用户 open_id 自动成为 fail-closed owner。首次创建用 `createOnly: true`，
+  权限/事件/回调经 addons 在确认页明示；不采用聊天配对码、共享商店应用或云端消息中继。
+  详细状态机、补偿式提交、权限降级与发布前置见 docs/16。
+
 ## 借鉴清单
 
 | 来源 | 借走 | 丢弃 |
@@ -67,7 +73,8 @@
 
 - dsh rc 期内部服务接口变动 → 当前锁 `0.1.1-rc.2`（曾锁 rc.6/rc.7；rc.6→rc.7 曾破坏前端 slot 契约，见 docs/11），升级自适配。
 - 飞书限流 / 卡片长度限制 → 节流 + 全局调度器 + 体积预算 + 分片 + 全文落工作区文件回显 session id。
-- 飞书开放平台权限配置繁琐 → 一次性成本，写文档固化步骤。
+- PersonalAgent addons 在不同租户/灰度下可能忽略增强权限 → 连接后探测实际授权，核心权限
+  缺失则 fail-closed，历史/全群消息/reaction 缺失则明确降级；保留 docs/09 手工配置兜底。
 - 合规：MIT 协议，保留两个参考项目的版权声明。
 
 ## 可验证的里程碑

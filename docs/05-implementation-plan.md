@@ -12,6 +12,8 @@
 > append-oriented `streaming_mode`，继续用约 600ms 的整卡 patch。
 > 2026-08-23：工作目录改为 DSH Workspace Registry 驱动；新增首次选择/新建、
 > `originKey → workspaceId` 持久绑定、旧会话 cwd 自动迁移和 `/workspace` 切换。
+> 2026-08-23：首次开通目标改为官方 `registerApp()` PersonalAgent Device Flow；一次扫码
+> 创建/授权应用、保存凭据并识别 owner。状态机、安全边界与发布前置见 docs/16（待实现）。
 > Round 12 修复后相关契约测试全绿；当前总数以 `pnpm run test` 输出为准。
 > 本文档是本仓库的"当前方案"单一事实源；
 > 若与 01-04 冲突，以本文为准。已通过三轮独立 review——第一轮 Codex
@@ -38,7 +40,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 | `src/bridge.ts` | **借 + 砍** | 保留：消息路由、answerer、流式节流、会话生命周期、命令集。砍：上游 project ACL、claim/bind/unbind、群绑定、`lark_deliver`（P2 文件能力再议）。**改**：接入 DSH Workspace Registry；userQuestions 不直接注册单例 provider，飞书会话 setup 内 restrict 屏蔽 ask-user 类工具（§2.4）、SDK 批处理关闭（§1.3）、命令透传改 allowlist（§2.7） |
 | `src/config.ts` | **改** | Workspace 由 DSH Registry 选择；旧 `workspaceRoot/cwd` 仅成对保留为升级兼容项。保留 credentialRef/env/ctx.credentials 三级凭据解析；白名单 fail-closed（§2.9）。 |
 | `src/index.ts` | **改** | inject 核对 web profile 服务；去掉独立 profile 假设 |
-| `src/cli.ts` | **砍** | CLI 向导/配对全部删除，配置走 cordis.patch.yml + Web GUI 设置卡片 |
+| `src/cli.ts` | **砍** | 不恢复独立 CLI 配对；首次开通由 Web GUI → Host 的 PersonalAgent 扫码服务承担（docs/16），手工配置保留为兜底 |
 | `src/identity.ts` | **借 + 砍** | session 前缀/`/sessions` 枚举保留；删 project 维度 |
 
 ### 1.2 补件：dsh-im-hub
@@ -255,6 +257,10 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 - **设置卡片（P1）**：CLI 向导删除后，配置编辑 = cordis.patch.yml + GUI 卡片双通道；
   `role('secret')` 的保证是已保存值不回显浏览器（首次设置经 browser→host wire），
   宿主可读、0600 明文落盘（写入文档口径）。
+- **扫码开通（P1，待实现）**：默认加载空配置以注册 onboarding RPC 和设置页；Host 调用
+  `registerApp()`，浏览器只持有短期二维码 URL；返回 Secret 写入按 App ID 派生的独立
+  credential ref，App ID/ref/owner/群白名单通过一次 settings `update()` 原子切换，随后沿
+  现有 watcher 热启动 bridge。跨 credentials/settings 采用补偿式提交，完整方案见 docs/16。
 
 ## 4. 开发顺序（替代原 Phase 0）
 
@@ -267,6 +273,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 | 4 | **审批闭环**：answerer（prepend）+ 卡片 + 五条结算路径 + 断线/崩溃/通道终态失效状态机 + 终态 updateCard | 飞书完成一次需审批的真实任务；按钮重复点击被去重但文字兜底可用 |
 | 5 | 私聊/普通群/话题映射 + 全套命令 + 每 origin 控制队列 + `/new` pending 协议 + `/resume` 原子切换 | 普通群仅 @触发且读取全群有界历史；群内多话题并行互不干扰；`/resume` 失败保留旧会话；重启回落规则符合文档 |
 | 6 | 流式节流 + 进度/终态卡片 + 应用级出站调度器 + 体积预算与永久错误兜底 + 超长分片 | 1s 级卡片更新；429/限流码可恢复；chunk+final 去重与状态映射表测试全绿；30KB/14 天边界兜底生效 |
+| 7 | **PersonalAgent 扫码开通**：RegistrationService + Host RPC + Web GUI 二维码 + credential/settings 补偿提交 + owner 自动识别 + 权限探测 | 全新 profile 一条安装命令后扫码一次即可私聊并完成审批；Secret 不出 Host；失败不破坏旧配置；验收矩阵见 docs/16 §8 |
 
 原 Phase 0（装原版 im-hub 隔离验证）**跳过**：步骤 1 的 echo spike 用自有代码验证
 相同链路，且代码是最终交付物的一部分。
@@ -287,6 +294,9 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    混淆；仅存轻量元数据，session 事实源在 persistence）。
 7. **session id 前缀**：`feishu-<24hex>-<base36 ts>`，同毫秒冲突 ++ 避让（避免与
    上游 lark-bridge 的 `lark-` 前缀在 GUI 列表混列）。
+8. **首次开通（2026-08-23 更新）**：采用官方 SDK `registerApp()` 创建 PersonalAgent；
+   首次 `createOnly: true`，扫码者自动成为 owner，手工 App ID/Secret 流程只作兜底；不建设
+   共享商店应用或云端中继。
 
 ## 6. 验收标准（Phase 1）
 
@@ -308,11 +318,9 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 - web profile 三项共存（preset/answerer/userQuestions）→ spike 先行，不过不写主线代码。
 - live agent 无上限 → `maxLiveAgents` 硬上限（P1），超限拒绝新话题。
 - 合规：继承两个参考项目 MIT 声明 + lark-bridge 的 THIRD_PARTY_NOTICES（SDK 打包）。
-- 飞书开放平台配置繁琐 → 一次性成本，Phase 0 真实租户验证后文档固化开通清单：
-  应用形态（个人应用 PersonalAgent / 企业自建应用，各有所需前提，Phase 0 定案）、
-  机器人能力、事件订阅=长连接、卡片回调=长连接、版本发布/审核、Lark 国际版单独凭据；
-  权限清单（`im:message.p2p_msg:readonly` / `im:message.group_msg` /
-  `im:message:send_as_bot`；事件 `im.message.receive_v1` + 卡片回调
-  `card.action.trigger`；回调 3 秒内只做鉴权+入队）。
+- PersonalAgent 一键注册的 addons 可能受租户/灰度/敏感权限策略影响 → docs/16 要求首次
+  扫码声明完整权限并在连接后探测实际授权；核心消息/卡片能力缺失则 fail-closed，增强历史/
+  全群消息/reaction 缺失则降级并提供 `registerApp({appId, addons})` 补权入口；docs/09 保留
+  手工企业自建应用作为故障兜底。
 - mock 适配器只覆盖文本链路（无卡片/审批概念，且 stdin 在壳 App 拉起的进程里未必可用）
   → 审批闭环靠真凭据 + 单测双跑，不依赖 mock。

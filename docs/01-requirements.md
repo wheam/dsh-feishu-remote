@@ -27,6 +27,10 @@
 ### P1（体验层）
 
 - Web GUI 设置卡片（借鉴 im-hub）
+- **PersonalAgent 扫码开通**：插件安装后从 Web GUI 调用官方 SDK `registerApp()`；扫码自动
+  创建/授权用户自己的机器人应用，凭据只落 DSH credential provider，扫码者自动成为
+  `allowedOpenIds` owner；不要求手工进入开放平台、复制 App ID/Secret 或从日志抄 open_id。
+  详细方案与验收见 docs/16。
 - 结构化提问恢复（userQuestions multiplexer 或 agent-scoped 覆盖方案验证后）
 - 超长消息分片 / 截断，全文落工作区文件并回显 session id（手机打不开 loopback Web UI）
 - mock 适配器（无真实凭据可测试，仅覆盖文本链路）
@@ -41,7 +45,8 @@
 
 ## 非目标（明确不做）
 
-- 团队多用户 / 权限体系（配对码、多人绑定；`allowedChatIds` 只是可选的部署范围限制）
+- 团队多用户 / 权限体系（聊天配对码、多人绑定；PersonalAgent 扫码只负责创建应用并确认
+  owner，`allowedChatIds` 只是可选的部署范围限制）
 - 团队共享项目权限/项目 ACL（个人用户的多 Workspace 选择与绑定属于本产品范围）
 - 企业微信 / Telegram（首版不做）
 - 独立移动端 UI（已另议，不混入本项目）
@@ -51,5 +56,6 @@
 - **锁死 dsh 版本 `0.1.1-rc.2`**（本机当前安装版本），dsh 升级需自行适配后再解锁；飞书 SDK 精确版本一并锁死。
 - **环境前置**：Node ≥22、pnpm（`dsh plugin` 依赖 pnpm）；SDK 构建期 bundle（external 仅 `@deepseek-ai/*`）。
 - 不绕过部署已有的审批/护栏策略：IM 消息视同普通用户输入。
-- 凭据不进仓库；参考 lark-bridge 写入本地私密文件。
+- 凭据不进仓库；扫码返回的 App Secret 只写 DSH credential provider 管理的本地私密文件，
+  不经过浏览器、普通 settings、URL 或日志。
 - MIT 归属：继承两个参考项目的版权声明。
