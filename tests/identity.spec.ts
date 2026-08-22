@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activeSessionsForPrefix, freshSessionId, latestSession, originOf, sessionPrefix, sessionsForPrefix } from '../src/identity.js'
+import { activeSessionsForPrefix, effectiveSessionPrefix, freshSessionId, latestSession, originOf, sessionPrefix, sessionPrefixForBot, sessionsForPrefix } from '../src/identity.js'
 import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session'
 
 function header(id: string, createdAt: number): SessionHeader {
@@ -37,6 +37,14 @@ describe('session identity (private / ordinary group / topic)', () => {
     expect(String(freshSessionId(prefix, 1_000))).toBe(`${prefix}-${(1_000).toString(36)}`)
     // Different from the upstream lark-bridge prefix — sessions must not mix in the GUI list.
     expect(prefix.startsWith('lark-')).toBe(false)
+  })
+
+  it('isolates app-scoped bots while preserving the exact legacy prefix', () => {
+    const key = 'group:oc_same:thread:omt_same'
+    expect(sessionPrefixForBot('cli_a', key)).not.toBe(sessionPrefixForBot('cli_b', key))
+    expect(effectiveSessionPrefix('legacy', 'cli_a', key)).toBe(sessionPrefix(key))
+    expect(effectiveSessionPrefix('app', 'cli_a', key)).toBe(sessionPrefixForBot('cli_a', key))
+    expect(effectiveSessionPrefix('app', 'cli_a', key)).not.toContain('cli_a')
   })
 
   it('selects and lists the newest persisted session for one origin', () => {

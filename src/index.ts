@@ -15,26 +15,37 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
-import { FeishuRemoteBridge } from './bridge.js'
-import { ConfigSchema, resolveRuntimeConfig } from './config.js'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import { FeishuAdminService } from './admin.js'
+import { FeishuBotManager } from './bots.js'
+import { ConfigSchema } from './config.js'
 import type { Config as BridgeConfig } from './config.js'
-import { createMockChannel } from './mock.js'
 import {
   ONBOARDING_RPC_CHANNEL,
   PersonalAgentOnboardingService,
   type BridgeHealth,
 } from './onboarding.js'
-import { SETTINGS_NAMESPACE, flatSchema, flatten, unflatten } from './settings.js'
+import { SETTINGS_NAMESPACE, flatSchema, flatten, unflatten, type FlatSettings } from './settings.js'
 
 export * from './bridge.js'
+export * from './admin.js'
+export * from './bots.js'
 export * from './cards.js'
 export * from './channel.js'
-export { ConfigSchema, resolveConfig, resolveRuntimeConfig } from './config.js'
+export {
+  ConfigSchema,
+  resolveBotRuntimeConfig,
+  resolveConfig,
+  resolveRuntimeConfig,
+  validateMultiBotConfig,
+  validateMultiBotRootInvariants,
+} from './config.js'
 export type Config = BridgeConfig
 export * from './context.js'
 export * from './identity.js'
 export * from './mock.js'
 export * from './onboarding.js'
+export * from './profile.js'
 export * from './scheduler.js'
 export * from './security.js'
 export * from './session-groups.js'
@@ -67,36 +78,34 @@ export const inject = [
 export const Config = ConfigSchema
 
 export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
-  let bridge: FeishuRemoteBridge | undefined
+  const manager = new FeishuBotManager(ctx)
   let generation = 0
   let closed = false
   let commitTail: Promise<void> = Promise.resolve()
 
-  const makeBridge = (resolved: Awaited<ReturnType<typeof resolveRuntimeConfig>>): FeishuRemoteBridge => {
-    const useMock = resolved.appId === 'mock'
-    if (useMock) {
-      ctx.logger?.warn?.('dsh-feishu-remote: 使用 mock 通道（仅文本链路，无真实飞书连接）')
-    }
-    return new FeishuRemoteBridge(
-      ctx,
-      resolved,
-      useMock ? { channelFactory: () => createMockChannel({ logger: {
-        info: (message, ...args) => ctx.logger?.info?.(message, ...args),
-        warn: (message, ...args) => ctx.logger?.warn?.(message, ...args),
-      } }) } : {},
-    )
-  }
-
-  // Plugin unload stops the CURRENT bridge and drains every queued commit.
+  // Plugin unload drains queued reconciles and then every bot bridge.
   ctx.effect(() => () => {
     closed = true
-    return commitTail.then(() => bridge?.stop())
+    return commitTail.then(() => manager.stop())
   }, 'dsh-feishu-remote.lifecycle')
 
   // Settings-card source of truth: entry config as `base`, GUI user layer on top.
-  const settings = ctx.settings.register(SETTINGS_NAMESPACE, flatSchema, {
-    base: flatten(config),
-  })
+  let settings: SettingsScope<FlatSettings>
+  try {
+    settings = ctx.settings.register(SETTINGS_NAMESPACE, flatSchema, { base: flatten(config) })
+  } catch (error) {
+    ctx.logger?.warn?.(
+      'dsh-feishu-remote: settings namespace 注册失败，继续使用插件 entry 配置：%s',
+      error instanceof Error ? error.message : String(error),
+    )
+    await manager.reconcile(config).catch(reconcileError => {
+      ctx.logger?.warn?.(
+        'dsh-feishu-remote: entry 配置启动失败（fail-closed）：%s',
+        reconcileError instanceof Error ? reconcileError.message : String(reconcileError),
+      )
+    })
+    return
+  }
 
   /**
    * One commit. The generation is allocated by sync() BEFORE the mutex
@@ -105,37 +114,14 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
    */
   const commit = async (gen: number): Promise<void> => {
     if (closed || gen !== generation) return
-    let resolved: Awaited<ReturnType<typeof resolveRuntimeConfig>> | undefined
     try {
-      resolved = await resolveRuntimeConfig(ctx, unflatten(settings.get() ?? {}, config))
+      await manager.reconcile(unflatten(settings.get() ?? {}, config))
     } catch (error) {
-      // Recheck the generation BEFORE touching the current bridge: a newer
-      // reload may already own it (review #2 finding 4).
-      if (closed || gen !== generation) return
-      await bridge?.stop()
-      bridge = undefined
       ctx.logger?.warn?.(
-        'dsh-feishu-remote: 配置无效，通道保持禁用（fail-closed）：%s',
+        'dsh-feishu-remote: manager reconcile 失败（已隔离）：%s',
         error instanceof Error ? error.message : String(error),
       )
       return
-    }
-    if (closed || gen !== generation) return
-    const next = makeBridge(resolved)
-    await bridge?.stop()
-    if (closed || gen !== generation) {
-      await next.stop()
-      return
-    }
-    bridge = next
-    await next.start().catch(error => {
-      ctx.logger?.error?.('dsh-feishu-remote: 通道启动失败：%s', error instanceof Error ? error.message : String(error))
-    })
-    // A generation change may have arrived DURING start(): retire the stale
-    // bridge immediately (review #4 finding 4).
-    if (closed || gen !== generation) {
-      await next.stop()
-      bridge = undefined
     }
   }
 
@@ -148,6 +134,13 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
   }
 
   ctx.effect(() => settings.watch(() => sync()), 'dsh-feishu-remote settings watcher')
+  ctx.effect(() => ctx.on('credentials/reference-updated', ref => {
+    const effective = unflatten(settings.get() ?? {}, config)
+    const activeRefs = (effective.bots?.length ?? 0) > 0
+      ? effective.bots!.filter(bot => bot.enabled !== false).map(bot => bot.appSecretRef)
+      : [effective.appSecretRef ?? 'DSH_FEISHU_APP_SECRET']
+    if (activeRefs.includes(String(ref))) void sync()
+  }), 'dsh-feishu-remote credential watcher')
 
   const waitForBridge = async (appId: string, signal?: AbortSignal): Promise<BridgeHealth> => {
     // Explicitly enqueue a sync as well as relying on the settings watcher.
@@ -176,7 +169,7 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
     const deadline = Date.now() + 30_000
     while (!closed && Date.now() < deadline) {
       assertNotAborted()
-      const health = bridge?.health()
+      const health = manager.healthForApp(appId)
       if (health?.appId === appId && health.connected) return health
       if (health?.appId === appId && health.terminalFailure) {
         throw Object.assign(new Error('bridge terminal failure'), { code: 'connection_failed' })
@@ -187,14 +180,18 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
   }
 
   const onboarding = new PersonalAgentOnboardingService(ctx, settings, {
-    getBridgeHealth: () => bridge?.health(),
+    getBridgeHealth: () => manager.healthForApp(),
     waitForBridge,
   })
+  const admin = new FeishuAdminService(ctx, settings, manager, config)
   ctx.effect(() => () => onboarding.stop(), 'dsh-feishu-remote onboarding lifecycle')
   try {
     ctx.connection.rpc.handle(
       ONBOARDING_RPC_CHANNEL,
-      (endpoint, payload, signal) => onboarding.handleRpc(endpoint, payload, signal),
+      async (endpoint, payload, signal) => (
+        await admin.handleRpc(endpoint, payload, signal)
+        ?? onboarding.handleRpc(endpoint, payload, signal)
+      ),
       { authority: 'loopback' },
     )
   } catch (error) {

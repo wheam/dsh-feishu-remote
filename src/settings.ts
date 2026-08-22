@@ -15,7 +15,7 @@ import type { Config } from './config.js'
 
 export const SETTINGS_NAMESPACE = settingsNamespace('feishu-remote')
 
-export const flatSchema = Schema.object({
+export const flatSchema: Schema<FlatSettings> = Schema.object({
   appId: Schema.string().default(''),
   appSecretRef: Schema.string().default('DSH_FEISHU_APP_SECRET'),
   brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
@@ -46,6 +46,49 @@ export const flatSchema = Schema.object({
   contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
   contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
   contextIncludeBot: Schema.boolean().default(true),
+  defaultWorkspace: Schema.string().default(''),
+  workspacePolicy: Schema.union(['default', 'locked'] as const).default('default'),
+  profileFile: Schema.string().default(''),
+  maxTotalLiveAgents: Schema.number().step(1).min(0).default(0),
+  bots: Schema.array(Schema.object({
+    id: Schema.string().default(''),
+    enabled: Schema.boolean().default(true),
+    appId: Schema.string().default(''),
+    appSecretRef: Schema.string().default(''),
+    brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
+    statePath: Schema.string().default(''),
+    inboundDir: Schema.string().default(''),
+    feishuCliPath: Schema.string().default(''),
+    allowedOpenIds: Schema.array(Schema.string()).default([]),
+    allowedChatIds: Schema.array(Schema.string()).default([]),
+    allowAllUsers: Schema.boolean().default(false),
+    requireMention: Schema.boolean().default(true),
+    defaultWorkspace: Schema.string().default(''),
+    workspacePolicy: Schema.union(['default', 'locked'] as const).default('default'),
+    agentPreset: Schema.string().default(''),
+    profileFile: Schema.string().default(''),
+    provider: Schema.string().default(''),
+    model: Schema.string().default(''),
+    progressCards: Schema.boolean().default(true),
+    progressUpdateMs: Schema.number().step(1).min(250).default(600),
+    workingReaction: Schema.boolean().default(true),
+    maxInboundFileBytes: Schema.number().step(1).min(1).default(20 * 1024 * 1024),
+    maxOutboundFileBytes: Schema.number().step(1).min(1).default(30 * 1024 * 1024),
+    interactiveTimeoutMs: Schema.number().step(1).min(1000).default(10 * 60 * 1000),
+    enableApprovals: Schema.boolean().default(true),
+    cardBodyMaxChars: Schema.number().step(1).min(1000).max(28000).default(12000),
+    maxLiveAgents: Schema.number().step(1).min(0).default(0),
+    commandAllowlist: Schema.array(Schema.string()).default([]),
+    contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
+    contextBackend: Schema.union(['auto', 'cli', 'sdk'] as const).default('auto'),
+    contextP2pMaxMessages: Schema.number().step(1).min(1).max(500).default(80),
+    contextP2pMaxChars: Schema.number().step(1).min(1000).max(500000).default(50000),
+    contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
+    contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
+    contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
+    contextIncludeBot: Schema.boolean().default(true),
+    sessionNamespace: Schema.union(['legacy', 'app'] as const).default('app'),
+  })).default([]),
 })
 
 export interface FlatSettings {
@@ -74,11 +117,96 @@ export interface FlatSettings {
   contextMaxChars: number
   contextTimeoutMs: number
   contextIncludeBot: boolean
+  defaultWorkspace: string
+  workspacePolicy: 'default' | 'locked'
+  profileFile: string
+  maxTotalLiveAgents: number
+  bots: Array<{
+    id: string
+    enabled: boolean
+    appId: string
+    appSecretRef: string
+    brand: 'feishu' | 'lark' | 'larkoffice'
+    statePath: string
+    inboundDir: string
+    feishuCliPath: string
+    allowedOpenIds: string[]
+    allowedChatIds: string[]
+    allowAllUsers: boolean
+    requireMention: boolean
+    defaultWorkspace: string
+    workspacePolicy: 'default' | 'locked'
+    agentPreset: string
+    profileFile: string
+    provider: string
+    model: string
+    progressCards: boolean
+    progressUpdateMs: number
+    workingReaction: boolean
+    maxInboundFileBytes: number
+    maxOutboundFileBytes: number
+    interactiveTimeoutMs: number
+    enableApprovals: boolean
+    cardBodyMaxChars: number
+    maxLiveAgents: number
+    commandAllowlist: string[]
+    contextMode: 'off' | 'auto'
+    contextBackend: 'auto' | 'cli' | 'sdk'
+    contextP2pMaxMessages: number
+    contextP2pMaxChars: number
+    contextMaxMessages: number
+    contextMaxChars: number
+    contextTimeoutMs: number
+    contextIncludeBot: boolean
+    sessionNamespace: 'legacy' | 'app'
+  }>
 }
 
 function splitIds(text: string | undefined): string[] {
   if (text === undefined || text === '') return []
   return text.split(/[\s,]+/u).map(part => part.trim()).filter(Boolean)
+}
+
+function flattenBots(bots: Config['bots']): FlatSettings['bots'] {
+  return (bots ?? []).map(bot => ({
+    id: bot.id,
+    enabled: bot.enabled ?? true,
+    appId: bot.appId,
+    appSecretRef: bot.appSecretRef,
+    brand: bot.brand ?? 'feishu',
+    statePath: bot.statePath ?? '',
+    inboundDir: bot.inboundDir ?? '',
+    feishuCliPath: bot.feishuCliPath ?? '',
+    allowedOpenIds: [...(bot.allowedOpenIds ?? [])],
+    allowedChatIds: [...(bot.allowedChatIds ?? [])],
+    allowAllUsers: bot.allowAllUsers ?? false,
+    requireMention: bot.requireMention ?? true,
+    defaultWorkspace: bot.defaultWorkspace ?? '',
+    workspacePolicy: bot.workspacePolicy ?? 'default',
+    agentPreset: bot.agentPreset ?? '',
+    profileFile: bot.profileFile ?? '',
+    provider: bot.provider ?? '',
+    model: bot.model ?? '',
+    progressCards: bot.progressCards ?? true,
+    progressUpdateMs: bot.progressUpdateMs ?? 600,
+    workingReaction: bot.workingReaction ?? true,
+    maxInboundFileBytes: bot.maxInboundFileBytes ?? 20 * 1024 * 1024,
+    maxOutboundFileBytes: bot.maxOutboundFileBytes ?? 30 * 1024 * 1024,
+    interactiveTimeoutMs: bot.interactiveTimeoutMs ?? 10 * 60 * 1000,
+    enableApprovals: bot.enableApprovals ?? true,
+    cardBodyMaxChars: bot.cardBodyMaxChars ?? 12000,
+    maxLiveAgents: bot.maxLiveAgents ?? 0,
+    commandAllowlist: [...(bot.commandAllowlist ?? [])],
+    contextMode: bot.contextMode ?? 'auto',
+    contextBackend: bot.contextBackend ?? 'auto',
+    contextP2pMaxMessages: bot.contextP2pMaxMessages ?? 80,
+    contextP2pMaxChars: bot.contextP2pMaxChars ?? 50000,
+    contextMaxMessages: bot.contextMaxMessages ?? 150,
+    contextMaxChars: bot.contextMaxChars ?? 100000,
+    contextTimeoutMs: bot.contextTimeoutMs ?? 10000,
+    contextIncludeBot: bot.contextIncludeBot ?? true,
+    sessionNamespace: bot.sessionNamespace ?? 'app',
+  }))
 }
 
 export function flatten(config: Config): FlatSettings {
@@ -108,6 +236,11 @@ export function flatten(config: Config): FlatSettings {
     contextMaxChars: config.contextMaxChars ?? 100000,
     contextTimeoutMs: config.contextTimeoutMs ?? 10000,
     contextIncludeBot: config.contextIncludeBot ?? true,
+    defaultWorkspace: config.defaultWorkspace ?? '',
+    workspacePolicy: config.workspacePolicy ?? 'default',
+    profileFile: config.profileFile ?? '',
+    maxTotalLiveAgents: config.maxTotalLiveAgents ?? 0,
+    bots: flattenBots(config.bots),
   }
 }
 
@@ -147,5 +280,10 @@ export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config
     contextMaxChars: value.contextMaxChars ?? 100000,
     contextTimeoutMs: value.contextTimeoutMs ?? 10000,
     contextIncludeBot: value.contextIncludeBot ?? true,
+    defaultWorkspace: value.defaultWorkspace ?? '',
+    workspacePolicy: value.workspacePolicy ?? 'default',
+    profileFile: value.profileFile ?? '',
+    maxTotalLiveAgents: value.maxTotalLiveAgents ?? 0,
+    bots: structuredClone(value.bots ?? []),
   }
 }

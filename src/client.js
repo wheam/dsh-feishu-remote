@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
 		const css = ".fr_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:8px;list-style:none;overflow:hidden}.fr_cardOpen{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}.fr_header{cursor:pointer;text-align:left;width:100%;font:inherit;background:0 0;border:0;align-items:center;gap:8px;padding:10px 14px;display:flex}.fr_header:hover{background:var(--dsw-alias-interactive-bg-hover)}.fr_headText{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.fr_name{color:var(--dsw-alias-label-primary);font-weight:600}.fr_description{color:var(--dsw-alias-label-tertiary);font-size:12px}.fr_pending{color:var(--dsw-alias-state-warn-primary);font-size:12px}.fr_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .12s}.fr_chevronOpen{transform:rotate(180deg)}.fr_body{flex-direction:column;gap:14px;padding:0 14px 14px;display:flex}.fr_readOnly{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px}.fr_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.fr_failed{color:var(--dsw-alias-state-error-primary);margin:0 auto 0 0;font-size:12px}.fr_discard,.fr_save{font:inherit;cursor:pointer;border-radius:6px;padding:5px 12px;font-size:13px}.fr_discard{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}.fr_discard:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}.fr_save{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_save:hover:not(:disabled){border-color:var(--dsw-alias-button-info-hover);background:var(--dsw-alias-button-info-hover)}.fr_discard:active:not(:disabled),.fr_save:active:not(:disabled){transform:translateY(1px)}.fr_discard:focus-visible:not(:disabled),.fr_save:focus-visible:not(:disabled){outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.fr_discard:disabled,.fr_save:disabled{opacity:.5;cursor:default}.fr_field{flex-direction:column;gap:4px;display:flex}.fr_head{align-items:center;gap:8px;display:flex}.fr_label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500}.fr_badges{align-items:center;gap:6px;display:flex}.fr_badge{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_badgeMuted{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-tertiary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_reset{color:var(--dsw-alias-state-business-primary);cursor:pointer;background:0 0;border:0;padding:0;font-size:11px}.fr_reset:hover:not(:disabled){text-decoration:underline}.fr_input,.fr_select{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major);border-radius:6px;padding:6px 8px;font-size:13px}.fr_inputInvalid{border:1px solid var(--dsw-alias-state-error-primary);font:inherit;color:var(--dsw-alias-label-primary);border-radius:6px;padding:6px 8px;font-size:13px}.fr_input:disabled,.fr_select:disabled{opacity:.6}.fr_hint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px}.fr_invalid{color:var(--dsw-alias-state-error-primary);margin:0;font-size:12px}.fr_groupTitle{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 -4px}.fr_sep{height:1px;background:var(--dsw-alias-border-l2);margin:2px 0 0}";
 		const pageCss = ".fr_page{flex-direction:column;gap:16px;display:flex;max-width:760px}.fr_pageHead{flex-direction:column;gap:4px;display:flex}.fr_pageTitle{margin:0;font-size:16px;font-weight:600;color:var(--dsw-alias-label-primary)}.fr_pageDesc{margin:0;font-size:12px;color:var(--dsw-alias-label-tertiary)}.fr_pageGroup{margin:0 0 2px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);text-transform:uppercase;letter-spacing:.04em}";
 		const readabilityCss = ".fr_field{gap:6px}.fr_label{display:block!important;color:#f2f6ff!important;line-height:1.4;opacity:1!important;visibility:visible!important}.fr_hint{display:block!important;color:#b8c6dd!important;line-height:1.45;opacity:1!important;visibility:visible!important}.fr_input::placeholder{color:#aebed8!important;opacity:1!important}.fr_input,.fr_select{min-height:34px}.fr_head{min-height:19px}";
-		const onboardingCss = ".fr_onboarding{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.fr_onboardingHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.fr_onboardingTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600}.fr_onboardingDesc,.fr_onboardingMeta,.fr_onboardingError{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.fr_onboardingError{color:var(--dsw-alias-state-error-primary)}.fr_status{border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_statusReady{color:var(--dsw-alias-state-success-primary)}.fr_statusBusy{color:var(--dsw-alias-state-warn-primary)}.fr_statusFailed{color:var(--dsw-alias-state-error-primary)}.fr_qrWrap{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.fr_qr{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:8px;padding:8px}.fr_qrHelp{display:flex;flex-direction:column;gap:6px;max-width:300px}.fr_qrLink{font-size:12px;color:var(--dsw-alias-state-business-primary)}.fr_actions{display:flex;flex-wrap:wrap;gap:8px}.fr_primary,.fr_secondary{font:inherit;cursor:pointer;border-radius:6px;padding:6px 11px;font-size:12px}.fr_primary{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_secondary{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.fr_primary:disabled,.fr_secondary:disabled{opacity:.5;cursor:default}.fr_capabilities{display:flex;flex-wrap:wrap;gap:6px}.fr_capability{border-radius:999px;padding:2px 7px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}";
+		const onboardingCss = ".fr_onboarding{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.fr_onboardingHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.fr_onboardingTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600}.fr_onboardingDesc,.fr_onboardingMeta,.fr_onboardingError{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.fr_onboardingError{color:var(--dsw-alias-state-error-primary)}.fr_status{border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_statusReady{color:var(--dsw-alias-state-success-primary)}.fr_statusBusy{color:var(--dsw-alias-state-warn-primary)}.fr_statusFailed{color:var(--dsw-alias-state-error-primary)}.fr_qrWrap{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.fr_qr{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:8px;padding:8px}.fr_qrHelp{display:flex;flex-direction:column;gap:6px;max-width:300px}.fr_qrLink{font-size:12px;color:var(--dsw-alias-state-business-primary)}.fr_actions{display:flex;flex-wrap:wrap;gap:8px}.fr_primary,.fr_secondary{font:inherit;cursor:pointer;border-radius:6px;padding:6px 11px;font-size:12px}.fr_primary{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_secondary{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.fr_primary:disabled,.fr_secondary:disabled{opacity:.5;cursor:default}.fr_capabilities{display:flex;flex-wrap:wrap;gap:6px}.fr_capability{border-radius:999px;padding:2px 7px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botList{display:flex;flex-direction:column;gap:10px}.fr_botCard{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);padding:0 12px 12px}.fr_botSummary{cursor:pointer;padding:10px 0;color:var(--dsw-alias-label-primary);font-weight:600}.fr_botGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.fr_botWide{grid-column:1/-1}.fr_botStatus{font-size:12px;color:var(--dsw-alias-label-secondary);margin:0 0 10px}.fr_botStatusError{color:var(--dsw-alias-state-error-primary)}.fr_botToolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.fr_checkbox{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:13px}@media(max-width:640px){.fr_botGrid{grid-template-columns:1fr}.fr_botWide{grid-column:auto}}";
 		const tagId = "dsh-feishu-remote/settings-card.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
@@ -50,6 +50,7 @@ window.__ModuleLoader__.load({
 			"qrHelp": "fr_qrHelp", "qrLink": "fr_qrLink", "actions": "fr_actions",
 			"primary": "fr_primary", "secondary": "fr_secondary", "capabilities": "fr_capabilities",
 			"capability": "fr_capability"
+			,"botList":"fr_botList","botCard":"fr_botCard","botSummary":"fr_botSummary","botGrid":"fr_botGrid","botWide":"fr_botWide","botStatus":"fr_botStatus","botStatusError":"fr_botStatusError","botToolbar":"fr_botToolbar","checkbox":"fr_checkbox"
 		};
 
 		// ------------------------------------------------------------ chrome
@@ -82,7 +83,7 @@ window.__ModuleLoader__.load({
 					open ? react_jsx_runtime.jsxs("div", { className: cssDefault.body, children: [
 						!state.writable ? react_jsx_runtime.jsx("p", { className: cssDefault.readOnly, role: "status", children: props.t("settings.readOnly") }) : null,
 						props.children,
-						react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
+						props.hideFooter ? null : react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
 							state.failed ? react_jsx_runtime.jsx("p", { className: cssDefault.failed, role: "status", children: props.t("settings.saveFailed") }) : null,
 							react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, onClick: props.onDiscard, disabled: !state.dirty || state.saving, children: props.t("settings.discard") }),
 							react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, onClick: props.onSave, disabled: blocked, children: props.t(state.saving ? "settings.saving" : "settings.save") })
@@ -201,11 +202,16 @@ window.__ModuleLoader__.load({
 				this.failed = false;
 				this.publish();
 				let landed = true;
-				for (const write of writes) landed = await write() && landed;
-				if (landed) this.staged.clear();
-				this.saving = false;
-				this.failed = !landed;
-				this.publish();
+				try {
+					for (const write of writes) landed = await write() && landed;
+					if (landed) this.staged.clear();
+				} catch {
+					landed = false;
+				} finally {
+					this.saving = false;
+					this.failed = !landed;
+					this.publish();
+				}
 			}
 			plan() {
 				const plan = [];
@@ -295,6 +301,9 @@ window.__ModuleLoader__.load({
 			{
 				key: "workspace",
 				fields: [
+					{ field: "defaultWorkspace", spec: textField("defaultWorkspace"), kind: "text", labelKey: "f.defaultWorkspace", hintKey: "f.defaultWorkspaceHint", placeholderKey: "p.defaultWorkspace" },
+					{ field: "workspacePolicy", spec: selectField("workspacePolicy", ["default", "locked"]), kind: "select", labelKey: "f.workspacePolicy", hintKey: "f.workspacePolicyHint" },
+					{ field: "profileFile", spec: textField("profileFile"), kind: "text", labelKey: "f.profileFile", hintKey: "f.profileFileHint", placeholderKey: "p.profileFile" },
 					{ field: "cwd", spec: textField("cwd"), kind: "text", labelKey: "f.cwd", hintKey: "f.cwdHint", placeholderKey: "p.cwd" },
 					{ field: "workspaceRoot", spec: textField("workspaceRoot"), kind: "text", labelKey: "f.workspaceRoot", hintKey: "f.workspaceRootHint", placeholderKey: "p.workspaceRoot" }
 				]
@@ -407,6 +416,107 @@ window.__ModuleLoader__.load({
 			return ["starting", "qr_ready", "committing", "connecting"].includes(status?.phase);
 		}
 
+		const BOT_TEXT_FIELDS = [
+			["id", "Bot ID"], ["appId", "App ID"], ["appSecretRef", "App Secret 凭据引用"],
+			["allowedOpenIds", "允许的 open_id（逗号分隔）", "list"],
+			["allowedChatIds", "限定群聊 ID（逗号分隔）", "list"],
+			["defaultWorkspace", "默认 Workspace ID 或绝对路径"], ["profileFile", "Profile Markdown 路径"],
+			["agentPreset", "Agent preset"], ["provider", "Provider"], ["model", "模型"],
+			["maxLiveAgents", "本机器人 live agent 上限", "number"]
+		];
+		const BOT_EDITABLE_KEYS = [
+			"id", "enabled", "appId", "appSecretRef", "brand", "allowedOpenIds", "allowedChatIds",
+			"allowAllUsers", "requireMention", "defaultWorkspace", "workspacePolicy", "agentPreset",
+			"profileFile", "provider", "model", "maxLiveAgents", "contextMode", "contextBackend"
+		];
+		function serializeBotDraft(bot) {
+			return Object.fromEntries(BOT_EDITABLE_KEYS.filter(key => Object.hasOwn(bot, key)).map(key => {
+				const raw = bot[key];
+				const value = (key === "allowedOpenIds" || key === "allowedChatIds") && typeof raw === "string"
+					? raw.split(/[\s,]+/).filter(Boolean) : raw;
+				return [key, value];
+			}));
+		}
+
+		function BotField(props) {
+			const raw = props.bot[props.field];
+			const value = props.kind === "list" && Array.isArray(raw) ? raw.join(", ") : String(raw ?? "");
+			return react_jsx_runtime.jsxs("label", { className: props.wide ? cssDefault.field + " " + cssDefault.botWide : cssDefault.field, children: [
+				react_jsx_runtime.jsx("span", { className: cssDefault.label, children: props.label }),
+				react_jsx_runtime.jsx("input", {
+					className: cssDefault.input, value, disabled: props.disabled,
+					inputMode: props.kind === "number" ? "numeric" : void 0,
+					onChange: (event) => {
+						const text = event.target.value;
+					const next = props.kind === "number" ? (text === "" ? 0 : Number(text)) : text;
+						props.onEdit(props.field, next);
+					}
+				})
+			] });
+		}
+
+		function BotEditor(props) {
+			const status = props.status;
+			const statusText = status === void 0 ? "等待运行状态" : [status.status, status.connected ? "connected" : "offline", `${status.liveAgents} live`].join(" · ");
+			return react_jsx_runtime.jsxs("details", { className: cssDefault.botCard, children: [
+				react_jsx_runtime.jsx("summary", { className: cssDefault.botSummary, children: `${props.bot.id || "未命名机器人"} · ${props.bot.appId || "未填写 App ID"}` }),
+				react_jsx_runtime.jsx("p", { className: status?.error ? cssDefault.botStatus + " " + cssDefault.botStatusError : cssDefault.botStatus, children: status?.error ?? statusText }),
+				react_jsx_runtime.jsxs("div", { className: cssDefault.botGrid, children: [
+					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
+						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.enabled !== false, disabled: props.disabled, onChange: (event) => props.onEdit("enabled", event.target.checked) }),
+						"启用此机器人"
+					] }),
+					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
+						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.allowAllUsers === true, disabled: props.disabled, onChange: (event) => props.onEdit("allowAllUsers", event.target.checked) }),
+						"允许所有用户（危险）"
+					] }),
+					...BOT_TEXT_FIELDS.map(([field, label, kind]) => react_jsx_runtime.jsx(BotField, { bot: props.bot, field, label, kind, disabled: props.disabled, wide: field === "defaultWorkspace" || field === "profileFile", onEdit: props.onEdit }, field)),
+					...[ ["brand", "品牌", ["feishu", "lark", "larkoffice"]], ["workspacePolicy", "Workspace 策略", ["default", "locked"]], ["contextMode", "上下文", ["auto", "off"]], ["contextBackend", "上下文后端", ["auto", "sdk"]] ].map(([field, label, options]) => react_jsx_runtime.jsxs("label", { className: cssDefault.field, children: [
+						react_jsx_runtime.jsx("span", { className: cssDefault.label, children: label }),
+						react_jsx_runtime.jsx("select", { className: cssDefault.select, value: props.bot[field] ?? options[0], disabled: props.disabled, onChange: (event) => props.onEdit(field, event.target.value), children: options.map(option => react_jsx_runtime.jsx("option", { value: option, children: option }, option)) })
+					] }, field)),
+					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
+						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.requireMention !== false, disabled: props.disabled, onChange: (event) => props.onEdit("requireMention", event.target.checked) }),
+						"话题首次要求 @"
+					] })
+				] }),
+				react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: props.disabled, onClick: props.onDelete, children: "删除机器人（保留 Session 与状态文件）" })
+			] });
+		}
+
+		function MultiBotPanel(props) {
+			const hook = props.useFeishuBotAdmin;
+			if (hook === void 0) return null;
+			const state = hook(value => value);
+			if (!state?.loaded) return react_jsx_runtime.jsx("p", { className: cssDefault.hint, children: "正在加载机器人配置…" });
+			if (state.mode === "unavailable") return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
+				react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人设置仅限 Host 本机" }),
+				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error ?? "请在 Host 的 localhost 设置页管理机器人；此处不显示可能已失效的 legacy 字段。" })
+			] });
+			if (state.mode === "legacy") return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
+				react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "多机器人模式" }),
+				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: "转换会保留原机器人的 legacy Session 身份，并启用逐机器人默认 Workspace 与 Profile。" }),
+				state.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error }) : null,
+				react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving || props.cardDirty || !state.writable, onClick: props.convertLegacy, children: "转换为多机器人配置" })
+			] });
+			const statuses = new Map((state.statuses ?? []).map(item => [item.id, item]));
+			return react_jsx_runtime.jsxs("div", { className: cssDefault.botList, children: [
+				react_jsx_runtime.jsxs("div", { className: cssDefault.botToolbar, children: [
+					react_jsx_runtime.jsxs("label", { className: cssDefault.field, children: [
+						react_jsx_runtime.jsx("span", { className: cssDefault.label, children: "全部飞书机器人 live agent 上限" }),
+						react_jsx_runtime.jsx("input", { className: cssDefault.input, inputMode: "numeric", value: String(state.maxTotalLiveAgents ?? 0), disabled: state.saving || !state.writable, onChange: event => props.editMax(Number(event.target.value || 0)) })
+					] }),
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving || !state.writable, onClick: props.addBot, children: "新增机器人" })
+				] }),
+				...(state.bots ?? []).map((bot, index) => react_jsx_runtime.jsx(BotEditor, { bot, index, status: statuses.get(bot.id), disabled: state.saving || !state.writable, onEdit: (field, value) => props.editBot(index, field, value), onDelete: () => props.deleteBot(index) }, index)),
+				state.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error }) : null,
+				react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, disabled: !state.dirty || state.saving, onClick: props.discardBots, children: "放弃机器人修改" }),
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, disabled: !state.dirty || state.invalid || state.saving || !state.writable, onClick: props.saveBots, children: state.saving ? "保存中…" : "保存机器人配置" })
+				] })
+			] });
+		}
+
 		function OnboardingPanel(props) {
 			const hook = props.usePersonalAgentOnboarding;
 			if (hook === void 0) return null;
@@ -500,6 +610,8 @@ window.__ModuleLoader__.load({
 			const { t } = props;
 			const state = props.useFeishuRemoteSettingsCard((snapshot) => snapshot);
 			const onboarding = props.usePersonalAgentOnboarding?.((snapshot) => snapshot);
+			const admin = props.useFeishuBotAdmin?.((snapshot) => snapshot);
+			const multi = admin !== void 0 && admin.mode !== "legacy";
 			const active = onboardingActive(onboarding?.status);
 			const disabled = !state.writable || active;
 			const fieldProps = { disabled };
@@ -510,9 +622,11 @@ window.__ModuleLoader__.load({
 				state: { ...state, invalid: state.invalid || active },
 				onSave: active ? () => {} : props.save,
 					onDiscard: props.discard,
+					hideFooter: multi,
 					children: [
-						react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
-					...FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
+						react_jsx_runtime.jsx(MultiBotPanel, { ...props, key: "multi", cardDirty: state.dirty }),
+						multi ? null : react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
+					...(multi ? [] : FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
 					key: group.key,
 					children: [
 						react_jsx_runtime.jsx("p", { className: cssDefault.groupTitle, children: t(`g.${group.key}`) }),
@@ -530,7 +644,7 @@ window.__ModuleLoader__.load({
 						}, entry.field)),
 						react_jsx_runtime.jsx("div", { className: cssDefault.sep })
 					]
-					}))
+					})))
 				]
 			});
 		}
@@ -543,6 +657,8 @@ window.__ModuleLoader__.load({
 			const state = hook((snapshot) => snapshot);
 			if (state === void 0) return null;
 			const onboarding = props.usePersonalAgentOnboarding?.((snapshot) => snapshot);
+			const admin = props.useFeishuBotAdmin?.((snapshot) => snapshot);
+			const multi = admin !== void 0 && admin.mode !== "legacy";
 			const active = onboardingActive(onboarding?.status);
 			const disabled = !state.writable || active;
 			const fieldProps = { disabled };
@@ -554,8 +670,9 @@ window.__ModuleLoader__.load({
 					state.dirty ? react_jsx_runtime.jsx("span", { className: cssDefault.pending, children: t("settings.unsaved") }) : null,
 					!state.writable ? react_jsx_runtime.jsx("p", { className: cssDefault.readOnly, role: "status", children: t("settings.readOnly") }) : null
 				] }),
-					react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
-				...FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
+					react_jsx_runtime.jsx(MultiBotPanel, { ...props, key: "multi", cardDirty: state.dirty }),
+					multi ? null : react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
+				...(multi ? [] : FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
 					key: group.key,
 					children: [
 						react_jsx_runtime.jsx("p", { className: cssDefault.pageGroup, children: t(`g.${group.key}`) }),
@@ -573,8 +690,8 @@ window.__ModuleLoader__.load({
 						}, entry.field)),
 						react_jsx_runtime.jsx("div", { className: cssDefault.sep })
 					]
-				})),
-				react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
+				}))),
+				multi ? null : react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
 					state.failed ? react_jsx_runtime.jsx("p", { className: cssDefault.failed, role: "status", children: t("settings.saveFailed") }) : null,
 					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, onClick: props.discard, disabled: !state.dirty || state.saving, children: t("settings.discard") }),
 					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, onClick: props.save, disabled: blocked, children: t(state.saving ? "settings.saving" : "settings.save") })
@@ -597,6 +714,114 @@ window.__ModuleLoader__.load({
 				return {
 					hooks: { feishuRemoteSettingsCard: this.store },
 					...this.form.actions()
+				};
+			}
+		};
+
+		var FeishuBotAdminController = class {
+			constructor(connection) {
+				this.connection = connection;
+				this.snapshot = { loaded: false, writable: false, mode: "loading", revision: 0, bots: [], statuses: [], maxTotalLiveAgents: 0, dirty: false, invalid: false, saving: false, error: void 0 };
+				this.store = runtime.createSnapshotStore(this.snapshot);
+				this.stopped = true;
+				this.timer = void 0;
+				this.original = void 0;
+			}
+			publish(patch) {
+				this.snapshot = { ...this.snapshot, ...patch };
+				this.store.set(this.snapshot);
+			}
+			async request(endpoint, payload = {}) {
+				const result = await this.connection.rpc.call("/dsh-feishu-remote", endpoint, payload);
+				if (!result.ok) throw Object.assign(new Error(result.error.message), { code: result.error.code, details: result.error.details });
+				return result.value;
+			}
+			invalid(bots, max) {
+				if (!Number.isSafeInteger(max) || max < 0) return true;
+				if (this.snapshot.mode === "multi" && bots.length === 0) return true;
+				const ids = new Set();
+				const apps = new Set();
+				for (const bot of bots) {
+					if (!/^[a-z][a-z0-9-]{0,47}$/.test(bot.id ?? "") || !bot.appId || !bot.appSecretRef) return true;
+					if (ids.has(bot.id) || apps.has(bot.appId)) return true;
+					if (bot.workspacePolicy === "locked" && !bot.defaultWorkspace) return true;
+					if (!Number.isSafeInteger(bot.maxLiveAgents ?? 0) || (bot.maxLiveAgents ?? 0) < 0) return true;
+					ids.add(bot.id); apps.add(bot.appId);
+				}
+				return false;
+			}
+			stage(bots, max = this.snapshot.maxTotalLiveAgents) {
+				this.publish({ bots, maxTotalLiveAgents: max, dirty: true, invalid: this.invalid(bots, max), error: void 0 });
+			}
+			async refresh(force = false) {
+				if (this.stopped || this.connection.isLoopback === false) return;
+				try {
+					const [editor, runtimeStatus] = await Promise.all([this.request("settings/editor-snapshot"), this.request("bots/status")]);
+					if (!this.snapshot.dirty || force) {
+						const bots = structuredClone(editor.config.bots ?? []);
+						this.original = { bots: structuredClone(bots), maxTotalLiveAgents: editor.config.maxTotalLiveAgents ?? 0 };
+						this.publish({ loaded: true, writable: editor.writable, mode: editor.mode, revision: editor.revision, bots, maxTotalLiveAgents: editor.config.maxTotalLiveAgents ?? 0, statuses: runtimeStatus.bots ?? [], dirty: false, invalid: false, error: void 0 });
+					} else {
+						this.publish({ statuses: runtimeStatus.bots ?? [] });
+					}
+				} catch (error) {
+					this.publish({
+						loaded: true,
+						...(this.snapshot.mode === "loading" ? { mode: "unavailable", writable: false } : {}),
+						error: error instanceof Error ? error.message : String(error)
+					});
+				}
+			}
+			mount() {
+				this.stopped = false;
+				if (this.connection.isLoopback === false) {
+					this.publish({ loaded: true, writable: false, mode: "unavailable", error: "机器人管理只允许 Host 本机 loopback 页面；legacy 字段不会在此远程页面显示或保存。" });
+					return () => { this.stopped = true; };
+				}
+				const tick = async () => { await this.refresh(false); if (!this.stopped) this.timer = setTimeout(tick, 2500); };
+				void tick();
+				return () => { this.stopped = true; if (this.timer !== void 0) clearTimeout(this.timer); };
+			}
+			async convertLegacy() {
+				if (this.snapshot.saving || !this.snapshot.writable) return;
+				if (typeof window !== "undefined" && !window.confirm("转换会原子改写配置：原机器人保留 legacy Session 身份，多机器人上下文固定改用 SDK；未显式配置的入站目录将改为 App 隔离路径。新机器人使用 App 隔离身份。继续吗？")) return;
+				this.publish({ saving: true, error: void 0 });
+				try { await this.request("settings/convert-legacy"); await this.refresh(true); }
+				catch (error) { this.publish({ error: error instanceof Error ? error.message : String(error) }); }
+				finally { this.publish({ saving: false }); }
+			}
+			async save() {
+				if (!this.snapshot.dirty || this.snapshot.invalid || this.snapshot.saving) return;
+				this.publish({ saving: true, error: void 0 });
+				try {
+					const bots = this.snapshot.bots.map(serializeBotDraft);
+					await this.request("settings/save-bots", { revision: this.snapshot.revision, bots, maxTotalLiveAgents: this.snapshot.maxTotalLiveAgents });
+					await this.refresh(true);
+				} catch (error) {
+					const latest = error?.details?.latest;
+					this.publish({
+						...(latest?.revision === void 0 ? {} : { revision: latest.revision, writable: latest.writable }),
+						error: error instanceof Error ? error.message : String(error)
+					});
+				} finally {
+					this.publish({ saving: false });
+				}
+			}
+			discard() {
+				if (this.original === void 0) return;
+				const bots = structuredClone(this.original.bots);
+				this.publish({ bots, maxTotalLiveAgents: this.original.maxTotalLiveAgents, dirty: false, invalid: false, error: void 0 });
+			}
+			inject() {
+				return {
+					hooks: { feishuBotAdmin: this.store },
+					convertLegacy: () => this.convertLegacy(),
+					addBot: () => this.stage([...this.snapshot.bots, { id: `bot-${this.snapshot.bots.length + 1}`, enabled: true, appId: "", appSecretRef: "", brand: "feishu", allowedOpenIds: "", allowedChatIds: "", allowAllUsers: false, requireMention: true, defaultWorkspace: "", workspacePolicy: "default", profileFile: "", agentPreset: "", provider: "", model: "", maxLiveAgents: 0, contextMode: "auto", contextBackend: "sdk", sessionNamespace: "app" }]),
+					deleteBot: index => this.stage(this.snapshot.bots.filter((_bot, item) => item !== index)),
+					editBot: (index, field, value) => this.stage(this.snapshot.bots.map((bot, item) => item === index ? { ...bot, [field]: value } : bot)),
+					editMax: value => this.stage(this.snapshot.bots, value),
+					saveBots: () => this.save(),
+					discardBots: () => this.discard()
 				};
 			}
 		};
@@ -716,6 +941,9 @@ window.__ModuleLoader__.load({
 			"f.requireMention": "Require first @mention per topic", "f.requireMentionHint": "Topic chats: on keeps each topic silent until its first @mention, then later replies flow without @. Ordinary groups always require @ on every task.",
 			"f.cwd": "Legacy working directory", "f.cwdHint": "Optional compatibility value for fixed-workspace deployments. New Feishu chats choose a DSH Workspace with /workspace. If set, workspaceRoot must also be set.",
 			"f.workspaceRoot": "Legacy workspace root", "f.workspaceRootHint": "Optional compatibility boundary paired with cwd; it is not the default for newly bound Feishu chats.",
+			"f.defaultWorkspace": "Default Workspace", "f.defaultWorkspaceHint": "Workspace ID or absolute path used only for a source without an existing binding.",
+			"f.workspacePolicy": "Workspace policy", "f.workspacePolicyHint": "default keeps existing bindings; locked forces every source to the configured default Workspace.",
+			"f.profileFile": "Bot Profile Markdown", "f.profileFileHint": "Trusted local UTF-8 Markdown (max 32 KiB) injected into every Agent system prompt. Never put secrets here.",
 			"f.provider": "Provider", "f.providerHint": "Override model provider; empty = deployment default.",
 			"f.model": "Model", "f.modelHint": "Override model; empty = deployment default.",
 			"f.agentPreset": "Agent preset", "f.agentPresetHint": "Preset id to mount (empty = deployment default, usually standard).",
@@ -773,6 +1001,9 @@ window.__ModuleLoader__.load({
 			"f.requireMention": "每个话题首次必须 @机器人", "f.requireMentionHint": "话题群：开启后首次 @ 前只积累历史，此后同话题免 @；普通群不受此开关影响，每一轮任务都必须明确 @。",
 			"f.cwd": "旧版工作目录", "f.cwdHint": "可选，仅兼容固定工作区的旧部署。新飞书聊天通过 /workspace 选择 DSH Workspace；填写时必须同时填写 workspaceRoot。",
 			"f.workspaceRoot": "旧版工作区根目录", "f.workspaceRootHint": "可选，与 cwd 成对使用的兼容边界；不会作为新飞书聊天的默认目录。",
+			"f.defaultWorkspace": "默认 Workspace", "f.defaultWorkspaceHint": "Workspace ID 或绝对路径；只为尚未绑定的来源提供默认值。",
+			"f.workspacePolicy": "Workspace 策略", "f.workspacePolicyHint": "default 保留已有绑定；locked 强制所有来源使用默认 Workspace。",
+			"f.profileFile": "机器人 Profile Markdown", "f.profileFileHint": "本机可信 UTF-8 Markdown（最大 32 KiB），注入每个 Agent 的 system prompt；禁止放入凭据。",
 			"f.provider": "Provider", "f.providerHint": "覆盖模型 provider；留空 = 部署默认。",
 			"f.model": "模型", "f.modelHint": "覆盖模型；留空 = 部署默认。",
 			"f.agentPreset": "Agent preset", "f.agentPresetHint": "要挂载的 preset id（留空 = 部署默认，通常 standard）。",
@@ -798,6 +1029,8 @@ window.__ModuleLoader__.load({
 				"p.allowedChatIds": "Example: oc_xxxxxxxxxxxxx",
 				"p.cwd": "Optional legacy value: /Users/you/work",
 				"p.workspaceRoot": "Optional legacy value: /Users/you/work",
+				"p.defaultWorkspace": "Example: /Users/you/Projects/curio",
+				"p.profileFile": "Example: /Users/you/.dsh/bot-profiles/curio.md",
 				"p.provider": "Example: deepseek",
 				"p.model": "Example: deepseek-v4-flash",
 				"p.agentPreset": "Example: standard",
@@ -818,6 +1051,8 @@ window.__ModuleLoader__.load({
 				"p.allowedChatIds": "例如：oc_xxxxxxxxxxxxx",
 				"p.cwd": "可选旧版配置，例如：/Users/you/work",
 				"p.workspaceRoot": "可选旧版配置，例如：/Users/you/work",
+				"p.defaultWorkspace": "例如：/Users/you/Projects/curio",
+				"p.profileFile": "例如：/Users/you/.dsh/bot-profiles/curio.md",
 				"p.provider": "例如：deepseek",
 				"p.model": "例如：deepseek-v4-flash",
 				"p.agentPreset": "例如：standard",
@@ -931,14 +1166,18 @@ window.__ModuleLoader__.load({
 				const settingsScope = ctx.settingsScope.bind({ namespace: SETTINGS_NS });
 				const settingsController = new FeishuRemoteSettingsCardController(settingsScope);
 				const onboardingController = new PersonalAgentOnboardingController(ctx.connection);
+				const botAdminController = new FeishuBotAdminController(ctx.connection);
 				ctx.effect(() => onboardingController.mount(), "dsh-feishu-remote: PersonalAgent onboarding polling");
+				ctx.effect(() => botAdminController.mount(), "dsh-feishu-remote: multi-bot admin polling");
 				const injection = () => {
 					const settings = settingsController.inject();
 					const onboarding = onboardingController.inject();
+					const bots = botAdminController.inject();
 					return {
 						...settings,
 						...onboarding,
-						hooks: { ...settings.hooks, ...onboarding.hooks }
+						...bots,
+						hooks: { ...settings.hooks, ...onboarding.hooks, ...bots.hooks }
 					};
 				};
 				ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
@@ -967,6 +1206,7 @@ window.__ModuleLoader__.load({
 		}
 		exports.apply = apply;
 		exports.inject = inject;
+		exports.serializeBotDraft = serializeBotDraft;
 		exports.splitLegacyFeishuMessageText = splitLegacyFeishuMessageText;
 		return module.exports;
 	}

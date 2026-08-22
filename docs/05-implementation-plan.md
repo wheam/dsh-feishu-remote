@@ -235,8 +235,8 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    - 卡片 pending 记录绑定 appId/chatId/messageId/operatorOpenId/sessionId/callId/
      deadline，处理即原子删除；错误操作者/跨群/过期留审计日志（重复点击被 SDK 去重，
      到不了插件，由文字兜底覆盖）。
-   - open_id 自举：白名单外的消息在宿主日志打印发送者 open_id，引导用户抄入
-     `allowedOpenIds`（CLI 向导已删、设置卡片是 P1，必须有这条自举路径）。
+   - open_id 绑定：优先使用 Host 本机 PersonalAgent 扫码把 owner 原子写入
+     `allowedOpenIds`；手工部署从飞书管理端查询完整 ID。拒绝日志只保留末四位，不允许作为 ID 回显接口。
    - 群聊输出视为公开：卡片不展示完整工具参数与结果，只展示摘要。
    - 凭据不进仓库；出站 `redactSecrets`。
 

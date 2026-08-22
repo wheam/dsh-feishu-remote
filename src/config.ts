@@ -13,10 +13,10 @@ import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import Schema from '@deepseek-ai/schemastery'
-import type { LarkBrand, ResolvedConfig } from './types.js'
+import type { LarkBrand, ResolvedConfig, SessionNamespace, WorkspacePolicy } from './types.js'
 import { canonicalPath, isInside, parseBooleanEnv, parseCsv } from './security.js'
 
-export interface Config {
+export interface LegacySingleBotConfig {
   appId?: string
   appSecret?: string
   appSecretRef?: string
@@ -56,7 +56,63 @@ export interface Config {
   contextMaxChars?: number
   contextTimeoutMs?: number
   contextIncludeBot?: boolean
+  defaultWorkspace?: string
+  workspacePolicy?: WorkspacePolicy
+  profileFile?: string
 }
+
+export interface BotConfig extends Omit<LegacySingleBotConfig, 'appSecret' | 'cwd' | 'workspaceRoot'> {
+  id: string
+  enabled?: boolean
+  appId: string
+  appSecretRef: string
+  sessionNamespace?: SessionNamespace
+}
+
+export interface Config extends LegacySingleBotConfig {
+  bots?: BotConfig[]
+  maxTotalLiveAgents?: number
+}
+
+const BotSchema: Schema<BotConfig> = Schema.object({
+  id: Schema.string().default(''),
+  enabled: Schema.boolean().default(true),
+  appId: Schema.string().default(''),
+  appSecretRef: Schema.string().default(''),
+  brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
+  statePath: Schema.string().default(''),
+  inboundDir: Schema.string().default(''),
+  allowedOpenIds: Schema.array(Schema.string()).default([]),
+  allowedChatIds: Schema.array(Schema.string()).default([]),
+  allowAllUsers: Schema.boolean().default(false),
+  requireMention: Schema.boolean().default(true),
+  provider: Schema.string().default(''),
+  model: Schema.string().default(''),
+  progressCards: Schema.boolean().default(true),
+  progressUpdateMs: Schema.number().step(1).min(250).default(600),
+  workingReaction: Schema.boolean().default(true),
+  maxInboundFileBytes: Schema.number().step(1).min(1).default(20 * 1024 * 1024),
+  maxOutboundFileBytes: Schema.number().step(1).min(1).default(30 * 1024 * 1024),
+  interactiveTimeoutMs: Schema.number().step(1).min(1000).default(10 * 60 * 1000),
+  enableApprovals: Schema.boolean().default(true),
+  cardBodyMaxChars: Schema.number().step(1).min(1000).max(28000).default(12000),
+  agentPreset: Schema.string().default(''),
+  maxLiveAgents: Schema.number().step(1).min(0).default(0),
+  commandAllowlist: Schema.array(Schema.string()).default([]),
+  contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
+  contextBackend: Schema.union(['auto', 'cli', 'sdk'] as const).default('auto'),
+  feishuCliPath: Schema.string().default(''),
+  contextP2pMaxMessages: Schema.number().step(1).min(1).max(500).default(80),
+  contextP2pMaxChars: Schema.number().step(1).min(1000).max(500000).default(50000),
+  contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
+  contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
+  contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
+  contextIncludeBot: Schema.boolean().default(true),
+  defaultWorkspace: Schema.string().default(''),
+  workspacePolicy: Schema.union(['default', 'locked'] as const).default('default'),
+  profileFile: Schema.string().default(''),
+  sessionNamespace: Schema.union(['legacy', 'app'] as const).default('app'),
+})
 
 export const ConfigSchema: Schema<Config> = Schema.object({
   appId: Schema.string().default(''),
@@ -93,6 +149,11 @@ export const ConfigSchema: Schema<Config> = Schema.object({
   contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
   contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
   contextIncludeBot: Schema.boolean().default(true),
+  defaultWorkspace: Schema.string().default(''),
+  workspacePolicy: Schema.union(['default', 'locked'] as const).default('default'),
+  profileFile: Schema.string().default(''),
+  bots: Schema.array(BotSchema).default([]),
+  maxTotalLiveAgents: Schema.number().step(1).min(0).default(0),
 })
 
 function unique(values: string[]): string[] {
@@ -133,6 +194,11 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
   const provider = config.provider?.trim()
   const model = config.model?.trim()
   const agentPreset = config.agentPreset?.trim()
+  const defaultWorkspaceSelector = (config.defaultWorkspace ?? '').trim()
+  const workspacePolicy = config.workspacePolicy ?? 'default'
+  if (workspacePolicy === 'locked' && defaultWorkspaceSelector === '') {
+    throw new Error('dsh-feishu-remote: locked workspace requires defaultWorkspace')
+  }
 
   const allowAllUsers = Boolean(config.allowAllUsers) || parseBooleanEnv(env.DSH_FEISHU_ALLOW_ALL_USERS)
   const allowedOpenIds = unique([
@@ -145,6 +211,7 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
   ])
 
   return {
+    botId: 'legacy',
     appId,
     appSecret,
     appSecretRef,
@@ -179,6 +246,95 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     contextMaxChars: config.contextMaxChars ?? 100000,
     contextTimeoutMs: config.contextTimeoutMs ?? 10000,
     contextIncludeBot: config.contextIncludeBot ?? true,
+    sessionNamespace: 'legacy',
+    workspacePolicy,
+    ...(defaultWorkspaceSelector === '' ? {} : { defaultWorkspaceSelector }),
+    ...((config.profileFile ?? '').trim() === '' ? {} : { profileFile: config.profileFile!.trim() }),
+    multiBot: false,
+  }
+}
+
+function validateBotShape(bot: BotConfig): void {
+  if (!/^[a-z][a-z0-9-]{0,47}$/u.test(bot.id)) {
+    throw new Error(`dsh-feishu-remote: invalid bot id ${JSON.stringify(bot.id)}`)
+  }
+  if (bot.appId.trim() === '') throw new Error(`dsh-feishu-remote [bot:${bot.id}]: appId cannot be empty`)
+  if (bot.appSecretRef.trim() === '') throw new Error(`dsh-feishu-remote [bot:${bot.id}]: appSecretRef cannot be empty`)
+  credentialRef(bot.appSecretRef.trim())
+  if ((bot.workspacePolicy ?? 'default') === 'locked' && (bot.defaultWorkspace ?? '').trim() === '') {
+    throw new Error(`dsh-feishu-remote [bot:${bot.id}]: locked workspace requires defaultWorkspace`)
+  }
+  if ((bot.contextBackend ?? 'auto') === 'cli') {
+    throw new Error(`dsh-feishu-remote [bot:${bot.id}]: multi-bot mode requires contextBackend=sdk`)
+  }
+}
+
+/** Root-level invariants that must be checked before any bot is started. */
+export function validateMultiBotConfig(bots: readonly BotConfig[]): void {
+  validateMultiBotRootInvariants(bots)
+  for (const bot of bots) validateBotShape(bot)
+}
+
+/** Cross-bot conflicts are root failures; individual shape errors stay isolated. */
+export function validateMultiBotRootInvariants(bots: readonly BotConfig[]): void {
+  const dshHome = resolve(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'))
+  const ids = new Set<string>()
+  const appIds = new Set<string>()
+  const statePaths = new Set<string>()
+  const inboundDirs = new Set<string>()
+  let legacy = 0
+  for (const bot of bots) {
+    if (ids.has(bot.id)) throw new Error(`dsh-feishu-remote: duplicate bot id ${bot.id}`)
+    ids.add(bot.id)
+    const appId = bot.appId.trim()
+    if (appIds.has(appId)) throw new Error(`dsh-feishu-remote: duplicate appId ${appId}`)
+    appIds.add(appId)
+    if ((bot.sessionNamespace ?? 'app') === 'legacy' && ++legacy > 1) {
+      throw new Error('dsh-feishu-remote: at most one bot may use the legacy session namespace')
+    }
+    const statePath = canonicalPath(resolve(bot.statePath || join(dshHome, 'feishu-remote', `${appId}.json`)))
+    if (statePaths.has(statePath)) throw new Error(`dsh-feishu-remote: duplicate statePath ${statePath}`)
+    statePaths.add(statePath)
+    const inboundDir = canonicalPath(resolve(bot.inboundDir || join(dshHome, 'feishu-remote', 'inbox', appId)))
+    if (inboundDirs.has(inboundDir)) throw new Error(`dsh-feishu-remote: duplicate inboundDir ${inboundDir}`)
+    inboundDirs.add(inboundDir)
+  }
+}
+
+/** Resolve one bots[] element without any shared legacy environment fallback. */
+export async function resolveBotRuntimeConfig(
+  ctx: Context,
+  bot: BotConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ResolvedConfig> {
+  validateBotShape(bot)
+  const ref = bot.appSecretRef.trim()
+  const direct = (env[ref] ?? '').trim()
+  const appSecret = direct === '' ? (await ctx.credentials.resolve(credentialRef(ref)))?.value ?? '' : direct
+  if (appSecret.trim() === '') throw new Error(`dsh-feishu-remote [bot:${bot.id}]: missing app secret for credential ${ref}`)
+  const dshHome = resolve(env.DSH_HOME?.trim() || join(homedir(), '.dsh'))
+  const resolved = resolveConfig({
+    ...bot,
+    appSecret,
+    cwd: undefined,
+    workspaceRoot: undefined,
+    statePath: bot.statePath || join(dshHome, 'feishu-remote', `${bot.appId.trim()}.json`),
+    inboundDir: bot.inboundDir || join(dshHome, 'feishu-remote', 'inbox', bot.appId.trim()),
+    contextBackend: 'sdk',
+  }, {})
+  return {
+    ...resolved,
+    botId: bot.id,
+    appId: bot.appId.trim(),
+    appSecretRef: ref,
+    allowedOpenIds: unique(bot.allowedOpenIds ?? []),
+    allowedChatIds: unique(bot.allowedChatIds ?? []),
+    allowAllUsers: bot.allowAllUsers ?? false,
+    feishuCliPath: (bot.feishuCliPath ?? '').trim(),
+    sessionNamespace: bot.sessionNamespace ?? 'app',
+    workspacePolicy: bot.workspacePolicy ?? 'default',
+    ...((bot.profileFile ?? '').trim() === '' ? { profileFile: undefined } : { profileFile: bot.profileFile!.trim() }),
+    multiBot: true,
   }
 }
 

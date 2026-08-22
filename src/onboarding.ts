@@ -419,6 +419,9 @@ export class PersonalAgentOnboardingService {
     if (this.ctx.settings.writable === false) {
       throw new OnboardingError('read_only', '当前部署的设置存储为只读，无法保存扫码结果。', false)
     }
+    if (this.settings.get().bots.length > 0) {
+      throw new OnboardingError('multi_bot_unsupported', '多机器人模式请在机器人列表中配置目标 bot；当前扫码入口不会写入已失效的 legacy 根字段。', false)
+    }
     if (this.active?.committing === true) {
       throw new OnboardingError('busy', '正在保存上一轮扫码结果，请等待完成。', false)
     }
@@ -473,6 +476,9 @@ export class PersonalAgentOnboardingService {
   }
 
   async retryConnection(): Promise<OnboardingStatus> {
+    if (this.settings.get().bots.length > 0) {
+      throw new OnboardingError('multi_bot_unsupported', '多机器人模式请从机器人状态列表检查连接。', false)
+    }
     const appId = this.settings.get().appId.trim()
     if (appId === '') throw new OnboardingError('missing_app', '当前没有已保存的 App ID。', false)
     if (this.active !== undefined) throw new OnboardingError('busy', '扫码任务仍在进行，请稍候。', false)

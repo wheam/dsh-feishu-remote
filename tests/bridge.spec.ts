@@ -10,11 +10,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeishuRemoteBridge, terminalOutcome } from '../src/bridge.js'
-import { sessionPrefix } from '../src/identity.js'
+import { sessionPrefix, sessionPrefixForBot } from '../src/identity.js'
 import { resolveConfig, type Config } from '../src/config.js'
 import type { ContextMessage, FeishuContextProvider } from '../src/context.js'
 import { OutboundScheduler } from '../src/scheduler.js'
-import type { LarkChannelLike } from '../src/types.js'
+import type { ProfileLoader } from '../src/profile.js'
+import type { LarkChannelLike, ProfileSnapshot, ResolvedConfig } from '../src/types.js'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionGroupDescriptor } from 'dsh-session-groups'
 
@@ -113,8 +114,34 @@ class FakeAgents {
   failNextCreate(error: Error): void { this.createErrors.push(error) }
   failNextResume(error: Error): void { this.resumeErrors.push(error) }
 
-  private makeAgent(id: string, meta?: Record<string, unknown>): { agent: FakeAgent; dispose: () => Promise<void> } {
+  private async makeAgent(
+    id: string,
+    meta: Record<string, unknown> | undefined,
+    setup: CreateRecord['options']['setup'],
+  ): Promise<{ agent: FakeAgent; dispose: () => Promise<void> }> {
     const agent = new FakeAgent(id, meta)
+    if (typeof setup === 'function') {
+      const sections: Array<{ name: string; order: number; text: string | ((context: unknown) => string) }> = []
+      const variables = new Map<string, () => string | undefined>()
+      await setup({
+        agent,
+        tools: { restrict: vi.fn() },
+        systemPrompt: {
+          variable: (name: string, provider: () => string | undefined) => { variables.set(name, provider) },
+          section: (section: { name: string; order: number; text: string | ((context: unknown) => string) }) => { sections.push(section) },
+          assemble: async (context: unknown) => ({
+            sections: sections.map(section => ({
+              name: section.name,
+              text: typeof section.text === 'function' ? section.text(context) : section.text,
+            })),
+            contexts: [],
+            tools: [],
+            variables: Object.fromEntries([...variables].map(([name, provider]) => [name, provider()])),
+          }),
+        },
+        on: vi.fn(() => () => undefined),
+      } as never)
+    }
     this.live.set(id, agent)
     return {
       agent,
@@ -130,16 +157,18 @@ class FakeAgents {
     const error = this.createErrors.shift()
     if (error !== undefined) throw error
     const record: CreateRecord = { options }
+    const handle = await this.makeAgent(String(options.sessionId), options.meta, options.setup)
     this.created.push(record)
-    return this.makeAgent(String(options.sessionId), options.meta)
+    return handle
   }
 
   async resume(options: CreateRecord['options']): Promise<{ agent: FakeAgent; dispose: () => Promise<void> }> {
     const error = this.resumeErrors.shift()
     if (error !== undefined) throw error
     const record: CreateRecord = { options }
+    const handle = await this.makeAgent(String(options.resumeSessionId), undefined, options.setup)
     this.resumed.push(record)
-    return this.makeAgent(String(options.resumeSessionId))
+    return handle
   }
 
   get(id: unknown): FakeAgent | undefined {
@@ -438,9 +467,11 @@ interface Harness {
 
 interface HarnessBridgeOptions {
   contextProvider?: FeishuContextProvider
+  profileLoader?: ProfileLoader
   sessionGroups?: FakeSessionGroups
   sessionGroupMetadataTtlMs?: number
   sessionGroupMetadataNow?: () => number
+  resolvedConfig?: Partial<ResolvedConfig>
 }
 
 async function makeHarness(
@@ -464,6 +495,7 @@ async function makeHarness(
     contextMode: 'off',
     ...configOverrides,
   })
+  Object.assign(config, bridgeOptions.resolvedConfig ?? {})
   const ctx = new FakeCtx()
   const agents = new FakeAgents()
   ctx.agents = agents
@@ -472,7 +504,7 @@ async function makeHarness(
   ctx.services.set('sessionPersistence', persistence)
   const workspaceRegistry = new FakeWorkspaceRegistry(workspace)
   ctx.services.set('workspaceRegistry', workspaceRegistry)
-  const { sessionGroups, ...runtimeBridgeOptions } = bridgeOptions
+  const { sessionGroups, resolvedConfig: _resolvedConfig, ...runtimeBridgeOptions } = bridgeOptions
   if (sessionGroups !== undefined) ctx.services.set('sessionGroups', sessionGroups)
   const mountOrder: string[] = []
   const presets = {
@@ -632,6 +664,95 @@ describe('bridge lifecycle and answerer ordering', () => {
   })
 })
 
+describe('two live bridge isolation', () => {
+  it('routes Session events and approval waterfall to the owning app and stops independently', async () => {
+    const workspace = await tempWorkspace()
+    const stateA = await tempState()
+    const stateB = await tempState()
+    const ctx = new FakeCtx()
+    const agents = new FakeAgents()
+    ctx.agents = agents
+    ctx.services.set('agents', agents)
+    ctx.services.set('sessionPersistence', new FakePersistence())
+    ctx.services.set('workspaceRegistry', new FakeWorkspaceRegistry(workspace))
+    ctx.services.set('agentPresets', {
+      resolve: vi.fn(async (id?: string) => ({ id: id ?? 'standard' })),
+      mount: vi.fn(async () => ({ id: 'standard' })),
+    })
+    const channelA = new FakeChannel()
+    const channelB = new FakeChannel()
+    const makeConfig = (botId: string, appId: string, statePath: string): ResolvedConfig => Object.assign(resolveConfig({
+      appId,
+      appSecret: 'secret',
+      cwd: workspace,
+      workspaceRoot: workspace,
+      statePath,
+      allowedOpenIds: ['ou_1'],
+      contextMode: 'off',
+      progressUpdateMs: 2,
+    }), { botId, sessionNamespace: 'app' as const, multiBot: true })
+    const bridgeA = new FeishuRemoteBridge(ctx as never, makeConfig('bot-a', 'cli_a', stateA), {
+      channelFactory: () => channelA,
+      channelPollMs: 10,
+      reconnectBaseMs: 5,
+    })
+    const bridgeB = new FeishuRemoteBridge(ctx as never, makeConfig('bot-b', 'cli_b', stateB), {
+      channelFactory: () => channelB,
+      channelPollMs: 10,
+      reconnectBaseMs: 5,
+    })
+    await bridgeA.start()
+    await bridgeB.start()
+    bridges.push(bridgeA, bridgeB)
+    await waitFor(() => channelA.connectCalls > 0 && channelB.connectCalls > 0)
+
+    channelA.emit('message', message('task A') as never)
+    channelB.emit('message', message('task B') as never)
+    await waitFor(() => agents.created.length === 2)
+    const idA = [...agents.live.keys()].find(id => id.startsWith(`${sessionPrefixForBot('cli_a', 'p2p:oc_p2p')}-`))!
+    const idB = [...agents.live.keys()].find(id => id.startsWith(`${sessionPrefixForBot('cli_b', 'p2p:oc_p2p')}-`))!
+    expect(idA).toBeDefined()
+    expect(idB).toBeDefined()
+    expect(idA).not.toBe(idB)
+
+    const agentA = agents.live.get(idA)!
+    await ctx.emit('session/event', { id: idA, header: { id: SessionId(idA) } } as never, sessionEvent('turn/start', { turn: 1 }, idA) as never)
+    await ctx.emit('agent/inbox/claimed', {
+      agent: { id: SessionId(idA) }, message: { id: (agentA.followups[0] as { id: unknown }).id }, turn: 1,
+    } as never)
+    let fallbackCalls = 0
+    ctx.on('approval/request', async () => { fallbackCalls += 1; return 'rejected' as never })
+    const answerers = [...(ctx.listeners.get('approval/request') ?? [])]
+    const dispatch = async (index: number): Promise<unknown> => {
+      const listener = answerers[index]
+      if (listener === undefined) return 'unavailable'
+      return listener.fn(approvalRequest(idA) as never, (() => dispatch(index + 1)) as never)
+    }
+    const approval = dispatch(0)
+    await waitFor(() => approvalTokenFromChannel({ channel: channelA } as Harness) !== undefined)
+    expect(approvalTokenFromChannel({ channel: channelB } as Harness)).toBeUndefined()
+    channelA.emit('message', message('/approve') as never)
+    await expect(approval).resolves.toBe('allowed-once')
+    expect(fallbackCalls).toBe(0)
+
+    const sessionListenersBefore = ctx.listeners.get('session/event')?.length
+    await bridgeA.stop()
+    expect(ctx.listeners.get('session/event')?.length).toBe((sessionListenersBefore ?? 1) - 1)
+    const agentB = agents.live.get(idB)!
+    await ctx.emit('session/event', { id: idB, header: { id: SessionId(idB) } } as never, sessionEvent('turn/start', { turn: 1 }, idB) as never)
+    await ctx.emit('agent/inbox/claimed', {
+      agent: { id: SessionId(idB) }, message: { id: (agentB.followups[0] as { id: unknown }).id }, turn: 1,
+    } as never)
+    await ctx.emit('session/event', { id: idB, header: { id: SessionId(idB) } } as never, sessionEvent('assistant/message', {
+      turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'B still works' }] },
+    }, idB) as never)
+    await ctx.emit('session/event', { id: idB, header: { id: SessionId(idB) } } as never, sessionEvent('turn/end', {
+      turn: 1, reason: { kind: 'completed' },
+    }, idB) as never)
+    await waitFor(() => channelB.sent.some(item => JSON.stringify(item.input).includes('B still works')))
+  })
+})
+
 describe('sender allowlist and optional group restriction', () => {
   it('rejects unauthorized open_ids without any session work', async () => {
     const h = await makeHarness()
@@ -639,7 +760,8 @@ describe('sender allowlist and optional group restriction', () => {
     await waitFor(() => h.ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('未授权飞书用户')))
     expect(h.agents.created).toHaveLength(0)
     expect(h.channel.sent).toHaveLength(0)
-    expect(h.ctx.logger.warn.mock.calls.some(call => String(call[1]).includes('ou_stranger'))).toBe(true)
+    expect(h.ctx.logger.warn.mock.calls.some(call => String(call[1]).includes('…nger'))).toBe(true)
+    expect(JSON.stringify(h.ctx.logger.warn.mock.calls)).not.toContain('ou_stranger')
   })
 
   it('allows any group by default when allowedChatIds is empty', async () => {
@@ -1097,6 +1219,95 @@ describe('session-group metadata refresh', () => {
 })
 
 describe('session creation and mapping', () => {
+  it('does not assign a Session group before a fail-closed Profile load succeeds', async () => {
+    const sessionGroups = new FakeSessionGroups()
+    const profile: ProfileSnapshot = {
+      path: '/profiles/bot.md', text: '# Bot', digest: 'b'.repeat(64), bytes: 5, loadedAt: 2,
+    }
+    const loader = { load: vi.fn()
+      .mockRejectedValueOnce(new Error('unsafe mode'))
+      .mockResolvedValueOnce(profile) } as unknown as ProfileLoader
+    const h = await makeHarness({}, {
+      sessionGroups,
+      profileLoader: loader,
+      resolvedConfig: { profileFile: '/profiles/bot.md' },
+    })
+
+    await h.emitMessage('first attempt')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('Profile')))
+    expect(sessionGroups.assignments).toHaveLength(0)
+    expect(h.agents.created).toHaveLength(0)
+
+    await h.emitMessage('retry')
+    await waitFor(() => h.agents.created.length === 1)
+    expect(sessionGroups.assignments).toHaveLength(1)
+    expect(h.bridge.provisionalAgentCount()).toBe(0)
+  })
+
+  it('uses exactly one app-scoped prefix for every multi-bot Session path', async () => {
+    const h = await makeHarness({}, { resolvedConfig: {
+      botId: 'bot-a', sessionNamespace: 'app', multiBot: true,
+    } })
+    await h.emitMessage('app scoped task')
+    await waitFor(() => h.agents.created.length === 1)
+    const expected = sessionPrefixForBot('cli_test', 'p2p:oc_p2p')
+    expect(h.agents.created[0]!.options.sessionId).toMatch(new RegExp(`^${expected}-`, 'u'))
+    expect(String(h.agents.created[0]!.options.sessionId)).not.toMatch(new RegExp(`^${sessionPrefix('p2p:oc_p2p')}-`, 'u'))
+    await h.emitMessage('/sessions')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('历史 Session')))
+  })
+
+  it('uses the configured default Workspace before showing a chooser', async () => {
+    const h = await makeHarness({}, { resolvedConfig: {
+      workspacePolicy: 'default',
+      defaultWorkspace: { id: 'ws_default', path: '/unused', title: 'Default Project' },
+    } })
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    await h.emitMessage('use configured default')
+    await waitFor(() => h.agents.created.length === 1)
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: h.workspace })
+    expect(cardActionFromChannel(h, 'workspace-select')).toBeUndefined()
+  })
+
+  it('locks every Workspace choke point to the configured default', async () => {
+    const h = await makeHarness({}, { resolvedConfig: {
+      workspacePolicy: 'locked',
+      defaultWorkspace: { id: 'ws_default', path: '/unused', title: 'Locked Project' },
+    } })
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    await h.emitMessage(`/workspace use ${otherPath}`)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('管理员锁定')))
+    expect(h.agents.created).toHaveLength(0)
+    await h.emitMessage('normal task')
+    await waitFor(() => h.agents.created.length === 1)
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: h.workspace })
+  })
+
+  it('shows locked Workspace status for bare /workspace without opening a chooser', async () => {
+    const h = await makeHarness({}, { resolvedConfig: {
+      workspacePolicy: 'locked',
+      defaultWorkspace: { id: 'ws_default', path: '/unused', title: 'Locked Project' },
+    } })
+    await h.emitMessage('/workspace')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('已由管理员锁定')))
+    expect(cardActionFromChannel(h, 'workspace-select')).toBeUndefined()
+  })
+
+  it('rejects a stale chooser card after policy becomes locked', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    await h.emitMessage('/workspace')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other') !== undefined)
+    h.config.workspacePolicy = 'locked'
+    h.config.defaultWorkspace = { id: 'ws_default', path: h.workspace, title: 'Locked Project' }
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other')!)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('管理员锁定')))
+    expect(h.agents.created).toHaveLength(0)
+  })
+
   it('pauses the first prompt when multiple Workspaces exist, then replays it after card selection', async () => {
     const h = await makeHarness()
     const otherPath = await tempWorkspace()
@@ -2139,8 +2350,12 @@ describe('preset setup and ask-user blocking', () => {
     const h = await makeHarness()
     const order: string[] = []
     const agentCtx = {
+      agent: {} as never,
       tools: { restrict: (filter: unknown) => { order.push(`restrict:${JSON.stringify(filter)}`) } },
-      systemPrompt: { section: () => undefined },
+      systemPrompt: {
+        section: () => undefined,
+        assemble: async () => ({ sections: [{ name: 'feishu-remote', text: '' }], contexts: [], tools: [], variables: {} }),
+      },
       on: (name: string) => { order.push(`on:${name}`); return () => undefined },
     }
     await (h.bridge as unknown as { setupAgent: (agentCtx: never, presetId?: string) => Promise<void> }).setupAgent(agentCtx as never, 'standard')
@@ -2150,6 +2365,45 @@ describe('preset setup and ask-user blocking', () => {
       'restrict:{"deny":["ask_user_question","exit_plan_mode"]}',
       'on:agent/pre-step',
     ])
+  })
+
+  it('injects Profile through a legal variable and asserts final prompt visibility', async () => {
+    const h = await makeHarness()
+    const variables = new Map<string, () => string>()
+    const sections: Array<{ name: string; text: string }> = []
+    const profile: ProfileSnapshot = {
+      path: '/profiles/bot.md', text: '# Bot\n\nKeep {{example}} literal.', digest: 'a'.repeat(64), bytes: 32, loadedAt: 1,
+    }
+    const agentCtx = {
+      agent: {} as never,
+      tools: { restrict: vi.fn() },
+      systemPrompt: {
+        variable: (name: string, provider: () => string) => { variables.set(name, provider) },
+        section: (section: { name: string; text: string }) => { sections.push(section) },
+        assemble: async () => ({ sections, contexts: [], tools: [], variables: {} }),
+      },
+      on: vi.fn(() => () => undefined),
+    }
+    await (h.bridge as unknown as { setupAgent: (ctx: never, preset?: string, profile?: ProfileSnapshot) => Promise<void> })
+      .setupAgent(agentCtx as never, 'standard', profile)
+    expect([...variables.keys()]).toEqual(['feishu_bot_profile'])
+    expect(variables.get('feishu_bot_profile')?.()).toContain('{{example}}')
+    expect(sections.map(section => section.name)).toEqual(['feishu-bot-profile', 'feishu-remote'])
+  })
+
+  it('fails closed when a complete preset suppresses the Feishu safety sections', async () => {
+    const h = await makeHarness()
+    const agentCtx = {
+      agent: {} as never,
+      tools: { restrict: vi.fn() },
+      systemPrompt: {
+        section: vi.fn(),
+        assemble: async () => ({ sections: [{ name: 'deployment:persona', text: 'complete' }], contexts: [], tools: [], variables: {} }),
+      },
+      on: vi.fn(() => () => undefined),
+    }
+    await expect((h.bridge as unknown as { setupAgent: (ctx: never, preset?: string) => Promise<void> })
+      .setupAgent(agentCtx as never, 'complete')).rejects.toThrow('suppresses the required feishu-remote')
   })
 })
 
@@ -2266,7 +2520,7 @@ describe('switch guards (Codex review #2 F2/F5)', () => {
     await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('下一条普通消息')))
     await h.emitMessage('second')
     await waitFor(() => h.agents.created.length === 2)
-    expect(firstAgent.disposed).toBe(true)
+    await waitFor(() => firstAgent.disposed, 'retired first agent')
   })
 })
 

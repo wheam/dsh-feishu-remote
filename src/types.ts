@@ -12,8 +12,27 @@ import type {
 
 export type LarkBrand = 'feishu' | 'lark' | 'larkoffice'
 
+export type SessionNamespace = 'legacy' | 'app'
+export type WorkspacePolicy = 'default' | 'locked'
+
+export interface ResolvedWorkspaceDefault {
+  id: string
+  path: string
+  title: string
+}
+
+export interface ProfileSnapshot {
+  path: string
+  text: string
+  digest: string
+  bytes: number
+  loadedAt: number
+}
+
 /** Runtime configuration after environment fallbacks and legacy-path normalization. */
 export interface ResolvedConfig {
+  /** Stable operator-facing key. Legacy single-bot mode uses `legacy`. */
+  botId: string
   appId: string
   appSecret: string
   appSecretRef: string
@@ -50,6 +69,28 @@ export interface ResolvedConfig {
   contextMaxChars: number
   contextTimeoutMs: number
   contextIncludeBot: boolean
+  sessionNamespace: SessionNamespace
+  workspacePolicy: WorkspacePolicy
+  defaultWorkspace?: ResolvedWorkspaceDefault
+  profileFile?: string
+  /** Raw selector used only while manager resolves a Workspace ID/path. */
+  defaultWorkspaceSelector?: string
+  /** True only when the root `bots[]` shape is active. */
+  multiBot: boolean
+}
+
+export interface BotRuntimeStatus {
+  id: string
+  appId?: string
+  enabled: boolean
+  status: 'starting' | 'connected' | 'degraded' | 'disabled' | 'stopping'
+  error?: string
+  connected: boolean
+  terminalFailure: boolean
+  liveAgents: number
+  provisionalAgents: number
+  lastConnectedAt?: number
+  profile?: Pick<ProfileSnapshot, 'path' | 'digest' | 'bytes' | 'loadedAt'>
 }
 
 /** Per-turn context-backfill stats (docs/13 F10: exact turn attribution). */

@@ -191,6 +191,7 @@ export function buildApprovalCard(input: ApprovalCardInput): object {
 }
 
 export interface StatusCardInput {
+  botId?: string
   sessionId: string
   status: 'idle' | 'running'
   cwd: string
@@ -208,6 +209,11 @@ export interface StatusCardInput {
     unavailable?: string
     circuitOpen: boolean
   }
+  workspacePolicy?: 'default' | 'locked'
+  defaultWorkspaceTitle?: string
+  agentPreset?: string
+  profile?: { basename: string; bytes: number; digest: string; loadedAt: number }
+  capacity?: { live: number; provisional: number; totalLive?: number; totalProvisional?: number; maxTotal?: number }
 }
 
 export function buildStatusCard(input: StatusCardInput): object {
@@ -222,6 +228,25 @@ export function buildStatusCard(input: StatusCardInput): object {
       : input.context.backend === undefined
         ? `**飞书上下文**：不可用（${input.context.unavailable ?? '未找到 lark-cli'}）`
         : `**飞书上下文**：已启用（${input.context.backend}）`
+  const optional = [
+    ...(input.botId === undefined ? [] : [`**机器人**：${bounded(redactSecrets(input.botId), 60)}`]),
+    ...(input.workspacePolicy === undefined ? [] : [
+      `**Workspace 策略**：${input.workspacePolicy === 'locked' ? 'locked（管理员锁定）' : 'default'}`,
+    ]),
+    ...(input.defaultWorkspaceTitle === undefined ? [] : [
+      `**默认 Workspace**：${bounded(redactSecrets(input.defaultWorkspaceTitle), 80)}`,
+    ]),
+    ...(input.agentPreset === undefined ? [] : [`**Agent preset**：${bounded(input.agentPreset, 80)}`]),
+    ...(input.profile === undefined ? [] : [
+      `**Profile**：${bounded(input.profile.basename, 80)} · ${input.profile.bytes} bytes · ${input.profile.digest.slice(0, 12)}`,
+    ]),
+    ...(input.capacity === undefined ? [] : [
+      `**本机器人 Agent**：${input.capacity.live} live / ${input.capacity.provisional} provisional`,
+      ...(input.capacity.totalLive === undefined ? [] : [
+        `**全部飞书机器人 Agent**：${input.capacity.totalLive} live / ${input.capacity.totalProvisional ?? 0} provisional${(input.capacity.maxTotal ?? 0) > 0 ? ` / 上限 ${input.capacity.maxTotal}` : ''}`,
+      ]),
+    ]),
+  ]
   return card('DeepSeek Harness Feishu Remote', input.connected ? 'blue' : 'red', [
     markdown([
       `**状态**：${status}`,
@@ -232,6 +257,7 @@ export function buildStatusCard(input: StatusCardInput): object {
       `**待审批**：${input.pendingApprovals}`,
       `**送达失败（审计）**：${input.failedDeliveries}`,
       contextLine,
+      ...optional,
     ].join('\n')),
   ], `${status} · ${input.model}`)
 }

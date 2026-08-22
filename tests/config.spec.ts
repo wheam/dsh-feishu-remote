@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ConfigSchema, resolveConfig } from '../src/config.js'
+import { ConfigSchema, resolveBotRuntimeConfig, resolveConfig, validateMultiBotConfig } from '../src/config.js'
 
 const BASE = {
   appId: 'cli_test',
@@ -94,5 +94,47 @@ describe('resolveConfig (Workspace Registry routing, fail-closed sender access)'
     expect(resolved.interactiveTimeoutMs).toBe(10 * 60 * 1000)
     expect(resolved.contextP2pMaxMessages).toBe(80)
     expect(resolved.contextP2pMaxChars).toBe(50000)
+    expect(resolved.bots).toEqual([])
+    expect(resolved.maxTotalLiveAgents).toBe(0)
+  })
+
+  it('validates multi-bot root identity and namespace invariants', () => {
+    expect(() => validateMultiBotConfig([
+      { id: 'bot-a', appId: 'cli_same', appSecretRef: 'REF_A' },
+      { id: 'bot-b', appId: 'cli_same', appSecretRef: 'REF_B' },
+    ])).toThrow('duplicate appId')
+    expect(() => validateMultiBotConfig([
+      { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', sessionNamespace: 'legacy' },
+      { id: 'bot-b', appId: 'cli_b', appSecretRef: 'REF_B', sessionNamespace: 'legacy' },
+    ])).toThrow('at most one')
+    expect(() => validateMultiBotConfig([
+      { id: 'Bad ID', appId: 'cli_a', appSecretRef: 'REF_A' },
+    ])).toThrow('invalid bot id')
+  })
+
+  it('does not inherit shared legacy environment fallbacks in bots[]', async () => {
+    const ctx = { credentials: { resolve: async () => ({ value: 'bot-secret' }) } }
+    const resolved = await resolveBotRuntimeConfig(ctx as never, {
+      id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', allowedOpenIds: [], contextBackend: 'auto',
+    }, {
+      DSH_FEISHU_APP_ID: 'cli_wrong',
+      DSH_FEISHU_APP_SECRET: 'wrong-secret',
+      DSH_FEISHU_ALLOW_ALL_USERS: '1',
+      DSH_FEISHU_ALLOWED_OPEN_IDS: 'ou_wrong',
+      DSH_FEISHU_CLI_PATH: '/wrong/cli',
+    })
+    expect(resolved).toMatchObject({
+      botId: 'bot-a', appId: 'cli_a', appSecret: 'bot-secret', allowAllUsers: false,
+      allowedOpenIds: [], contextBackend: 'sdk', feishuCliPath: '', multiBot: true,
+    })
+  })
+
+  it('requires a default Workspace for locked policy and forbids CLI in bots[]', () => {
+    expect(() => validateMultiBotConfig([
+      { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', workspacePolicy: 'locked' },
+    ])).toThrow('requires defaultWorkspace')
+    expect(() => validateMultiBotConfig([
+      { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', contextBackend: 'cli' },
+    ])).toThrow('requires contextBackend=sdk')
   })
 })

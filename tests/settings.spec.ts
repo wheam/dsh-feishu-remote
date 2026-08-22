@@ -75,4 +75,19 @@ describe('settings namespace (flat ↔ nested)', () => {
     expect(json).toContain('appSecretRef')
     expect(json).not.toContain('"appSecret"')
   })
+
+  it('round-trips bots[] and process capacity without carrying secret values', () => {
+    const flat = flatten({
+      maxTotalLiveAgents: 9,
+      bots: [{
+        id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', profileFile: '/profiles/a.md',
+        defaultWorkspace: '/work/a', sessionNamespace: 'app', statePath: '/state/a.json',
+      }],
+    })
+    expect(flat.maxTotalLiveAgents).toBe(9)
+    expect(flat.bots[0]).toMatchObject({ id: 'bot-a', appSecretRef: 'REF_A', statePath: '/state/a.json' })
+    expect(JSON.stringify(flat)).not.toContain('"appSecret"')
+    const roundTrip = unflatten(flat, {})
+    expect(roundTrip.bots?.[0]).toMatchObject({ id: 'bot-a', profileFile: '/profiles/a.md', statePath: '/state/a.json' })
+  })
 })

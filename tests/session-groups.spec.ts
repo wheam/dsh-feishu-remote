@@ -1,7 +1,25 @@
 import { describe, expect, it, vi } from 'vitest'
-import { feishuSessionGroupId, resolveFeishuSessionGroup } from '../src/session-groups.js'
+import { feishuSessionGroupId, feishuSessionGroupIdForBot, resolveFeishuSessionGroup } from '../src/session-groups.js'
 
 describe('Feishu session-group provider', () => {
+  it('keeps legacy ids byte-compatible and isolates app-scoped group ids', () => {
+    expect(feishuSessionGroupIdForBot('legacy', 'cli_a', 'oc_same')).toBe(feishuSessionGroupId('oc_same'))
+    expect(feishuSessionGroupIdForBot('app', 'cli_a', 'oc_same')).not.toBe(feishuSessionGroupIdForBot('app', 'cli_b', 'oc_same'))
+  })
+
+  it('adds one readable bot suffix without changing app-scoped identity on refresh', async () => {
+    const identity = { namespace: 'app' as const, appId: 'cli_a', botId: 'bot-a' }
+    const channel = { getMessage: vi.fn(), getChatInfo: vi.fn(async () => ({ chatId: 'oc_same', name: 'Team', chatType: 'group' as const })) }
+    const first = await resolveFeishuSessionGroup({
+      chatId: 'oc_same', chatType: 'group', messageId: 'om_1', senderId: 'ou_1', senderName: 'Alice',
+    }, channel, 'group', undefined, identity)
+    const fallback = await resolveFeishuSessionGroup({
+      chatId: 'oc_same', chatType: 'group', messageId: 'om_2', senderId: 'ou_1', senderName: 'Alice',
+    }, { getMessage: vi.fn() }, 'group', first.title, identity)
+    expect(first.title).toBe('Team · bot-a')
+    expect(fallback.title).toBe('Team · bot-a')
+    expect(fallback.id).toBe(first.id)
+  })
   it('groups a private chat by participant and stable chat identity', async () => {
     const group = await resolveFeishuSessionGroup({
       chatId: 'oc_private',

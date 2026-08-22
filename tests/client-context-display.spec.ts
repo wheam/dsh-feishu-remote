@@ -39,3 +39,18 @@ describe('legacy Feishu transcript display', () => {
     expect(split('普通用户问题')).toBeUndefined()
   })
 })
+
+describe('multi-bot editor serialization', () => {
+  const serialize = loadClientExports().serializeBotDraft as (bot: Record<string, unknown>) => Record<string, unknown>
+
+  it('keeps list editing as raw text and splits it only at the save boundary', () => {
+    expect(serialize({
+      id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A',
+      allowedOpenIds: 'ou_a, ou_b ', allowedChatIds: 'oc_a\noc_b',
+      statePath: '/host-only',
+    })).toEqual({
+      id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A',
+      allowedOpenIds: ['ou_a', 'ou_b'], allowedChatIds: ['oc_a', 'oc_b'],
+    })
+  })
+})

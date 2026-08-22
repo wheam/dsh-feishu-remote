@@ -57,6 +57,15 @@ export function sessionPrefix(key: string): string {
   return `feishu-${digest}`
 }
 
+export function sessionPrefixForBot(appId: string, key: string): string {
+  const digest = createHash('sha256').update(`app:${appId}\0${key}`).digest('hex').slice(0, 24)
+  return `feishu-${digest}`
+}
+
+export function effectiveSessionPrefix(namespace: 'legacy' | 'app', appId: string, key: string): string {
+  return namespace === 'legacy' ? sessionPrefix(key) : sessionPrefixForBot(appId, key)
+}
+
 export function freshSessionId(prefix: string, now = Date.now()): SessionId {
   return SessionId(`${prefix}-${now.toString(36)}`)
 }

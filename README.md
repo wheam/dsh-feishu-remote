@@ -17,6 +17,10 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 **真实飞书租户端到端初验已通过（2026-08-19）**：私聊 `/help` 回命令卡，白名单/长连接/
 事件订阅全链路正常（见 docs/09 §7 验收记录）。
 
+**多机器人、默认 Workspace 与 Markdown Profile 已实现（2026-08-23）**：同一个 `dsh web`
+进程可运行多个飞书 App；机器人级配置、Session/group 身份、状态文件、附件、审批、上下文和限流
+相互隔离。自动化测试与构建已覆盖，两个真实 App 的同群并发验收仍需按 docs/17 §14.8 执行。
+
 ## 已实现的功能
 
 - **内嵌 web profile**：`apply()` 只做同步注册、**永不 reject**；飞书长连接放后台 effect，断网重连 / 通道终态失效（SDK 停止重连）→ 结算全部待审批为 `unavailable`、`/status` 标红、退避重建 channel。
@@ -31,6 +35,7 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 - **安全、普通群触发与话题激活**：发送者白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围默认开放，非空 `allowedChatIds` 可选收窄。普通群的所有成员消息可进入历史窗口，但每一轮都必须由白名单用户明确 @机器人；未 @时不创建 Session、不执行命令、不调用 Agent。话题群中每个话题首次需 @激活，首次 @ 回填前文，之后同话题可免 @；其他话题保持静默。白名单外消息不能激活或驱动 Agent。
 - **命令集**：`/workspace` `/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/help` `/commands`；旧 `/view` 与旧卡片动作仅返回停用提示。Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
 - **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
+- **多机器人管理**：一个 `FeishuBotManager` keyed reconcile 多个 Bridge；每个 bot 独立 App 凭据、访问控制、默认/锁定 Workspace、Agent preset、provider/model 和 Markdown Profile。新 bot 的 Session/group id 包含 app identity，转换出的原 bot 保留 legacy id；全局 `maxTotalLiveAgents` 同时统计 live 与 provisional Agent。Web GUI 提供机器人列表、运行状态、CAS 保存和显式 legacy 转换。
 - **飞书上下文回填（docs/13 v1.3）**：触发普通消息时注入上下文——普通群/话题读取最近 150 条/100,000 字符，长期私聊另受更紧的 80 条/50,000 字符上限约束（均可配置）。普通群未 @消息不会单独触发读取或 Agent，但下次 @时会通过全群 chat history 进入增量窗口。官方 `lark-cli` 主路径（`@larksuite/cli@1.0.88` optional 依赖 + postinstall 自动装二进制，`pnpm-workspace.yaml allowBuilds` 放行；CLI 缺失自动降级已 bundle 的 SDK 直连，`contextBackend: auto|cli|sdk`）；增量水位窗口 + 因果 cutoff + JSON 帧防注入 + system prompt 不可信边界规则；全局并发 2 + 熔断；控制命令零拉取。群历史需 `im:message.group_msg` 权限（docs/09 §3）。
 
 ## Workspace 工作区
@@ -43,6 +48,49 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
    等 Mac 常用目录开始新建，或直接发送 `~/Projects/my-project` 这样的自定义路径；
 3. 绑定完成后，第一条任务自动继续执行。若 Registry 里只有一个可用 Workspace，则直接绑定；
 4. 已有飞书会话升级后，会按照原 Session 已记录的工作目录迁移，不会突然切到其他项目。
+
+机器人可配置 `defaultWorkspace` 作为首次绑定 fallback；`workspacePolicy: locked` 会强制所有来源
+使用该 Workspace，并在命令、文本输入和旧卡片三个入口统一拒绝切换。
+
+## 多机器人与 Profile
+
+在本机 Web GUI 的「飞书遥控」页面点击「转换为多机器人配置」，原机器人会保留已有 Session
+身份。之后可新增 bot，并为每个 bot 配置默认 Workspace 和 `profileFile`。Profile 是本机管理员
+维护的 Markdown system-prompt 增量，建议 2–8 KiB，固定上限 32 KiB；文件必须为安全权限的 UTF-8
+普通文件。Profile 内容会发送给所配置的模型提供商，禁止放入 App Secret、API key 或密码。
+每个飞书 Agent 在发布前都会验证最终 system prompt 仍包含飞书安全段；会用
+`complete: true` 吞掉该段的自定义 preset 将 fail closed，即使未配置 Profile 也一样。
+
+手工配置示例：
+
+```yaml
+- id: dsh-feishu-remote
+  disabled: false
+  config:
+    maxTotalLiveAgents: 12
+    bots:
+      - id: curio-ops
+        appId: cli_xxxxxxxxxxxxx
+        appSecretRef: DSH_FEISHU_CURIO_OPS_SECRET
+        allowedOpenIds: [ou_xxx]
+        defaultWorkspace: /Users/me/Projects/curio
+        workspacePolicy: locked
+        profileFile: /Users/me/.dsh/bot-profiles/curio-ops.md
+        agentPreset: standard
+        contextBackend: sdk
+        maxLiveAgents: 4
+      - id: general-helper
+        appId: cli_yyyyyyyyyyyyy
+        appSecretRef: DSH_FEISHU_GENERAL_SECRET
+        allowedOpenIds: [ou_xxx]
+        defaultWorkspace: /Users/me/Projects
+        workspacePolicy: default
+        profileFile: /Users/me/.dsh/bot-profiles/general-helper.md
+        contextBackend: sdk
+```
+
+多机器人统一使用 SDK 上下文后端，避免共享 lark-cli profile 串用 App。每个 `appSecretRef` 仍由
+DSH credential provider 解析；`bots[]` 中不存 Secret 值。
 
 常用命令：
 
@@ -137,6 +185,7 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
 | [docs/14-context-codex-review.md](docs/14-context-codex-review.md) | docs/13 的 Codex 独立 review 记录（15 项 findings 处置对照，修订已并入规格） |
 | [docs/15-context-impl-review.md](docs/15-context-impl-review.md) | 飞书上下文回填实现阶段 Codex review（14 项 findings 处置对照，修订已并入实现） |
 | [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) | PersonalAgent 一次扫码创建机器人、自动保存凭据与 owner、权限降级及发布验收（实现与自动化测试已完成，真实租户待验收） |
+| [docs/17-multi-bot-workspace-profile.md](docs/17-multi-bot-workspace-profile.md) | 多机器人、默认/锁定 Workspace、Markdown Profile、迁移、回滚与测试矩阵（已实现，双真实 App E2E 待验收） |
 
 ## 隐私与数据流（飞书上下文回填）
 
@@ -157,6 +206,8 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
   子进程的 argv 或环境变量。
 - 另注意：`feishuCliPath`（任意可执行路径）仅作为受信任管理员配置（cordis.patch.yml / 环境变量），
   Web GUI 设置卡不可修改——它等价于本机代码执行权限。
+- 配置 `profileFile` 后，Profile 正文会作为每次模型请求的 system prompt 一部分发送给模型提供商；
+  `/status` 和管理 RPC 只显示路径元数据、大小与 digest，不返回正文。多机器人模式不使用共享 CLI profile。
 
 ## 许可
 

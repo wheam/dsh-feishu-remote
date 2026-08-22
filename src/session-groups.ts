@@ -50,6 +50,16 @@ export function feishuSessionGroupId(chatId: string): SessionGroupId {
   return `feishu-${digest}` as SessionGroupId
 }
 
+export function feishuSessionGroupIdForBot(
+  namespace: 'legacy' | 'app',
+  appId: string,
+  chatId: string,
+): SessionGroupId {
+  if (namespace === 'legacy') return feishuSessionGroupId(chatId)
+  const digest = createHash('sha256').update(`app:${appId}\0${chatId}`).digest('hex').slice(0, 24)
+  return `feishu-${digest}` as SessionGroupId
+}
+
 /**
  * Resolve one provider descriptor. Metadata lookup is deliberately fail-open:
  * grouping must never indefinitely delay or prevent Session creation.
@@ -59,6 +69,7 @@ export async function resolveFeishuSessionGroup(
   channel: GroupLookupChannel,
   groupKind: 'group' | 'topic' = 'topic',
   fallbackTitle?: string,
+  identity?: { namespace: 'legacy' | 'app'; appId: string; botId: string },
 ): Promise<SessionGroupDescriptor> {
   let title: string
   let kind: 'private' | 'group' | 'topic'
@@ -81,9 +92,11 @@ export async function resolveFeishuSessionGroup(
     title = chatName ?? fallbackTitle ?? (groupKind === 'topic' ? '飞书话题群' : '飞书群聊')
     kind = groupKind
   }
+  const legacy = identity === undefined || identity.namespace === 'legacy'
+  const scopedTitle = legacy || title.endsWith(` · ${identity.botId}`) ? title : `${title} · ${identity.botId}`
   return Object.freeze({
-    id: feishuSessionGroupId(message.chatId),
-    title,
+    id: legacy ? feishuSessionGroupId(message.chatId) : feishuSessionGroupIdForBot('app', identity.appId, message.chatId),
+    title: scopedTitle,
     source: 'feishu',
     kind,
   })

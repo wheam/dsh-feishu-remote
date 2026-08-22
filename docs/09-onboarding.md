@@ -45,13 +45,24 @@
 
 ## 6. 配置插件
 
+### 6.1 多机器人配置
+
+一个 `dsh web` 进程现在可以运行多个飞书 App。先在 Host 本机 Web GUI 的「飞书遥控」页面把
+legacy 配置显式转换为多机器人配置，再新增机器人；原机器人保留 legacy Session 身份，新机器人
+使用包含 app identity 的隔离身份。每个 bot 使用独立 `appSecretRef`，并可配置
+`defaultWorkspace`、`workspacePolicy: default|locked`、`profileFile` 和 `agentPreset`。
+
+多机器人上下文后端固定为 `sdk`；不要配置 `contextBackend: cli`，共享 lark-cli profile 无法安全
+隔离多个 App。Profile 必须是本机安全权限的 UTF-8 Markdown 普通文件，最大 32 KiB，正文会发送给
+模型提供商，禁止包含凭据。
+
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
 - id: dsh-feishu-remote
   disabled: false
   config:
     appId: 'cli_xxxx'
-    allowedOpenIds: ['ou_xxxx']   # 白名单外消息会在宿主日志回显 open_id 供自举
+    allowedOpenIds: ['ou_xxxx']   # 建议用 Host 本机扫码自动绑定；手工配置时从飞书管理端取完整 open_id
     allowedChatIds: []            # 空 = 任意已加入群可用；填写 oc_xxxx 可选地限制群范围
     requireMention: true          # 话题首次需 @；普通群始终每轮必须 @
 ```
