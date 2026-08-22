@@ -1446,7 +1446,11 @@ export class FeishuRemoteBridge {
         const origin = entry.turnOrigin.get(event.data.turn) ?? 'gui'
         entry.activeTurnOrigin = origin
         entry.activeReply = entry.turnReply.get(event.data.turn)
-          ?? { replyInThread: entry.route.replyInThread }
+          // Runtime-generated turns (for example, a continuable subagent's
+          // settlement notice) have no Feishu inbox claim of their own. Keep
+          // them anchored to the Session's latest topic message; Feishu only
+          // honors replyInThread when a concrete replyTo is also present.
+          ?? { replyTo: entry.route.replyTo, replyInThread: entry.route.replyInThread }
         const progress: TurnProgress = {
           turn: event.data.turn,
           startedAt: event.time,
@@ -1668,7 +1672,8 @@ export class FeishuRemoteBridge {
     // Stamp the immutable reply context once per turn (claim may have landed
     // after turn/start; this runs on the first chunk at the earliest).
     if (progress.reply === undefined) {
-      progress.reply = entry.activeReply ?? { replyInThread: entry.route.replyInThread }
+      progress.reply = entry.activeReply
+        ?? { replyTo: entry.route.replyTo, replyInThread: entry.route.replyInThread }
     }
     const { card, truncated } = this.fitCardBudget(entry, progress, resolvedOutcome, resolvedDetail)
     progress.truncated = progress.truncated === true || truncated

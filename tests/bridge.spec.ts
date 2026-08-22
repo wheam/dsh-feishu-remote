@@ -691,6 +691,46 @@ describe('session creation and mapping', () => {
     expect(threadCard.options).toEqual({ replyTo: inboundId, replyInThread: true })
   })
 
+  it('keeps runtime-generated follow-up turns in the originating Feishu topic', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('让 subagent 在后台处理', {
+      chatId: 'oc_grp',
+      chatType: 'group',
+      threadId: 'omt_background',
+      rootId: 'om_root_background',
+    })
+    const inboundId = `om_in_${messageSeq}`
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    const feishuMessage = agent.followups.at(-1) as { id?: unknown }
+
+    // The Feishu-triggered turn starts the continuable child and ends.
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitClaim(sessionId, feishuMessage.id, 1)
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: '后台任务已启动。' }] },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.filter(item => item.input.card !== undefined).length === 1)
+
+    // A subagent settlement notice wakes the parent without a Feishu claim.
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 2 })
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 2,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: '后台任务已经完成。' }] },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.filter(item => item.input.card !== undefined).length === 2)
+
+    const completedCard = h.channel.sent.filter(item => item.input.card !== undefined).at(-1)!
+    expect(completedCard.options).toEqual({ replyTo: inboundId, replyInThread: true })
+    expect(JSON.stringify(completedCard.input.card)).toContain('后台任务已经完成。')
+  })
+
   it('reuses the live session per origin; separate threads get separate sessions', async () => {
     const h = await makeHarness()
     await h.emitMessage('first')
