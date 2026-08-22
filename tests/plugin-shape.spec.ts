@@ -43,6 +43,8 @@ describe('dsh-feishu-remote loader contract', () => {
     expect(client).toContain('key: SETTINGS_NS')
     expect(client).toContain('connection.isLoopback === false')
     expect(client).toContain('key: "onboarding"')
+    expect(client).toContain('"确认转换"')
+    expect(client).not.toContain('window.confirm("转换会原子改写配置')
     expect(client).not.toContain('selectField("brand", ["feishu", "lark", "larkoffice"])')
     expect(client).not.toContain('id: "dsh-feishu-remote",\n\t\t\t\torder: 60')
   })

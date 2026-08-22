@@ -485,6 +485,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function MultiBotPanel(props) {
+			const [confirmingLegacyConversion, setConfirmingLegacyConversion] = react.useState(false);
 			const hook = props.useFeishuBotAdmin;
 			if (hook === void 0) return null;
 			const state = hook(value => value);
@@ -497,7 +498,13 @@ window.__ModuleLoader__.load({
 				react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "多机器人模式" }),
 				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: "转换会保留原机器人的 legacy Session 身份，并启用逐机器人默认 Workspace 与 Profile。" }),
 				state.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error }) : null,
-				react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving || props.cardDirty || !state.writable, onClick: props.convertLegacy, children: "转换为多机器人配置" })
+				confirmingLegacyConversion ? react_jsx_runtime.jsxs(react.Fragment, { children: [
+					react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, role: "status", children: "此操作会原子改写配置：原机器人保留 legacy Session 身份，多机器人上下文固定改用 SDK；未显式配置的入站目录将改为 App 隔离路径。新机器人使用 App 隔离身份。" }),
+					react_jsx_runtime.jsxs("div", { className: cssDefault.actions, children: [
+						react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving, onClick: () => setConfirmingLegacyConversion(false), children: "取消" }),
+						react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || props.cardDirty || !state.writable, onClick: () => { setConfirmingLegacyConversion(false); props.convertLegacy(); }, children: state.saving ? "转换中…" : "确认转换" })
+					] })
+				] }) : react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving || props.cardDirty || !state.writable, onClick: () => setConfirmingLegacyConversion(true), children: "转换为多机器人配置" })
 			] });
 			const statuses = new Map((state.statuses ?? []).map(item => [item.id, item]));
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.botList, children: [
@@ -784,7 +791,6 @@ window.__ModuleLoader__.load({
 			}
 			async convertLegacy() {
 				if (this.snapshot.saving || !this.snapshot.writable) return;
-				if (typeof window !== "undefined" && !window.confirm("转换会原子改写配置：原机器人保留 legacy Session 身份，多机器人上下文固定改用 SDK；未显式配置的入站目录将改为 App 隔离路径。新机器人使用 App 隔离身份。继续吗？")) return;
 				this.publish({ saving: true, error: void 0 });
 				try { await this.request("settings/convert-legacy"); await this.refresh(true); }
 				catch (error) { this.publish({ error: error instanceof Error ? error.message : String(error) }); }
