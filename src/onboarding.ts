@@ -233,6 +233,22 @@ function stringArray(value: unknown): string[] | undefined {
     : undefined
 }
 
+/**
+ * The legacy tenant-token endpoint returns the token at the response root,
+ * while the generated v1.73 SDK type models it inside `data`. Accept both
+ * envelopes so a successful credential probe is not reported as a failure.
+ */
+function tenantAccessTokenFrom(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const response = raw as Record<string, unknown>
+  if (typeof response.tenant_access_token === 'string' && response.tenant_access_token !== '') {
+    return response.tenant_access_token
+  }
+  if (typeof response.data !== 'object' || response.data === null) return undefined
+  const token = (response.data as Record<string, unknown>).tenant_access_token
+  return typeof token === 'string' && token !== '' ? token : undefined
+}
+
 /** Read the v6 app projection without retaining its secret-bearing raw shape. */
 export function inspectAppProjection(raw: unknown): AppProbe {
   const app = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {}
@@ -309,7 +325,7 @@ export async function probePersonalAgent(
   const token = await timeout(client.auth.v3.tenantAccessToken.internal({
     data: { app_id: appId, app_secret: appSecret },
   }), 15_000, '验证飞书应用凭据超时，请检查网络后重试。')
-  if (token.code !== 0 || token.data?.tenant_access_token === undefined) {
+  if (token.code !== 0 || tenantAccessTokenFrom(token) === undefined) {
     throw new OnboardingError('credential_probe_failed', '飞书没有接受新应用凭据，请重新扫码。')
   }
 
