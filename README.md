@@ -1,65 +1,302 @@
 # dsh-feishu-remote
 
-用飞书远程操控 Mac 上**正在运行**的 DeepSeek Harness 服务——把飞书机器人变成当前 dsh 会话的遥控器。
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+把飞书或 Lark 变成 Mac 上 **DeepSeek Harness（DSH）Web 服务的远程控制端**。
+
+你可以在手机上给本机 Agent 发任务、查看流式进度、批准或拒绝工具调用、切换 Workspace，
+并继续使用 Web GUI 中的同一批 Session、模型、凭据和工具。
+
+```text
+手机飞书 / Lark
+       ⇅
+飞书云端（官方长连接，无需公网回调）
+       ⇅
+dsh-feishu-remote（运行在 dsh web 进程内）
+       ⇅
+DSH Agent · Session · Workspace · Web GUI
 ```
-手机飞书 ⇄ 插件（内嵌 dsh web 进程）⇄ 与 Web GUI 同一批会话
+
+## 它解决什么问题
+
+DSH 原本主要通过本机 Web GUI 使用。这个插件为**已经运行的 `dsh web`**增加一个飞书入口，
+适合在离开电脑后继续处理任务：
+
+- 在飞书里发消息，任务直接进入本机 DSH；
+- Agent 请求敏感工具操作时，在飞书审批卡片中批准或拒绝；
+- 飞书创建的 Session 同时出现在 Web GUI，不会另起一套 Agent 服务或会话数据库；
+- 私聊、普通群和话题群按稳定规则隔离 Session；
+- 每个聊天来源可以选择自己的 DSH Workspace；
+- 一台 Mac 上可以同时运行多个、配置彼此隔离的飞书机器人。
+
+它**不是**云端托管服务，也不会让关机或休眠的 Mac 继续工作。Mac、`dsh web` 和网络连接都必须
+保持可用。插件代码与 DSH 运行在同一进程、拥有同一系统用户的权限，安装前应像审查其他本机
+Agent 插件一样审查源码。
+
+## 当前状态
+
+本项目目前是**源码安装的开发者预览版**：
+
+- 精确兼容 DSH `0.1.1-rc.2`，其他版本默认视为不兼容；
+- 核心链路已经通过自动化测试、真实 `dsh web` 加载和企业自建飞书应用初验；
+- PersonalAgent 扫码开通、多机器人、Workspace 与 Markdown Profile 已实现并通过自动化测试；
+- PersonalAgent 的真实 Feishu/Lark 租户全矩阵验收、双真实 App 并发验收仍待完成；
+- 尚未提供公开 npm 包或本项目的预构建 Release，当前需要克隆源码后本地构建。
+
+DSH 仍处于 RC 阶段，相邻 RC 版本可能包含破坏性变化。安装、更新或启用前都必须先运行仓库内的
+兼容性检查。
+
+## 主要能力
+
+### 会话与群聊路由
+
+| 飞书场景 | 触发规则 | DSH Session |
+| --- | --- | --- |
+| 私聊 | 白名单用户直接发消息 | 每个私聊来源独立 |
+| 普通群 | 每一轮都必须由白名单用户明确 `@机器人` | 整个群共用一个 |
+| 话题群 | 每个话题第一次必须 `@机器人` 激活；之后该话题可免 `@` | 每个话题独立 |
+
+普通群里未 `@` 的聊天不会单独启动 Agent，但在下次明确 `@` 时可以作为有界历史上下文注入。
+未激活的话题保持静默。白名单外用户不能激活话题、执行命令或驱动 Agent。
+
+### 远程任务体验
+
+- 一张极简进度卡从“正在处理”更新到最终结果；完整过程仍保存在 DSH Session 中；
+- 工具审批卡支持按钮操作，并保留 `/approve`、`/reject` 文字兜底；
+- `/stop` 或给运行中任务卡添加 ❌ reaction 可停止当前回合；
+- 任务开始时可添加“敲键盘”reaction，结束后自动移除；
+- 支持飞书图片和文件入站，超长输出会保存到 Workspace 并作为 Markdown 文件发回飞书；
+- 出站请求具备并发限制、卡片更新合并、限流退避、终态优先和失败兜底。
+
+### Workspace、上下文与多机器人
+
+- 首次使用可从 DSH Workspace Registry 选择 Workspace、创建一个末级目录，或输入绝对路径；
+- Workspace 绑定跨重启保存；`/new` 保留当前 Workspace，切换 Workspace 会开启新 Session；
+- 可选读取最近的私聊、群聊或话题历史，作为不可信上下文发送给当前模型；
+- 一个插件实例可管理多个飞书 App，每个机器人独立配置凭据、白名单、Workspace、模型和并发；
+- 每个机器人可加载一份本机 Markdown Profile，作为稳定的角色和工作方式说明；
+- 可选配合 [`dsh-session-groups`](https://github.com/wheam/dsh-session-groups) 在 Web 左栏按飞书来源分组。
+
+## 安装
+
+### 1. 准备环境
+
+当前安装流程面向 macOS 上的 DSH Web/Mac App 环境，需要：
+
+- DeepSeek Harness `0.1.1-rc.2`；
+- Node.js 22 或更高版本；
+- pnpm `11.22.0`（`dsh plugin` 本身也会调用 pnpm）；
+- 能访问飞书/Lark 的网络；
+- 对本仓库及 [`dsh-session-groups`](https://github.com/wheam/dsh-session-groups) 的读取权限。
+
+> 为什么还要克隆 `dsh-session-groups`？它在运行时是可选插件，但当前源码构建会从同级目录读取
+> 它的公开 TypeScript 类型。只想使用飞书遥控时仍需克隆它来完成构建，但不必把它安装进 DSH。
+
+建议把两个仓库放在同一父目录：
+
+```bash
+mkdir -p ~/Developer/dsh-plugins
+cd ~/Developer/dsh-plugins
+
+git clone https://github.com/wheam/dsh-session-groups.git
+git clone https://github.com/wheam/dsh-feishu-remote.git
+cd dsh-feishu-remote
 ```
 
-在飞书里发消息 = 给 Mac 上当前 Harness 服务发消息；agent 要审批 → 飞书卡片点批准/拒绝（`/approve` `/reject` 文字兜底）。一个飞书话题 = 一个并行 session；普通群按群共用一个 session，只有明确 @DSH 才执行；飞书创建的会话与 Web GUI 会话列表同一批共享。
+如果仓库尚未公开，请使用你获授权的 SSH 地址克隆。
 
-## 状态
+确认工具版本：
 
-**Phase 1（docs/05 步骤 0-6 + P1 设置卡片 + P1 进度卡片）已实现，经 Codex 十一轮 review 终审 APPROVE，进度更新链路经 Round 12 独立 review 修复后关闭**：
-核心链路（通道层 / 调度器 / 回合归属账本 / 审批闭环 / 话题映射 / 可变进度卡片）全部落地，
-契约测试与构建检查全绿，构建产物约 2.4MB（SDK 构建期 bundle，external 仅 `@deepseek-ai/*`），
-mock 冒烟（真实 dsh web 进程内加载）通过。
-**真实飞书租户端到端初验已通过（2026-08-19）**：私聊 `/help` 回命令卡，白名单/长连接/
-事件订阅全链路正常（见 docs/09 §7 验收记录）。
+```bash
+node --version
+corepack enable
+corepack prepare pnpm@11.22.0 --activate
+pnpm --version
+```
 
-**多机器人、默认 Workspace 与 Markdown Profile 已实现（2026-08-23）**：同一个 `dsh web`
-进程可运行多个飞书 App；机器人级配置、Session/group 身份、状态文件、附件、审批、上下文和限流
-相互隔离。自动化测试与构建已覆盖，两个真实 App 的同群并发验收仍需按 docs/17 §14.8 执行。
+### 2. 检查 DSH 兼容性
 
-## 已实现的功能
+```bash
+./scripts/check-dsh-compat.sh
+```
 
-- **内嵌 web profile**：`apply()` 只做同步注册、**永不 reject**；飞书长连接放后台 effect，断网重连 / 通道终态失效（SDK 停止重连）→ 结算全部待审批为 `unavailable`、`/status` 标红、退避重建 channel。
-- **飞书长连接**：官方 `@larksuiteoapi/node-sdk` websocket transport，`safety.chatQueue` 关闭（修复同群两话题合并串线缺陷），SDK 版本锁死 `1.73.0`。
-- **飞书来源 ↔ Workspace ↔ session**：官方 `chat_mode` 区分普通群与话题群；p2p 按聊天、普通群按 chatId、话题群按 threadId 建立确定性 originKey。首次使用可从 DSH Workspace Registry 选择，或在 Documents/Desktop/Downloads/Developer/Projects 等常用父目录中新建；也可直接指定绝对路径。绑定跨重启持久化，旧会话按其已落盘 cwd 自动迁移。每个来源在选定 Workspace 内维持自己的 session，`/new` 不换 Workspace，`/workspace` 切换时开启全新 session。
-- **可选 Session 分组**：安装通用 `dsh-session-groups` 插件后，本 provider 通过 `ctx.sessionGroups.assign()` 发布分组；私聊显示为“与某人的私聊”，普通群和话题群均按群名称归组。该依赖为 optional，未安装或元数据查询失败都不影响飞书会话主链路。
-- **审批闭环**：answerer 以 `{ prepend: true }` 注册 + **回合归属账本**（飞书回合才认领、GUI 回合放行）；六条结算路径（按钮 / 文字 / abort / 超时 / 停机 / 通道终态失效）均有测试；终态显式 `updateCard`；卡片 pending 绑定操作者/会话/截止时间。
-- **即时反馈**：飞书回合认领时给触发消息加「敲键盘」reaction、`turn/end` 移除（装饰性、失败静默，同参考实现的 working reaction；`workingReaction: false` 可关，需 `im:message.reactions:write_only` 权限）。
-- **交互隔离**：飞书会话 setup 内先 `presets.mount` 再 `tools.restrict({deny:['ask_user_question','exit_plan_mode']})`——飞书会话不存在通往浏览器的提问路径。
-- **极简进度卡片**：运行中只显示「正在处理」与最新一段 assistant 进展，约 600ms 普通 patch 同一张无标题栏卡片；turn 结束后，同一张卡清掉过程，只保留最后一个非空、未请求工具的 assistant 总结。因为正文会由长变短，普通任务卡不启用飞书 append-oriented `streaming_mode`，避免打字机拼接残影。普通回合卡不再显示目录、模型、session、工具轨迹、token、上下文统计或操作按钮；私聊也不再带原消息引用横幅，群话题仍保持原位回复。完整过程继续保存在 DSH 会话历史/Web GUI；审批卡保留批准/拒绝按钮作为安全边界。完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；终态优先与失败兜底不变。
-- **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230001/230002/230025/230031/230010/230011/230110/230013/230027/232009/404/99991400）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
-- **安全、普通群触发与话题激活**：发送者白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围默认开放，非空 `allowedChatIds` 可选收窄。普通群的所有成员消息可进入历史窗口，但每一轮都必须由白名单用户明确 @机器人；未 @时不创建 Session、不执行命令、不调用 Agent。话题群中每个话题首次需 @激活，首次 @ 回填前文，之后同话题可免 @；其他话题保持静默。白名单外消息不能激活或驱动 Agent。
-- **命令集**：`/workspace` `/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/help` `/commands`；旧 `/view` 与旧卡片动作仅返回停用提示。Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
-- **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
-- **多机器人管理**：一个 `FeishuBotManager` keyed reconcile 多个 Bridge；每个 bot 独立 App 凭据、访问控制、默认/锁定 Workspace、Agent preset、provider/model 和 Markdown Profile。新 bot 的 Session/group id 包含 app identity，转换出的原 bot 保留 legacy id；全局 `maxTotalLiveAgents` 同时统计 live 与 provisional Agent。Web GUI 提供机器人列表、运行状态、CAS 保存和显式 legacy 转换。
-- **飞书上下文回填（docs/13 v1.3）**：触发普通消息时注入上下文——普通群/话题读取最近 150 条/100,000 字符，长期私聊另受更紧的 80 条/50,000 字符上限约束（均可配置）。普通群未 @消息不会单独触发读取或 Agent，但下次 @时会通过全群 chat history 进入增量窗口。官方 `lark-cli` 主路径（`@larksuite/cli@1.0.88` optional 依赖 + postinstall 自动装二进制，`pnpm-workspace.yaml allowBuilds` 放行；CLI 缺失自动降级已 bundle 的 SDK 直连，`contextBackend: auto|cli|sdk`）；增量水位窗口 + 因果 cutoff + JSON 帧防注入 + system prompt 不可信边界规则；全局并发 2 + 熔断；控制命令零拉取。群历史需 `im:message.group_msg` 权限（docs/09 §3）。
+只有输出 `GO` 才继续。脚本会同时检查终端 PATH 和 Mac App 实际使用的
+`/opt/homebrew/bin/dsh`；两者不一致时，以 Mac App 使用的版本为准。
 
-## Workspace 工作区
+### 3. 安装依赖并构建
 
-插件不会再把自己的安装目录当作新飞书会话的默认工作目录。每个飞书来源（私聊、普通群或
-话题）会单独绑定一个 DSH Workspace，绑定关系跨重启保留：
+```bash
+pnpm install --frozen-lockfile
+pnpm run check
+```
 
-1. 第一次发任务时，如果 DSH 里有多个 Workspace，机器人会先发送选择卡片，并暂存这条任务；
-2. 可以选择已有 Workspace，也可以从 Documents、Desktop、Downloads、Developer、Projects
-   等 Mac 常用目录开始新建，或直接发送 `~/Projects/my-project` 这样的自定义路径；
-3. 绑定完成后，第一条任务自动继续执行。若 Registry 里只有一个可用 Workspace，则直接绑定；
-4. 已有飞书会话升级后，会按照原 Session 已记录的工作目录迁移，不会突然切到其他项目。
+`pnpm run check` 会依次执行 TypeScript 检查、契约测试和 bundle 构建，并生成未提交到 Git 的
+`lib/index.js`、`lib/client.js`、类型声明与第三方许可文件。
 
-机器人可配置 `defaultWorkspace` 作为首次绑定 fallback；`workspacePolicy: locked` 会强制所有来源
-使用该 Workspace，并在命令、文本输入和旧卡片三个入口统一拒绝切换。
+### 4. 链接到 Web profile
 
-## 多机器人与 Profile
+仍在 `dsh-feishu-remote` 仓库目录中执行：
 
-在本机 Web GUI 的「飞书遥控」页面点击「转换为多机器人配置」，原机器人会保留已有 Session
-身份。之后可新增 bot，并为每个 bot 配置默认 Workspace 和 `profileFile`。Profile 是本机管理员
-维护的 Markdown system-prompt 增量，建议 2–8 KiB，固定上限 32 KiB；文件必须为安全权限的 UTF-8
-普通文件。Profile 内容会发送给所配置的模型提供商，禁止放入 App Secret、API key 或密码。
-每个飞书 Agent 在发布前都会验证最终 system prompt 仍包含飞书安全段；会用
-`complete: true` 吞掉该段的自定义 preset 将 fail closed，即使未配置 Profile 也一样。
+```bash
+DSH_FEISHU_PLUGIN_DIR="$PWD"
+dsh plugin --profile web add "link:$DSH_FEISHU_PLUGIN_DIR"
+```
+
+然后完整重启 DSH Web 服务：
+
+- 使用 DeepSeek Harness Mac App：退出并重新打开 App；
+- 从终端运行：停止旧进程后重新执行 `dsh web`。
+
+不要同时启动两个占用同一端口的 `dsh web` 进程。
+
+### 5. 创建并绑定飞书机器人
+
+在 **Host 本机**打开 Web GUI：
+
+1. 进入设置中的「飞书遥控（dsh-feishu-remote）」；
+2. 点击「创建并绑定机器人」；
+3. 用手机飞书或 Lark 扫码；
+4. 核对权限、事件和卡片回调后确认；
+5. 等待页面显示「已连接」。
+
+扫码入口只允许从 Host 本机的 `localhost` 页面调用。通过 LAN 或 Tailscale 打开的设置页可以查看
+状态，但不能发起创建或补权，这是防止远端页面接触短期二维码和本机凭据写入能力的安全边界。
+
+扫码会创建归扫码者所有的 PersonalAgent，将 App Secret 写入 DSH 管理的
+`~/.dsh/.credentials.yaml`，并把扫码者的 `open_id` 设为初始白名单。Secret 不会返回浏览器，
+也不会写入 `cordis.patch.yml`。
+
+> PersonalAgent 扫码链路已完成自动化验证，但真实租户全矩阵仍在验收中。如果租户不支持所需
+> 能力、扫码失败，或你已经有企业自建应用，请使用下面的[手工配置](#手工配置已有飞书应用)。
+
+### 6. 验证安装
+
+完成下面所有检查后，才能认为安装成功：
+
+1. `dsh --profile web --dump-config` 能看到启用的 `dsh-feishu-remote`；
+2. Web GUI 能正常打开，浏览器控制台没有 `Failed to load plugins` 或 slot/key 错误；
+3. 「飞书遥控」设置页能显示、保存并热重载；
+4. 在飞书私聊机器人发送 `/help`，能收到命令说明；
+5. 发送一个普通任务，结果出现在飞书，同时 Session 出现在 Web GUI；
+6. 再执行一个需要工具审批的任务，验证批准和拒绝按钮。
+
+完整验收红线见 [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md)。仅有
+`--dump-config` 成功或 Web 页面返回 HTTP 200，都不足以证明前端插件契约已经正确加载。
+
+## 手工配置已有飞书应用
+
+扫码不可用时，可以绑定现有的企业自建应用或 PersonalAgent。
+
+### 飞书开放平台配置
+
+在飞书开放平台为应用启用机器人，并配置：
+
+| 类型 | 名称 | 用途 |
+| --- | --- | --- |
+| 权限 | `im:message.p2p_msg:readonly` | 接收私聊 |
+| 权限 | `im:message.group_at_msg:readonly` | 接收群内 `@机器人` |
+| 权限 | `im:message:send_as_bot` | 发送消息和卡片 |
+| 权限 | `im:message:readonly` | 读取私聊历史 |
+| 权限 | `im:message.group_msg` | 接收普通群消息并读取群/话题历史 |
+| 权限 | `im:message.reactions:write_only` | 添加和删除工作状态 reaction |
+| 事件 | `im.message.receive_v1` | 接收消息事件 |
+| 回调 | `card.action.trigger` | 处理审批与 Workspace 卡片 |
+
+事件和卡片回调使用**长连接**，无需公网 URL。企业自建应用需要创建并发布新版本，权限和订阅才会
+真正生效。更细的控制台步骤见 [docs/09-onboarding.md](docs/09-onboarding.md)。
+
+### 保存 Secret
+
+把 Secret 写入 DSH 管理的凭据文件，而不是仓库或普通配置文件：
+
+```yaml
+# ~/.dsh/.credentials.yaml
+version: 1
+refs:
+  DSH_FEISHU_APP_SECRET: "替换为真实 App Secret"
+```
+
+```bash
+chmod 600 ~/.dsh/.credentials.yaml
+```
+
+如果文件已有其他凭据，请保留现有的 `version`、`refs` 和 `records` 内容，只增加对应引用；不要
+覆盖整个文件。也可以让启动 `dsh web` 的进程继承同名环境变量，但环境变量优先级更高且在 GUI
+中只读，不适合作为长期管理方式。
+
+### 配置插件
+
+在 `~/.dsh/profiles/web/cordis.patch.yml` 中覆盖插件配置，或在 Web GUI 的高级设置中填写同样字段：
+
+```yaml
+- id: dsh-feishu-remote
+  disabled: false
+  config:
+    appId: cli_xxxxxxxxxxxxx
+    appSecretRef: DSH_FEISHU_APP_SECRET
+    brand: feishu
+    allowedOpenIds:
+      - ou_xxxxxxxxxxxxx
+    allowedChatIds: []
+    requireMention: true
+```
+
+`allowedOpenIds` 为空时插件会拒绝所有用户；只有显式设置 `allowAllUsers: true` 才会开放给所有人。
+`allowedChatIds` 为空表示不额外限制群范围，但操作者仍必须通过用户白名单。保存后重启或等待设置
+热重载，再发送 `/help` 验证。
+
+## 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `/help` | 显示远程控制说明 |
+| `/status` | 查看连接、模型、Workspace 和 Session 状态 |
+| `/workspace` | 查看、选择或创建 Workspace |
+| `/workspace current` | 查看当前绑定 |
+| `/workspace use <路径或名称>` | 使用已有目录或已登记 Workspace，并开启新 Session |
+| `/workspace create <完整路径>` | 创建一个末级目录、绑定并开启新 Session |
+| `/new` | 下一条普通消息开启全新 Session，保留当前 Workspace |
+| `/sessions` | 列出当前飞书来源、当前 Workspace 内的历史 Session |
+| `/resume <session-id>` | 恢复当前范围内的历史 Session |
+| `/steer <内容>` | 给正在运行的 Agent 补充或纠正信息 |
+| `/stop` | 停止当前回合，保留已确认的后续消息 |
+| `/approve` / `/reject` | 处理当前一次工具审批的文字兜底 |
+| `/commands` | 查看允许透传的 Harness 原生命令 |
+
+未知斜杠命令默认拒绝。只有出现在 `commandAllowlist` 中的 Harness 原生命令才会透传。
+
+## Workspace 使用方式
+
+插件不会把自身安装目录当作新会话的默认工作目录。每个私聊、普通群或话题会独立绑定 DSH
+Workspace：
+
+1. 若配置了可用的 `defaultWorkspace`，首次任务优先绑定它；
+2. 否则当 Registry 只有一个可用 Workspace 时自动绑定；
+3. 有多个 Workspace 时发送选择卡片，并暂存当前任务；
+4. 也可发送 `/workspace use ~/Projects/demo` 或 `/workspace create ~/Projects/demo`；
+5. 绑定完成后，暂存的第一条任务会自动继续。
+
+`/workspace create` 只创建最后一级目录，父目录必须已经存在。用户主目录、磁盘根目录等过宽路径
+不能直接绑定。`workspacePolicy: locked` 会强制所有来源使用 `defaultWorkspace`，并统一拒绝切换。
+
+## 多机器人与 Markdown Profile
+
+单机器人工作正常后，可在 Host 本机 Web GUI 点击「转换为多机器人配置」。转换是显式操作，原
+机器人继续使用 legacy Session 命名空间；新机器人使用包含 App 身份的隔离命名空间。
+
+多机器人模式中：
+
+- `bot.id`、`appId`、状态文件、附件目录、Session、审批和限流彼此隔离；
+- 每个机器人使用独立 `appSecretRef`；
+- 每个机器人可以指定 `defaultWorkspace`、`workspacePolicy`、`provider`、`model` 和 `agentPreset`；
+- `profileFile` 是本机管理员维护的 UTF-8 Markdown 文件，建议 2–8 KiB，硬上限 32 KiB；
+- 多机器人上下文后端固定为 `sdk`，不能配置共享的 `lark-cli` profile；
+- `maxTotalLiveAgents` 控制所有机器人合计并发，`maxLiveAgents` 控制单机器人并发；`0` 表示不限。
+
+Profile 会作为 system prompt 的一部分发送给所配置的模型提供商。不要在其中放 App Secret、
+API key、密码或不希望发送给模型的内容。
 
 手工配置示例：
 
@@ -69,146 +306,218 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
   config:
     maxTotalLiveAgents: 12
     bots:
-      - id: curio-ops
+      - id: project-bot
+        enabled: true
         appId: cli_xxxxxxxxxxxxx
-        appSecretRef: DSH_FEISHU_CURIO_OPS_SECRET
-        allowedOpenIds: [ou_xxx]
-        defaultWorkspace: /Users/me/Projects/curio
+        appSecretRef: DSH_FEISHU_PROJECT_SECRET
+        allowedOpenIds: [ou_xxxxxxxxxxxxx]
+        defaultWorkspace: /Users/me/Projects/example
         workspacePolicy: locked
-        profileFile: /Users/me/.dsh/bot-profiles/curio-ops.md
+        profileFile: /Users/me/.dsh/bot-profiles/project-bot.md
         agentPreset: standard
         contextBackend: sdk
         maxLiveAgents: 4
-      - id: general-helper
+      - id: general-bot
+        enabled: true
         appId: cli_yyyyyyyyyyyyy
         appSecretRef: DSH_FEISHU_GENERAL_SECRET
-        allowedOpenIds: [ou_xxx]
+        allowedOpenIds: [ou_xxxxxxxxxxxxx]
         defaultWorkspace: /Users/me/Projects
         workspacePolicy: default
-        profileFile: /Users/me/.dsh/bot-profiles/general-helper.md
         contextBackend: sdk
 ```
 
-多机器人统一使用 SDK 上下文后端，避免共享 lark-cli profile 串用 App。每个 `appSecretRef` 仍由
-DSH credential provider 解析；`bots[]` 中不存 Secret 值。
+多机器人迁移、身份隔离、回滚与验收矩阵见
+[docs/17-multi-bot-workspace-profile.md](docs/17-multi-bot-workspace-profile.md)。
 
-常用命令：
+## 常用配置参考
 
-```text
-/workspace                         查看或选择 Workspace
-/workspace current                 查看当前绑定
-/workspace use ~/Projects/demo     绑定已有目录并开启新 Session
-/workspace create ~/Projects/demo  创建末级目录、绑定并开启新 Session
-/new                               在当前 Workspace 内开启新 Session
-/sessions                          只列出当前 Workspace 的 Session
-/resume <session-id>               只恢复当前 Workspace 的 Session
-```
+以下字段均可用于单机器人；除 `bots`、`maxTotalLiveAgents` 外，大部分也可放在 `bots[]` 的每个
+机器人中。
 
-`/workspace create` 只创建一个末级目录，父目录必须已经存在；为避免误操作，用户主目录、磁盘根目录
-等过宽路径不能直接绑定。普通群仍需由获准用户明确 @机器人后才会执行任务。
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `appId` | `DSH_FEISHU_APP_ID` 环境变量 | 飞书 App ID |
+| `appSecretRef` | `DSH_FEISHU_APP_SECRET` | DSH 凭据引用名，不是 Secret 本身 |
+| `brand` | `feishu` | `feishu`、`lark` 或兼容别名 `larkoffice` |
+| `allowedOpenIds` | `[]` | 允许操作机器人的用户；空列表拒绝所有人 |
+| `allowedChatIds` | `[]` | 可选群白名单；空列表不限制已加入的群 |
+| `allowAllUsers` | `false` | 显式开放给所有用户，生产环境不建议开启 |
+| `requireMention` | `true` | 话题首次是否需要 `@`；普通群始终每轮需要 `@` |
+| `defaultWorkspace` | 空 | 首次绑定使用的 Workspace 路径、ID 或名称 |
+| `workspacePolicy` | `default` | `default` 允许切换；`locked` 强制默认 Workspace |
+| `provider` / `model` | DSH 当前默认 | 覆盖机器人使用的模型选择 |
+| `agentPreset` | DSH 当前默认 | 覆盖 Agent preset |
+| `profileFile` | 空 | 本机 Markdown Profile 路径 |
+| `maxLiveAgents` | `0` | 单机器人最大 live/provisional Agent 数，`0` 不限 |
+| `commandAllowlist` | `[]` | 可透传的 Harness 原生命令名，不带 `/` |
+| `enableApprovals` | `true` | 启用飞书工具审批闭环 |
+| `interactiveTimeoutMs` | `600000` | 审批等待时间 |
+| `progressCards` | `true` | 启用可更新的任务进度卡 |
+| `progressUpdateMs` | `600` | 普通进度更新合并窗口，最小 250 ms |
+| `workingReaction` | `true` | 任务运行时添加“敲键盘”reaction |
+| `maxInboundFileBytes` | `20971520` | 入站文件上限，默认 20 MiB |
+| `maxOutboundFileBytes` | `31457280` | 出站文件上限，默认 30 MiB |
+| `cardBodyMaxChars` | `12000` | 单卡正文预算 |
+| `contextMode` | `auto` | `auto` 开启上下文回填；`off` 完全关闭 |
+| `contextBackend` | `auto` | 单机器人可用 `auto`、`cli`、`sdk`；多机器人必须 `sdk` |
+| `contextMaxMessages` | `150` | 群聊/话题历史消息总上限 |
+| `contextMaxChars` | `100000` | 群聊/话题历史字符总上限 |
+| `contextP2pMaxMessages` | `80` | 私聊额外消息上限 |
+| `contextP2pMaxChars` | `50000` | 私聊额外字符上限 |
+| `contextTimeoutMs` | `10000` | 单次上下文读取超时 |
+| `contextIncludeBot` | `true` | 上下文中是否包含机器人历史回复 |
+| `statePath` | `~/.dsh/feishu-remote/<appId>.json` | 路由、Workspace 绑定和水位状态 |
+| `inboundDir` | `~/.dsh/feishu-remote/inbox` | 入站附件目录；多机器人默认再按 App ID 隔离 |
 
-## 安装
+旧版 `cwd` 与 `workspaceRoot` 只为已有部署保留，必须成对出现。新部署应使用 DSH Workspace，
+不要再用这两个字段固定工作目录。
 
-> PersonalAgent 扫码开通已经实现：插件安装后打开 Web GUI 的「飞书遥控」，点击
-> 「创建并绑定机器人」并用手机飞书/Lark 扫一次码，即可创建应用、安全保存 Secret、识别
-> owner 并热启动长连接。无需手工创建飞书应用、复制 App Secret 或查找 open_id。
-> 出于凭据安全边界，创建/补权入口只在 Host 本机通过 `localhost` 打开的 Web GUI 可用；
-> 从 LAN/Tailscale 打开的页面会显示本机操作提示，已绑定机器人仍可照常远程使用。
-> 自动化验证已通过，真实 Feishu/Lark 租户验收仍按
-> [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) §8 执行。
->
-> ⚠️ **安装/更新/升级前必读 [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md)**：
-> 兼容性基准 = Mac App 实际使用的 dsh（`/opt/homebrew/bin/dsh`），不是终端 PATH；
-> `--dump-config` / HTTP 200 不能单独当作安装成功，必须完成浏览器控制台 +
-> 插件 UI 的端到端验收（事故背景见 docs/11）。
+单机器人还支持以下环境变量：
 
-前置：Node ≥ 22、pnpm（`dsh plugin` 依赖 pnpm）。本插件**锁死 dsh `0.1.1-rc.2`**（peerDependencies 精确版本）。
+- `DSH_FEISHU_APP_ID`
+- `DSH_FEISHU_APP_SECRET`
+- `DSH_FEISHU_ALLOWED_OPEN_IDS`（逗号分隔）
+- `DSH_FEISHU_ALLOWED_CHAT_IDS`（逗号分隔）
+- `DSH_FEISHU_ALLOW_ALL_USERS`
+- `DSH_FEISHU_CLI_PATH`
+
+多机器人应使用各自的 `appSecretRef`，不要依赖共享的 legacy 环境变量。
+
+## 隐私与安全边界
+
+- **访问控制默认关闭。** `allowedOpenIds` 为空时拒绝所有人，除非明确启用 `allowAllUsers`。
+- **群范围与用户权限分开。** `allowedChatIds: []` 只表示不限制群，不代表群成员都有操作权限。
+- **审批只授权一次。** 审批卡与操作者、聊天、Session 和截止时间绑定，重复或越权操作被拒绝。
+- **聊天历史会发给模型。** 开启 `contextMode: auto` 后，被读取的群聊、话题和私聊历史会注入
+  DSH durable history，并发送给当前模型提供商。它们被标记为不可信上下文，但插件只做密钥
+  形态脱敏，不承诺清理个人信息或业务敏感内容。
+- **Profile 会发给模型。** `profileFile` 正文进入 system prompt；状态页只显示路径、大小和 digest。
+- **Secret 不进普通设置。** 扫码写入 DSH credential provider；手工配置也应只写
+  `~/.dsh/.credentials.yaml`，并保持 `0600` 权限。
+- **配置路径等同本机权限。** `feishuCliPath` 可以指定任意可执行文件，只应由受信任的本机管理员
+  修改，Web GUI 不开放该字段。
+- **本机插件不是安全沙箱。** DSH Agent 工具与插件进程使用同一 OS 用户；高隔离需求应在操作系统
+  或独立主机层实现。
+
+如需完全关闭飞书历史读取，设置 `contextMode: off`。敏感部署建议同时配置非空
+`allowedChatIds`，只允许指定群使用。
+
+## 更新、卸载与数据保留
+
+本地 `link:` 安装的更新流程：
 
 ```bash
-# 1. 安装到 web profile（本仓路径）
-dsh plugin --profile web add link:/path/to/dsh-feishu-remote
-
-# 可选：让飞书 Session 在左栏按私聊/普通群/话题群分组
-dsh plugin --profile web add link:/path/to/dsh-session-groups/packages/dsh-session-groups
-
-# 2. 启动/重启 dsh web，打开 Web GUI → 飞书遥控 → 创建并绑定机器人 → 手机扫码
-#    bundle patch 默认启用空配置，缺少凭据时通道保持 fail-closed，但扫码入口仍可用。
-
-# 手工兜底：只有扫码不可用或你已有自建应用时，才在
-# ~/.dsh/profiles/web/cordis.patch.yml 配置下列字段（也可用 Web GUI 高级字段）：
-# - id: dsh-feishu-remote
-#   disabled: false
-#   config:
-#     appId: 'cli_xxx'            # 或环境变量 DSH_FEISHU_APP_ID
-#     allowedOpenIds: ['ou_...']  # 你的 open_id（fail-closed，必填）
-#     allowedChatIds: []          # 可选群限制；空 = 机器人加入的任意群都可用
-#     requireMention: true        # 话题首次需 @；普通群无论此项为何值都每轮必须 @
-#     # cwd/workspaceRoot 仅为旧版固定工作区部署的可选兼容项；新部署请省略。
-
-# 3. 凭据：DSH_FEISHU_APP_SECRET 环境变量，或写入 ~/.dsh 的 .credentials.yaml
-#    （GUI 设置卡片只存 credential ref，凭据唯一来源是 .credentials.yaml）
-
-# 手工配置后重启 web 进程（改码后重跑 build + 重启）
+git pull --ff-only
+git -C ../dsh-session-groups pull --ff-only
+pnpm install --frozen-lockfile
+pnpm run check
 ```
 
-改码后：`pnpm run check`（typecheck + 契约测试 + bundle 构建），然后重启 web 进程验证。
+然后完整重启 `dsh web`。链接安装直接使用当前仓库中的 `lib/`，不需要再次执行 `dsh plugin add`。
+如果 `./scripts/check-dsh-compat.sh` 输出 `NO-GO`，不要继续启用更新后的插件。
+
+卸载插件：
+
+```bash
+dsh plugin --profile web remove dsh-feishu-remote
+```
+
+卸载后重启 `dsh web`。卸载不会自动删除以下数据：
+
+- `~/.dsh/feishu-remote/` 中的状态和附件；
+- 已创建的 DSH Session 与 Workspace；
+- `~/.dsh/.credentials.yaml` 中的凭据；
+- 飞书侧已经创建的应用；
+- Markdown Profile 文件。
+
+这些数据需要由管理员单独确认后再清理，插件不会执行不可逆删除。
+
+## 故障排查
+
+### 设置页没有出现
+
+```bash
+test -f lib/index.js && echo "bundle exists"
+dsh --profile web --dump-config
+```
+
+确认已经运行 `pnpm run check`、插件行未被禁用，并在浏览器 DevTools 控制台检查
+`Failed to load plugins` 或 slot/key 错误。RC 版本不一致时先停止操作，不要只改
+`peerDependencies` 绕过兼容闸。
+
+### 构建提示找不到 `dsh-session-groups`
+
+确认两个仓库是同级目录：
+
+```text
+dsh-plugins/
+├── dsh-feishu-remote/
+└── dsh-session-groups/
+    └── packages/dsh-session-groups/
+```
+
+然后重新运行 `pnpm install --frozen-lockfile && pnpm run check`。
+
+### 机器人没有响应
+
+依次检查：
+
+1. 设置页是否显示已连接；
+2. `allowedOpenIds` 是否包含当前 App 身份域下的完整 `open_id`；
+3. 非空 `allowedChatIds` 是否包含当前群；
+4. 普通群本轮是否明确 `@机器人`，话题是否已由白名单用户激活；
+5. 飞书应用版本是否已经发布并包含消息事件；
+6. Host 日志是否出现凭据、权限、长连接或限流错误。
+
+### 卡片按钮没有反应
+
+确认应用已订阅 `card.action.trigger` 并发布新版本。临时使用 `/approve` 或 `/reject` 处理当前
+审批。重复点击、其他用户点击、跨 Session 点击和过期卡片都会被安全拒绝。
+
+### 上下文或 reaction 不工作
+
+上下文回填需要历史消息权限，普通群完整上下文需要 `im:message.group_msg`；工作状态 reaction
+需要 `im:message.reactions:write_only`。这些增强权限缺失时核心消息链路仍可工作，日志会说明降级。
+
+更完整的故障与验收步骤见 [docs/09-onboarding.md](docs/09-onboarding.md) 和
+[docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md)。
 
 ## 开发
 
 ```bash
-pnpm install
-pnpm run typecheck   # tsc --noEmit
-pnpm run test        # vitest 契约测试（无真实凭据）
-pnpm run build       # esbuild bundle → lib/index.js（~2.4MB）+ lib/client.js + THIRD_PARTY_NOTICES
+pnpm install --frozen-lockfile
+pnpm run typecheck
+pnpm run test
+pnpm run build
+pnpm run check
 ```
 
-Mock 冒烟（无真实凭据，仅文本链路）：`config.appId: 'mock'` 后启动 profile，
-stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依赖真实凭据，由单测 + 真实租户验收双跑覆盖。
+| 命令 | 内容 |
+| --- | --- |
+| `pnpm run typecheck` | `tsc --noEmit` |
+| `pnpm run test` | Vitest 契约测试，不需要真实飞书凭据 |
+| `pnpm run build` | esbuild Host bundle、复制 Web client、生成类型与第三方许可 |
+| `pnpm run check` | 依次执行 typecheck、test、build |
 
-## 文档
+无真实凭据的文本链路冒烟可使用 `config.appId: mock`。真实审批按钮、飞书租户权限、普通群历史
+和多 App 隔离仍应按部署验收矩阵测试。
+
+## 进一步阅读
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/01-requirements.md](docs/01-requirements.md) | 需求清单（P0/P1/P2 与非目标） |
-| [docs/02-research.md](docs/02-research.md) | 调研报告（dsh 内部能力 + 社区项目对比） |
-| [docs/03-architecture.md](docs/03-architecture.md) | 架构决策记录（D1-D8） |
-| [docs/04-roadmap.md](docs/04-roadmap.md) | 路线图与工作量 |
-| [docs/05-implementation-plan.md](docs/05-implementation-plan.md) | 实现方案（单一事实源） |
-| [docs/06-codex-review.md](docs/06-codex-review.md) | Codex（gpt-5.6-sol）独立 review 报告 |
-| [docs/07-ecosystem-research.md](docs/07-ecosystem-research.md) | 生态调研：Claude Tag 类项目与远程桥（30+ 仓库） |
-| [docs/08-triple-review.md](docs/08-triple-review.md) | 三方复审（DeepSeek/Claude Opus 5/Codex）共识与修订对照 |
-| [docs/09-onboarding.md](docs/09-onboarding.md) | 飞书开放平台开通清单（Phase 0 验收用） |
-| [docs/10-implementation-reviews.md](docs/10-implementation-reviews.md) | 实现阶段十一轮 Codex review 记录（47 项 findings 修复对照，终审 APPROVE） |
-| [docs/11-incident-rc7-keyed-slot.md](docs/11-incident-rc7-keyed-slot.md) | 事故记录：rc.7 keyed slot 契约导致 Mac App 无法进入界面（已修复勿回退） |
-| [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md) | 插件安装/更新/升级固定检查规则（强制流程，端到端验收才算成功） |
-| [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（普通群/话题 + 有界私聊回溯，官方 lark-cli + SDK 兜底；**v1.3 已实现，普通群真实租户验收待跑**） |
-| [docs/14-context-codex-review.md](docs/14-context-codex-review.md) | docs/13 的 Codex 独立 review 记录（15 项 findings 处置对照，修订已并入规格） |
-| [docs/15-context-impl-review.md](docs/15-context-impl-review.md) | 飞书上下文回填实现阶段 Codex review（14 项 findings 处置对照，修订已并入实现） |
-| [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) | PersonalAgent 一次扫码创建机器人、自动保存凭据与 owner、权限降级及发布验收（实现与自动化测试已完成，真实租户待验收） |
-| [docs/17-multi-bot-workspace-profile.md](docs/17-multi-bot-workspace-profile.md) | 多机器人、默认/锁定 Workspace、Markdown Profile、迁移、回滚与测试矩阵（已实现，双真实 App E2E 待验收） |
+| [docs/03-architecture.md](docs/03-architecture.md) | 总体架构与关键设计决策 |
+| [docs/09-onboarding.md](docs/09-onboarding.md) | 手工创建飞书应用、权限与真实租户验收 |
+| [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md) | 安装、更新和 DSH 升级的强制检查清单 |
+| [docs/13-feishu-context.md](docs/13-feishu-context.md) | 历史上下文回填、安全边界与数据流 |
+| [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) | PersonalAgent 扫码开通设计与验收矩阵 |
+| [docs/17-multi-bot-workspace-profile.md](docs/17-multi-bot-workspace-profile.md) | 多机器人、Workspace、Profile、迁移与回滚 |
+| [docs/11-incident-rc7-keyed-slot.md](docs/11-incident-rc7-keyed-slot.md) | DSH RC 前端契约事故记录与永久防线 |
 
-## 隐私与数据流（飞书上下文回填）
+其余 `docs/` 文件记录需求、调研、实现计划和多轮 review，主要面向维护者。
 
-启用上下文回填（默认 `contextMode: auto`）后，每条进入 Agent 的普通飞书消息都会把所在
-话题/聊天的历史消息（含未 @ 机器人的其他群成员发言）注入到当前回合；普通群未 @消息本身
-不会触发 Agent，只会在下次明确 @时作为历史进入：
+## 许可证
 
-- 注入内容会进入 dsh 会话的 durable history（**本地持久化**），并在 Web GUI 会话记录中显示为
-  独立、默认折叠的「上下文注入」行；蓝色用户气泡只显示当前飞书提问。修复前已经落盘的复合消息
-  由浏览器兼容投影隐藏 JSON 前缀，不改写原始历史；这些数据仍随会话归档、导出、删除一同流转；
-- 注入内容会**发送给你所配置的模型提供商**（DeepSeek 或其他 provider/model）；
-- 本插件只做密钥形态脱敏（`redactSecrets`），**不承诺**对群讨论中的个人信息/业务敏感内容做清洗；
-  默认情况下，白名单内用户可在机器人加入的任意群触发上下文读取；敏感部署请用非空
-  `allowedChatIds` 将范围收窄到指定群；
-- 逃生门：`contextMode: off` 完全关闭该功能；`contextIncludeBot: false` 不注入机器人自己的历史回复。
-- 每次 bridge 启动后的首次读取前都会刷新本地 CLI profile（可覆盖同 App ID 下的 Secret 轮换）；
-  并发首条消息共享一次初始化。secret 只经该次初始化的 stdin 传递，不会进入后续历史读取
-  子进程的 argv 或环境变量。
-- 另注意：`feishuCliPath`（任意可执行路径）仅作为受信任管理员配置（cordis.patch.yml / 环境变量），
-  Web GUI 设置卡不可修改——它等价于本机代码执行权限。
-- 配置 `profileFile` 后，Profile 正文会作为每次模型请求的 system prompt 一部分发送给模型提供商；
-  `/status` 和管理 RPC 只显示路径元数据、大小与 digest，不返回正文。多机器人模式不使用共享 CLI profile。
-
-## 许可
-
-MIT。继承两个参考项目的版权声明（见 [LICENSE](LICENSE)）与 lark-bridge 的 `THIRD_PARTY_NOTICES.txt`（SDK 打包）。
+[MIT](LICENSE)。项目保留参考实现的版权声明；bundle 的第三方依赖许可在构建生成的
+`lib/THIRD_PARTY_NOTICES.txt` 中。
