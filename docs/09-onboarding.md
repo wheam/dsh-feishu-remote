@@ -1,7 +1,7 @@
 # 飞书开放平台开通清单（Phase 0 验收）
 
 > 本文是**当前版本的手工开通与故障兜底流程**。目标首次体验已改为 Web GUI 调用官方
-> `registerApp()`，扫码自动创建并绑定 PersonalAgent；设计已定、功能尚未实现，见
+> `registerApp()`，扫码自动创建并绑定 PersonalAgent；实现与自动化测试已完成、真实租户验收待跑，见
 > [docs/16-personal-agent-qr-onboarding.md](16-personal-agent-qr-onboarding.md)。在 docs/16 的真实
 > 租户验收全部通过前，不删除本文，也不得把“二维码已生成”等同于“一扫即用已交付”。
 >

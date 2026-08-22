@@ -61,10 +61,13 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 
 ## 安装
 
-> 当前版本仍使用下述手工安装/开通流程。目标 onboarding 已定为
-> **一条安装命令 + Web GUI 扫码自动创建 PersonalAgent**，无需手工创建飞书应用、复制
-> App Secret 或查找 open_id；设计与验收边界见
-> [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md)，功能尚未实现。
+> PersonalAgent 扫码开通已经实现：插件安装后打开 Web GUI 的「飞书遥控」，点击
+> 「创建并绑定机器人」并用手机飞书/Lark 扫一次码，即可创建应用、安全保存 Secret、识别
+> owner 并热启动长连接。无需手工创建飞书应用、复制 App Secret 或查找 open_id。
+> 出于凭据安全边界，创建/补权入口只在 Host 本机通过 `localhost` 打开的 Web GUI 可用；
+> 从 LAN/Tailscale 打开的页面会显示本机操作提示，已绑定机器人仍可照常远程使用。
+> 自动化验证已通过，真实 Feishu/Lark 租户验收仍按
+> [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) §8 执行。
 >
 > ⚠️ **安装/更新/升级前必读 [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md)**：
 > 兼容性基准 = Mac App 实际使用的 dsh（`/opt/homebrew/bin/dsh`），不是终端 PATH；
@@ -80,7 +83,11 @@ dsh plugin --profile web add link:/path/to/dsh-feishu-remote
 # 可选：让飞书 Session 在左栏按私聊/普通群/话题群分组
 dsh plugin --profile web add link:/path/to/dsh-session-groups/packages/dsh-session-groups
 
-# 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 启用并配置（配置也可在 Web GUI 设置卡片里做）
+# 2. 启动/重启 dsh web，打开 Web GUI → 飞书遥控 → 创建并绑定机器人 → 手机扫码
+#    bundle patch 默认启用空配置，缺少凭据时通道保持 fail-closed，但扫码入口仍可用。
+
+# 手工兜底：只有扫码不可用或你已有自建应用时，才在
+# ~/.dsh/profiles/web/cordis.patch.yml 配置下列字段（也可用 Web GUI 高级字段）：
 # - id: dsh-feishu-remote
 #   disabled: false
 #   config:
@@ -93,7 +100,7 @@ dsh plugin --profile web add link:/path/to/dsh-session-groups/packages/dsh-sessi
 # 3. 凭据：DSH_FEISHU_APP_SECRET 环境变量，或写入 ~/.dsh 的 .credentials.yaml
 #    （GUI 设置卡片只存 credential ref，凭据唯一来源是 .credentials.yaml）
 
-# 4. 重启 web 进程（改码后重跑 build + 重启）
+# 手工配置后重启 web 进程（改码后重跑 build + 重启）
 ```
 
 改码后：`pnpm run check`（typecheck + 契约测试 + bundle 构建），然后重启 web 进程验证。
@@ -129,7 +136,7 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
 | [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（普通群/话题 + 有界私聊回溯，官方 lark-cli + SDK 兜底；**v1.3 已实现，普通群真实租户验收待跑**） |
 | [docs/14-context-codex-review.md](docs/14-context-codex-review.md) | docs/13 的 Codex 独立 review 记录（15 项 findings 处置对照，修订已并入规格） |
 | [docs/15-context-impl-review.md](docs/15-context-impl-review.md) | 飞书上下文回填实现阶段 Codex review（14 项 findings 处置对照，修订已并入实现） |
-| [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) | PersonalAgent 一次扫码创建机器人、自动保存凭据与 owner、权限降级及发布验收方案（已定案，待实现） |
+| [docs/16-personal-agent-qr-onboarding.md](docs/16-personal-agent-qr-onboarding.md) | PersonalAgent 一次扫码创建机器人、自动保存凭据与 owner、权限降级及发布验收（实现与自动化测试已完成，真实租户待验收） |
 
 ## 隐私与数据流（飞书上下文回填）
 

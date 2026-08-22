@@ -20,12 +20,13 @@ window.__ModuleLoader__.load({
 		const css = ".fr_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:8px;list-style:none;overflow:hidden}.fr_cardOpen{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}.fr_header{cursor:pointer;text-align:left;width:100%;font:inherit;background:0 0;border:0;align-items:center;gap:8px;padding:10px 14px;display:flex}.fr_header:hover{background:var(--dsw-alias-interactive-bg-hover)}.fr_headText{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.fr_name{color:var(--dsw-alias-label-primary);font-weight:600}.fr_description{color:var(--dsw-alias-label-tertiary);font-size:12px}.fr_pending{color:var(--dsw-alias-state-warn-primary);font-size:12px}.fr_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .12s}.fr_chevronOpen{transform:rotate(180deg)}.fr_body{flex-direction:column;gap:14px;padding:0 14px 14px;display:flex}.fr_readOnly{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px}.fr_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.fr_failed{color:var(--dsw-alias-state-error-primary);margin:0 auto 0 0;font-size:12px}.fr_discard,.fr_save{font:inherit;cursor:pointer;border-radius:6px;padding:5px 12px;font-size:13px}.fr_discard{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}.fr_discard:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}.fr_save{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_save:hover:not(:disabled){border-color:var(--dsw-alias-button-info-hover);background:var(--dsw-alias-button-info-hover)}.fr_discard:active:not(:disabled),.fr_save:active:not(:disabled){transform:translateY(1px)}.fr_discard:focus-visible:not(:disabled),.fr_save:focus-visible:not(:disabled){outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.fr_discard:disabled,.fr_save:disabled{opacity:.5;cursor:default}.fr_field{flex-direction:column;gap:4px;display:flex}.fr_head{align-items:center;gap:8px;display:flex}.fr_label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500}.fr_badges{align-items:center;gap:6px;display:flex}.fr_badge{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_badgeMuted{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-tertiary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_reset{color:var(--dsw-alias-state-business-primary);cursor:pointer;background:0 0;border:0;padding:0;font-size:11px}.fr_reset:hover:not(:disabled){text-decoration:underline}.fr_input,.fr_select{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major);border-radius:6px;padding:6px 8px;font-size:13px}.fr_inputInvalid{border:1px solid var(--dsw-alias-state-error-primary);font:inherit;color:var(--dsw-alias-label-primary);border-radius:6px;padding:6px 8px;font-size:13px}.fr_input:disabled,.fr_select:disabled{opacity:.6}.fr_hint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px}.fr_invalid{color:var(--dsw-alias-state-error-primary);margin:0;font-size:12px}.fr_groupTitle{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 -4px}.fr_sep{height:1px;background:var(--dsw-alias-border-l2);margin:2px 0 0}";
 		const pageCss = ".fr_page{flex-direction:column;gap:16px;display:flex;max-width:760px}.fr_pageHead{flex-direction:column;gap:4px;display:flex}.fr_pageTitle{margin:0;font-size:16px;font-weight:600;color:var(--dsw-alias-label-primary)}.fr_pageDesc{margin:0;font-size:12px;color:var(--dsw-alias-label-tertiary)}.fr_pageGroup{margin:0 0 2px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);text-transform:uppercase;letter-spacing:.04em}";
 		const readabilityCss = ".fr_field{gap:6px}.fr_label{display:block!important;color:#f2f6ff!important;line-height:1.4;opacity:1!important;visibility:visible!important}.fr_hint{display:block!important;color:#b8c6dd!important;line-height:1.45;opacity:1!important;visibility:visible!important}.fr_input::placeholder{color:#aebed8!important;opacity:1!important}.fr_input,.fr_select{min-height:34px}.fr_head{min-height:19px}";
+		const onboardingCss = ".fr_onboarding{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.fr_onboardingHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.fr_onboardingTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600}.fr_onboardingDesc,.fr_onboardingMeta,.fr_onboardingError{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.fr_onboardingError{color:var(--dsw-alias-state-error-primary)}.fr_status{border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_statusReady{color:var(--dsw-alias-state-success-primary)}.fr_statusBusy{color:var(--dsw-alias-state-warn-primary)}.fr_statusFailed{color:var(--dsw-alias-state-error-primary)}.fr_qrWrap{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.fr_qr{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:8px;padding:8px}.fr_qrHelp{display:flex;flex-direction:column;gap:6px;max-width:300px}.fr_qrLink{font-size:12px;color:var(--dsw-alias-state-business-primary)}.fr_actions{display:flex;flex-wrap:wrap;gap:8px}.fr_primary,.fr_secondary{font:inherit;cursor:pointer;border-radius:6px;padding:6px 11px;font-size:12px}.fr_primary{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_secondary{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.fr_primary:disabled,.fr_secondary:disabled{opacity:.5;cursor:default}.fr_capabilities{display:flex;flex-wrap:wrap;gap:6px}.fr_capability{border-radius:999px;padding:2px 7px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}";
 		const tagId = "dsh-feishu-remote/settings-card.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dsh-feishu-remote";
 			tag.dataset.pluginCss = tagId;
-			tag.textContent = css + pageCss + readabilityCss;
+			tag.textContent = css + pageCss + readabilityCss + onboardingCss;
 			document.head.appendChild(tag);
 		}
 		const cssDefault = {
@@ -40,7 +41,15 @@ window.__ModuleLoader__.load({
 			"hint": "fr_hint", "input": "fr_input", "inputInvalid": "fr_inputInvalid",
 			"invalid": "fr_invalid", "label": "fr_label", "name": "fr_name",
 			"pending": "fr_pending", "readOnly": "fr_readOnly", "reset": "fr_reset",
-			"save": "fr_save", "select": "fr_select", "sep": "fr_sep"
+			"save": "fr_save", "select": "fr_select", "sep": "fr_sep",
+			"onboarding": "fr_onboarding", "onboardingHead": "fr_onboardingHead",
+			"onboardingTitle": "fr_onboardingTitle", "onboardingDesc": "fr_onboardingDesc",
+			"onboardingMeta": "fr_onboardingMeta", "onboardingError": "fr_onboardingError",
+			"status": "fr_status", "statusReady": "fr_statusReady", "statusBusy": "fr_statusBusy",
+			"statusFailed": "fr_statusFailed", "qrWrap": "fr_qrWrap", "qr": "fr_qr",
+			"qrHelp": "fr_qrHelp", "qrLink": "fr_qrLink", "actions": "fr_actions",
+			"primary": "fr_primary", "secondary": "fr_secondary", "capabilities": "fr_capabilities",
+			"capability": "fr_capability"
 		};
 
 		// ------------------------------------------------------------ chrome
@@ -270,7 +279,8 @@ window.__ModuleLoader__.load({
 				key: "credentials",
 				fields: [
 					{ field: "appId", spec: textField("appId"), kind: "text", labelKey: "f.appId", hintKey: "f.appIdHint", placeholderKey: "p.appId" },
-					{ field: "appSecretRef", spec: textField("appSecretRef"), kind: "text", labelKey: "f.appSecretRef", hintKey: "f.appSecretRefHint", placeholderKey: "p.appSecretRef" }
+					{ field: "appSecretRef", spec: textField("appSecretRef"), kind: "text", labelKey: "f.appSecretRef", hintKey: "f.appSecretRefHint", placeholderKey: "p.appSecretRef" },
+					{ field: "brand", spec: selectField("brand", ["feishu", "lark"]), kind: "select", labelKey: "f.brand", hintKey: "f.brandHint" }
 				]
 			},
 			{
@@ -384,19 +394,125 @@ window.__ModuleLoader__.load({
 			] });
 		}
 
+		function onboardingStatusKey(status) {
+			if (status === void 0) return "onboarding.status.loading";
+			if (status.connected) return "onboarding.status.connected";
+			return `onboarding.status.${status.phase}`;
+		}
+
+		function capabilityLabel(t, label, state) {
+			return `${t(label)}：${t(`onboarding.capability.${state ?? "unknown"}`)}`;
+		}
+		function onboardingActive(status) {
+			return ["starting", "qr_ready", "committing", "connecting"].includes(status?.phase);
+		}
+
+		function OnboardingPanel(props) {
+			const hook = props.usePersonalAgentOnboarding;
+			if (hook === void 0) return null;
+			const snapshot = hook((value) => value);
+			const status = snapshot?.status;
+			const phase = status?.phase ?? "idle";
+			const active = onboardingActive(status);
+			const canCancel = phase === "starting" || phase === "qr_ready";
+			const configured = status?.configured === true;
+			const canUpdate = configured || status?.recoverableApp === true;
+			const acting = snapshot?.acting === true;
+			const writable = props.writable !== false;
+			const loopbackOnly = snapshot?.loopbackOnly === true;
+			const blocked = active || acting || !writable || props.cardDirty === true || loopbackOnly;
+			const capabilityKnown = status?.capabilities !== void 0 && (status.capabilities.core !== "unknown" || status.capabilities.enhanced !== "unknown");
+			const confirmUpdate = () => {
+				const appSuffix = status?.app?.appIdSuffix ?? "unknown";
+				const message = props.t("onboarding.updateConfirm").replace("{app}", appSuffix);
+				if (typeof window !== "undefined" && !window.confirm(message)) return;
+				props.onboardingStart("update");
+			};
+			const statusClass = status?.connected
+				? cssDefault.status + " " + cssDefault.statusReady
+				: phase === "failed" || phase === "expired"
+					? cssDefault.status + " " + cssDefault.statusFailed
+					: active ? cssDefault.status + " " + cssDefault.statusBusy : cssDefault.status;
+			const secondsLeft = status?.expiresAt === void 0
+				? void 0
+				: Math.max(0, Math.ceil((status.expiresAt - Date.now()) / 1000));
+			return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
+				react_jsx_runtime.jsxs("div", { className: cssDefault.onboardingHead, children: [
+					react_jsx_runtime.jsxs("div", { children: [
+						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: props.t("onboarding.title") }),
+						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: props.t("onboarding.description") })
+					] }),
+					react_jsx_runtime.jsx("span", { className: statusClass, role: "status", children: props.t(onboardingStatusKey(status)) })
+				] }),
+				status?.qrUrl ? react_jsx_runtime.jsxs("div", { className: cssDefault.qrWrap, children: [
+					status.qrImageDataUrl
+						? react_jsx_runtime.jsx("img", { className: cssDefault.qr, src: status.qrImageDataUrl, alt: props.t("onboarding.qrAlt") })
+						: react_jsx_runtime.jsx("div", { className: cssDefault.qr, "aria-label": props.t("onboarding.qrRendering") }),
+					react_jsx_runtime.jsxs("div", { className: cssDefault.qrHelp, children: [
+						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: props.t("onboarding.scanHint") }),
+						secondsLeft === void 0 ? null : react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: `${props.t("onboarding.expiresIn")} ${secondsLeft}s` }),
+						react_jsx_runtime.jsx("a", { className: cssDefault.qrLink, href: status.qrUrl, target: "_blank", rel: "noreferrer", children: props.t("onboarding.openLink") })
+					] })
+				] }) : null,
+				status?.app ? react_jsx_runtime.jsx("p", {
+					className: cssDefault.onboardingMeta,
+					children: [status.app.botName, status.app.brand, `App …${status.app.appIdSuffix}`, status.app.ownerOpenIdSuffix ? `owner …${status.app.ownerOpenIdSuffix}` : void 0].filter(Boolean).join(" · ")
+				}) : null,
+				capabilityKnown ? react_jsx_runtime.jsxs("div", { className: cssDefault.capabilities, children: [
+					react_jsx_runtime.jsx("span", { className: cssDefault.capability, children: capabilityLabel(props.t, "onboarding.core", status.capabilities.core) }),
+					react_jsx_runtime.jsx("span", { className: cssDefault.capability, children: capabilityLabel(props.t, "onboarding.enhanced", status.capabilities.enhanced) })
+				] }) : null,
+				status?.capabilities !== void 0 && !capabilityKnown ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: props.t("onboarding.capabilityUnavailable") }) : null,
+				status?.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, role: "alert", children: status.error.message }) : null,
+				loopbackOnly ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, role: "status", children: props.t("onboarding.loopbackOnly") }) : null,
+				snapshot?.transportError ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, role: "alert", children: snapshot.transportError }) : null,
+				react_jsx_runtime.jsxs("div", { className: cssDefault.actions, children: [
+					react_jsx_runtime.jsx("button", {
+						type: "button", className: cssDefault.primary,
+						disabled: blocked,
+						onClick: () => props.onboardingStart("create"),
+						children: props.t(configured ? "onboarding.rebind" : "onboarding.create")
+					}),
+					canUpdate ? react_jsx_runtime.jsx("button", {
+						type: "button", className: cssDefault.secondary,
+						disabled: blocked,
+						onClick: confirmUpdate,
+						children: props.t("onboarding.grant")
+					}) : null,
+					phase === "failed" && configured ? react_jsx_runtime.jsx("button", {
+						type: "button", className: cssDefault.secondary,
+						disabled: acting || !writable,
+						onClick: props.onboardingRetry,
+						children: props.t("onboarding.retry")
+					}) : null,
+					canCancel ? react_jsx_runtime.jsx("button", {
+						type: "button", className: cssDefault.secondary,
+						disabled: acting || !writable,
+						onClick: props.onboardingCancel,
+						children: props.t("onboarding.cancel")
+					}) : null
+				] }),
+				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: props.t("onboarding.manualHint") })
+			] });
+		}
+
 		function FeishuRemoteSettingsCard(props) {
 			const { t } = props;
 			const state = props.useFeishuRemoteSettingsCard((snapshot) => snapshot);
-			const disabled = !state.writable;
+			const onboarding = props.usePersonalAgentOnboarding?.((snapshot) => snapshot);
+			const active = onboardingActive(onboarding?.status);
+			const disabled = !state.writable || active;
 			const fieldProps = { disabled };
 			return react_jsx_runtime.jsx(PluginSettingsCard, {
 				t,
 				titleKey: "settings.title",
 				descriptionKey: "settings.description",
-				state,
-				onSave: props.save,
-				onDiscard: props.discard,
-				children: FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
+				state: { ...state, invalid: state.invalid || active },
+				onSave: active ? () => {} : props.save,
+					onDiscard: props.discard,
+					children: [
+						react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
+					...FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
 					key: group.key,
 					children: [
 						react_jsx_runtime.jsx("p", { className: cssDefault.groupTitle, children: t(`g.${group.key}`) }),
@@ -414,7 +530,8 @@ window.__ModuleLoader__.load({
 						}, entry.field)),
 						react_jsx_runtime.jsx("div", { className: cssDefault.sep })
 					]
-				}))
+					}))
+				]
 			});
 		}
 
@@ -425,9 +542,11 @@ window.__ModuleLoader__.load({
 			if (hook === void 0 || t === void 0) return null;
 			const state = hook((snapshot) => snapshot);
 			if (state === void 0) return null;
-			const disabled = !state.writable;
+			const onboarding = props.usePersonalAgentOnboarding?.((snapshot) => snapshot);
+			const active = onboardingActive(onboarding?.status);
+			const disabled = !state.writable || active;
 			const fieldProps = { disabled };
-			const blocked = !state.dirty || state.invalid || state.saving;
+			const blocked = !state.dirty || state.invalid || state.saving || active;
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.page, children: [
 				react_jsx_runtime.jsxs("div", { className: cssDefault.pageHead, children: [
 					react_jsx_runtime.jsx("h2", { className: cssDefault.pageTitle, children: t("settings.title") }),
@@ -435,7 +554,8 @@ window.__ModuleLoader__.load({
 					state.dirty ? react_jsx_runtime.jsx("span", { className: cssDefault.pending, children: t("settings.unsaved") }) : null,
 					!state.writable ? react_jsx_runtime.jsx("p", { className: cssDefault.readOnly, role: "status", children: t("settings.readOnly") }) : null
 				] }),
-				FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
+					react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
+				...FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
 					key: group.key,
 					children: [
 						react_jsx_runtime.jsx("p", { className: cssDefault.pageGroup, children: t(`g.${group.key}`) }),
@@ -481,6 +601,76 @@ window.__ModuleLoader__.load({
 			}
 		};
 
+		var PersonalAgentOnboardingController = class {
+			constructor(connection) {
+				this.connection = connection;
+				this.snapshot = { status: void 0, acting: false, transportError: void 0, loopbackOnly: connection.isLoopback === false };
+				this.store = runtime.createSnapshotStore(this.snapshot);
+				this.stopped = true;
+				this.pending = false;
+				this.timer = void 0;
+				this.requestSequence = 0;
+			}
+			publish(patch) {
+				this.snapshot = { ...this.snapshot, ...patch };
+				this.store.set(this.snapshot);
+			}
+			async request(endpoint, payload = {}) {
+				const result = await this.connection.rpc.call("/dsh-feishu-remote", endpoint, payload);
+				if (!result.ok) throw new Error(result.error.message);
+				return result.value;
+			}
+			async refresh() {
+				if (this.pending || this.stopped || this.snapshot.acting || this.snapshot.loopbackOnly) return;
+				this.pending = true;
+				const requestId = ++this.requestSequence;
+				try {
+					const status = await this.request("onboarding/status");
+					if (requestId === this.requestSequence) this.publish({ status, transportError: void 0 });
+				} catch (error) {
+					if (requestId === this.requestSequence) this.publish({ transportError: error instanceof Error ? error.message : String(error) });
+				} finally {
+					this.pending = false;
+				}
+			}
+			async invoke(endpoint, payload = {}) {
+				if (this.snapshot.acting || this.snapshot.loopbackOnly) return;
+				const requestId = ++this.requestSequence;
+				this.publish({ acting: true, transportError: void 0 });
+				try {
+					const status = await this.request(endpoint, payload);
+					if (requestId === this.requestSequence) this.publish({ status, transportError: void 0 });
+				} catch (error) {
+					if (requestId === this.requestSequence) this.publish({ transportError: error instanceof Error ? error.message : String(error) });
+				} finally {
+					if (requestId === this.requestSequence) this.publish({ acting: false });
+				}
+			}
+			mount() {
+				this.stopped = false;
+				if (this.snapshot.loopbackOnly) return () => { this.stopped = true; };
+				const tick = async () => {
+					await this.refresh();
+					if (this.stopped) return;
+					const active = onboardingActive(this.snapshot.status);
+					this.timer = setTimeout(tick, active ? 750 : 2500);
+				};
+				void tick();
+				return () => {
+					this.stopped = true;
+					if (this.timer !== void 0) clearTimeout(this.timer);
+				};
+			}
+			inject() {
+				return {
+					hooks: { personalAgentOnboarding: this.store },
+					onboardingStart: (mode) => this.invoke("onboarding/start", { mode }),
+					onboardingCancel: () => this.invoke("onboarding/cancel"),
+					onboardingRetry: () => this.invoke("onboarding/retry")
+				};
+			}
+		};
+
 		// -------------------------------------------------------------- apply
 		const NS = "dsh-feishu-remote";
 		const SETTINGS_NS = "feishu-remote";
@@ -493,6 +683,22 @@ window.__ModuleLoader__.load({
 			"settings.readOnly": "This deployment is read-only: settings cannot be changed from the GUI.",
 			"settings.overridden": "Override", "settings.reset": "Reset", "settings.invalidNumber": "Enter a valid number",
 			"settings.discard": "Discard", "settings.save": "Save", "settings.saving": "Saving…", "settings.saveFailed": "Save failed",
+			"onboarding.title": "Create and bind your Feishu bot",
+			"onboarding.description": "One Feishu/Lark scan creates a PersonalAgent owned by you, saves its secret on this Host, and connects it. No developer-console setup or chat pairing code.",
+			"onboarding.create": "Create and bind bot", "onboarding.rebind": "Create a new bot", "onboarding.grant": "Grant missing permissions",
+			"onboarding.retry": "Retry connection", "onboarding.cancel": "Cancel", "onboarding.qrAlt": "Feishu PersonalAgent authorization QR code",
+			"onboarding.qrRendering": "Rendering QR code", "onboarding.scanHint": "Scan with the Feishu/Lark mobile app, review the permission list, then confirm.",
+			"onboarding.expiresIn": "Expires in", "onboarding.openLink": "Open the authorization link on this device",
+			"onboarding.manualHint": "Advanced fields below remain available for an existing manually-created app.",
+			"onboarding.loopbackOnly": "For security, bot creation is available only when this page is opened on the Host itself (localhost).",
+			"onboarding.updateConfirm": "Re-authorize App …{app} with the requested messaging, event, card, history, and reaction permissions? Feishu will show the final permission diff before applying it.",
+			"onboarding.capabilityUnavailable": "This tenant did not expose a complete permission projection; connection health is used as the final readiness check.",
+			"onboarding.core": "Core remote", "onboarding.enhanced": "Enhanced experience",
+			"onboarding.capability.ok": "granted", "onboarding.capability.missing": "partially missing", "onboarding.capability.unknown": "awaiting verification",
+			"onboarding.status.loading": "Loading", "onboarding.status.idle": "Not set up", "onboarding.status.starting": "Generating QR code",
+			"onboarding.status.qr_ready": "Waiting for scan", "onboarding.status.committing": "Saving securely", "onboarding.status.connecting": "Connecting",
+			"onboarding.status.ready": "Ready", "onboarding.status.connected": "Connected", "onboarding.status.failed": "Needs attention",
+			"onboarding.status.cancelled": "Cancelled", "onboarding.status.expired": "QR expired",
 			"g.credentials": "Feishu app credentials",
 			"g.security": "Security (fail-closed)",
 			"g.workspace": "Legacy workspace compatibility",
@@ -503,6 +709,7 @@ window.__ModuleLoader__.load({
 			"f.secretHint": "Stored server-side; never shown again. Leave blank to keep the current value.",
 			"f.appId": "App id", "f.appIdHint": "App id of the Feishu/Lark custom app (cli_…).",
 			"f.appSecretRef": "App secret credential ref", "f.appSecretRefHint": "Name of the credential in .credentials.yaml (the single secret source; the value itself is never edited here).",
+			"f.brand": "Account brand", "f.brandHint": "Detected automatically by QR onboarding; choose Feishu or Lark for a manually configured app.",
 			"f.allowedOpenIds": "Allowed open ids", "f.allowedOpenIdsHint": "Comma-separated ou_… ids. Empty = EVERYONE is rejected (fail-closed); only allowAllUsers opens it.",
 			"f.allowedChatIds": "Restrict to group chat ids", "f.allowedChatIdsHint": "Optional comma-separated oc_… ids. Empty = every group the bot joins; non-empty = only those groups.",
 			"f.allowAllUsers": "Allow all users", "f.allowAllUsersHint": "DANGEROUS: opens the remote executor to every sender. Only for mock/test environments.",
@@ -533,6 +740,22 @@ window.__ModuleLoader__.load({
 			"settings.readOnly": "当前部署为只读：GUI 无法修改设置。",
 			"settings.overridden": "已覆盖", "settings.reset": "重置", "settings.invalidNumber": "请输入有效数字",
 			"settings.discard": "放弃", "settings.save": "保存", "settings.saving": "保存中…", "settings.saveFailed": "保存失败",
+			"onboarding.title": "创建并绑定你的飞书机器人",
+			"onboarding.description": "用飞书/Lark 扫一次码，即可创建归你所有的 PersonalAgent、在本机安全保存凭据并连接；无需进入开发者后台，也没有第二次聊天配对。",
+			"onboarding.create": "创建并绑定机器人", "onboarding.rebind": "重新创建机器人", "onboarding.grant": "补开缺失权限",
+			"onboarding.retry": "重试连接", "onboarding.cancel": "取消", "onboarding.qrAlt": "飞书 PersonalAgent 授权二维码",
+			"onboarding.qrRendering": "正在生成二维码", "onboarding.scanHint": "请用手机飞书/Lark 扫码，核对权限清单后确认创建。",
+			"onboarding.expiresIn": "剩余", "onboarding.openLink": "在本机打开授权链接",
+			"onboarding.manualHint": "下方高级字段继续支持已有的手工自建应用。",
+			"onboarding.loopbackOnly": "出于安全考虑，创建机器人只能在 Host 本机通过 localhost 打开的设置页中进行。",
+			"onboarding.updateConfirm": "确认给 App …{app} 补开本插件申请的消息、事件、卡片、历史与 reaction 权限吗？飞书会在应用前再次展示最终权限差异。",
+			"onboarding.capabilityUnavailable": "当前租户未返回完整权限投影；页面将以机器人长连接健康状态作为最终就绪依据。",
+			"onboarding.core": "核心遥控", "onboarding.enhanced": "增强体验",
+			"onboarding.capability.ok": "已授权", "onboarding.capability.missing": "部分缺失", "onboarding.capability.unknown": "待验证",
+			"onboarding.status.loading": "正在读取", "onboarding.status.idle": "尚未开通", "onboarding.status.starting": "正在生成二维码",
+			"onboarding.status.qr_ready": "等待扫码", "onboarding.status.committing": "正在安全保存", "onboarding.status.connecting": "正在连接",
+			"onboarding.status.ready": "已就绪", "onboarding.status.connected": "已连接", "onboarding.status.failed": "需要处理",
+			"onboarding.status.cancelled": "已取消", "onboarding.status.expired": "二维码已过期",
 			"g.credentials": "飞书应用凭据",
 			"g.security": "安全（fail-closed）",
 			"g.workspace": "旧版工作区兼容",
@@ -543,6 +766,7 @@ window.__ModuleLoader__.load({
 			"f.secretHint": "凭据仅保存在服务端，不会回显；留空表示保持原值。",
 			"f.appId": "App ID", "f.appIdHint": "飞书/Lark 自建应用的 App ID（cli_…）。",
 			"f.appSecretRef": "App Secret 凭据引用", "f.appSecretRefHint": ".credentials.yaml 中的凭据名（唯一凭据来源；值本身不在这里编辑）。",
+			"f.brand": "账号品牌", "f.brandHint": "扫码开通时自动识别；手工配置应用时请选择飞书或 Lark。",
 			"f.allowedOpenIds": "允许的 open_id", "f.allowedOpenIdsHint": "逗号分隔的 ou_…。留空 = 拒绝所有人（fail-closed）；只有 allowAllUsers 显式开启才全开放。",
 			"f.allowedChatIds": "限定群聊 ID", "f.allowedChatIdsHint": "可选，逗号分隔的 oc_…。留空 = 机器人加入的任意群都可用；填写后仅限这些群。",
 			"f.allowAllUsers": "允许所有用户", "f.allowAllUsersHint": "危险：把远程执行入口开放给所有发送者。仅建议 mock/测试环境开启。",
@@ -705,12 +929,23 @@ window.__ModuleLoader__.load({
 			try {
 				ctx.effect(() => ctx.locale.register(NS, { en: { ...en, ...placeholders.en }, zh: { ...zh, ...placeholders.zh } }), "dsh-feishu-remote: dictionaries");
 				const settingsScope = ctx.settingsScope.bind({ namespace: SETTINGS_NS });
-				const controller = new FeishuRemoteSettingsCardController(settingsScope);
+				const settingsController = new FeishuRemoteSettingsCardController(settingsScope);
+				const onboardingController = new PersonalAgentOnboardingController(ctx.connection);
+				ctx.effect(() => onboardingController.mount(), "dsh-feishu-remote: PersonalAgent onboarding polling");
+				const injection = () => {
+					const settings = settingsController.inject();
+					const onboarding = onboardingController.inject();
+					return {
+						...settings,
+						...onboarding,
+						hooks: { ...settings.hooks, ...onboarding.hooks }
+					};
+				};
 				ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
 					name: "settings.plugin.item",
 					key: SETTINGS_NS,
 					locale: NS,
-					inject: () => controller.inject()
+					inject: injection
 				}, FeishuRemoteSettingsCard));
 				// 设置页顶层分区（左侧栏独立一项，与「文件提及」同级）
 				try {
@@ -721,7 +956,7 @@ window.__ModuleLoader__.load({
 						order: 18,
 						label: () => t("settings.title"),
 						locale: NS,
-						inject: () => controller.inject()
+						inject: injection
 					}, FeishuRemoteSection));
 				} catch (error) {
 					console.error("[dsh-feishu-remote] 设置页分区注册失败（不影响折叠卡片）：", error);

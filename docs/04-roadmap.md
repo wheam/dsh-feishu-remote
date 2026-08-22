@@ -38,7 +38,7 @@
 ## Phase 2：体验完善（1-2 周）
 
 - Web GUI 设置卡片
-- PersonalAgent 一次扫码开通（docs/16，2026-08-23 方案已定、待实现）：`registerApp()`
+- PersonalAgent 一次扫码开通（docs/16，2026-08-23 已实现、真实租户待验收）：`registerApp()`
   自动创建应用、授权 scopes/events/callbacks、写入 DSH credentials、识别 owner 并热启动 channel
 - 话题首次 @ 后持续激活（2026-08-22 已实现：首次回填前文、后续免 @、跨重启持久化）
 - 结构化提问恢复（userQuestions multiplexer / agent-scoped 覆盖，验证后）

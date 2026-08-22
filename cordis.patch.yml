@@ -1,7 +1,8 @@
 # Mount the Feishu remote plugin into any dsh profile that installs this
-# package. The row is DISABLED by default so a plain `dsh plugin add` can never
-# disturb a running profile: enable it from the profile's own cordis.patch.yml
-# (or a --patch overlay) together with the app credentials, e.g.:
+# package. The row stays enabled even before credentials exist so the Host can
+# register the loopback-only onboarding RPC and Web GUI. Missing credentials
+# keep the Feishu channel disabled (fail-closed) without taking down dsh web.
+# Existing users may still configure the same fields manually, e.g.:
 #
 #   - id: dsh-feishu-remote
 #     disabled: false
@@ -18,5 +19,5 @@
 - insert:
     - id: dsh-feishu-remote
       name: dsh-feishu-remote
-      disabled: true
+      disabled: false
       config: {}

@@ -27,7 +27,8 @@ export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike
     appSecret: config.appSecret,
     transport: 'websocket',
     source: 'dsh-feishu-remote',
-    domain: config.brand === 'lark' ? Domain.Lark : Domain.Feishu,
+    // `larkoffice` is a retained config-file alias for international Lark.
+    domain: config.brand === 'feishu' ? Domain.Feishu : Domain.Lark,
     loggerLevel: LoggerLevel.warn,
     handshakeTimeoutMs: 15_000,
     policy: {

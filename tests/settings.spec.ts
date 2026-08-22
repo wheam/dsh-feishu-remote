@@ -16,6 +16,8 @@ describe('settings namespace (flat ↔ nested)', () => {
     expect(flat.allowedOpenIds).toBe('ou_1, ou_2')
     expect(flat.allowedChatIds).toBe('')
     expect(flat.appSecretRef).toBe('DSH_FEISHU_APP_SECRET')
+    expect(flat.brand).toBe('feishu')
+    expect(flat.onboardingManaged).toBe(false)
     expect(flat.contextP2pMaxMessages).toBe(80)
     expect(flat.contextP2pMaxChars).toBe(50000)
     expect('appSecret' in flat).toBe(false)
@@ -27,6 +29,17 @@ describe('settings namespace (flat ↔ nested)', () => {
     const config = unflatten({ appSecretRef: 'MY_REF' }, { appSecret: 'super-secret' })
     expect(config.appSecretRef).toBe('MY_REF')
     expect(config.appSecret).toBe('super-secret') // entry value preserved, never written by settings
+  })
+
+  it('drops a legacy inline secret after QR onboarding selects a provider ref', () => {
+    const config = unflatten({
+      appId: 'cli_new',
+      appSecretRef: 'DSH_FEISHU_APP_SECRET_NEW',
+      onboardingManaged: true,
+      brand: 'lark',
+    }, { appSecret: 'legacy-secret', brand: 'feishu' })
+    expect(config.appSecret).toBe('')
+    expect(config.brand).toBe('lark')
   })
 
   it('round-trips through unflatten, keeping entry fields GUI does not expose', () => {

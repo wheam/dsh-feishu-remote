@@ -18,6 +18,10 @@ export const SETTINGS_NAMESPACE = settingsNamespace('feishu-remote')
 export const flatSchema = Schema.object({
   appId: Schema.string().default(''),
   appSecretRef: Schema.string().default('DSH_FEISHU_APP_SECRET'),
+  brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
+  // Host-only provenance bit. It never carries a secret and is deliberately
+  // omitted from the hand-edited field list in src/client.js.
+  onboardingManaged: Schema.boolean().default(false),
   allowedOpenIds: Schema.string().default(''),
   allowedChatIds: Schema.string().default(''),
   allowAllUsers: Schema.boolean().default(false),
@@ -47,6 +51,8 @@ export const flatSchema = Schema.object({
 export interface FlatSettings {
   appId: string
   appSecretRef: string
+  brand: 'feishu' | 'lark' | 'larkoffice'
+  onboardingManaged: boolean
   allowedOpenIds: string
   allowedChatIds: string
   allowAllUsers: boolean
@@ -79,6 +85,8 @@ export function flatten(config: Config): FlatSettings {
   return {
     appId: config.appId ?? '',
     appSecretRef: config.appSecretRef ?? 'DSH_FEISHU_APP_SECRET',
+    brand: config.brand ?? 'feishu',
+    onboardingManaged: false,
     allowedOpenIds: (config.allowedOpenIds ?? []).join(', '),
     allowedChatIds: (config.allowedChatIds ?? []).join(', '),
     allowAllUsers: config.allowAllUsers ?? false,
@@ -112,8 +120,12 @@ export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config
   const value = flat ?? {}
   return {
     ...entry,
+    // A successful QR bind moves the secret source to the credential provider.
+    // Do not let a legacy inline patch secret shadow that newly selected ref.
+    appSecret: value.onboardingManaged === true ? '' : entry.appSecret,
     appId: value.appId ?? '',
     appSecretRef: value.appSecretRef?.trim() || 'DSH_FEISHU_APP_SECRET',
+    brand: value.brand ?? 'feishu',
     allowedOpenIds: splitIds(value.allowedOpenIds),
     allowedChatIds: splitIds(value.allowedChatIds),
     allowAllUsers: value.allowAllUsers ?? false,

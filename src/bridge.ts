@@ -426,6 +426,18 @@ export class FeishuRemoteBridge {
     void this.connectLoop()
   }
 
+  /** Secret-free lifecycle snapshot for the local onboarding health check. */
+  health(): { appId: string; connected: boolean; terminalFailure: boolean; botName?: string; botOpenId?: string } {
+    const identity = this.channel?.botIdentity
+    return {
+      appId: this.config.appId,
+      connected: this.connected && !this.terminalFailure,
+      terminalFailure: this.terminalFailure,
+      ...(identity?.name === undefined ? {} : { botName: identity.name }),
+      ...(identity?.openId === undefined ? {} : { botOpenId: identity.openId }),
+    }
+  }
+
   /**
    * Race every channel API call against the bridge LIFETIME signal: teardown
    * aborts hung SDK calls, so shutdown can reach true quiescence (review #6 F2).

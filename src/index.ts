@@ -14,10 +14,16 @@
  * paths, so a stale reload can never stop a newer bridge.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-client-connection'
 import { FeishuRemoteBridge } from './bridge.js'
 import { ConfigSchema, resolveRuntimeConfig } from './config.js'
 import type { Config as BridgeConfig } from './config.js'
 import { createMockChannel } from './mock.js'
+import {
+  ONBOARDING_RPC_CHANNEL,
+  PersonalAgentOnboardingService,
+  type BridgeHealth,
+} from './onboarding.js'
 import { SETTINGS_NAMESPACE, flatSchema, flatten, unflatten } from './settings.js'
 
 export * from './bridge.js'
@@ -28,6 +34,7 @@ export type Config = BridgeConfig
 export * from './context.js'
 export * from './identity.js'
 export * from './mock.js'
+export * from './onboarding.js'
 export * from './scheduler.js'
 export * from './security.js'
 export * from './session-groups.js'
@@ -49,6 +56,7 @@ export const inject = [
   'tools',
   'systemPrompt',
   'agentPresets',
+  'connection',
   'sessionPersistence',
   'approval',
   'userQuestions',
@@ -140,5 +148,60 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
   }
 
   ctx.effect(() => settings.watch(() => sync()), 'dsh-feishu-remote settings watcher')
+
+  const waitForBridge = async (appId: string, signal?: AbortSignal): Promise<BridgeHealth> => {
+    // Explicitly enqueue a sync as well as relying on the settings watcher.
+    // The generation fence makes a watcher race harmless and guarantees that
+    // the retry endpoint can rebuild an unchanged configuration.
+    await sync()
+    const assertNotAborted = (): void => {
+      if (signal?.aborted === true) throw Object.assign(new Error('onboarding cancelled'), { code: 'abort' })
+    }
+    const pollDelay = (): Promise<void> => new Promise((resolve, reject) => {
+      if (signal?.aborted === true) {
+        reject(Object.assign(new Error('onboarding cancelled'), { code: 'abort' }))
+        return
+      }
+      const onAbort = (): void => {
+        clearTimeout(timer)
+        reject(Object.assign(new Error('onboarding cancelled'), { code: 'abort' }))
+      }
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, 250)
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    assertNotAborted()
+    const deadline = Date.now() + 30_000
+    while (!closed && Date.now() < deadline) {
+      assertNotAborted()
+      const health = bridge?.health()
+      if (health?.appId === appId && health.connected) return health
+      if (health?.appId === appId && health.terminalFailure) {
+        throw Object.assign(new Error('bridge terminal failure'), { code: 'connection_failed' })
+      }
+      await pollDelay()
+    }
+    throw Object.assign(new Error('bridge connection timeout'), { code: 'connection_timeout' })
+  }
+
+  const onboarding = new PersonalAgentOnboardingService(ctx, settings, {
+    getBridgeHealth: () => bridge?.health(),
+    waitForBridge,
+  })
+  ctx.effect(() => () => onboarding.stop(), 'dsh-feishu-remote onboarding lifecycle')
+  try {
+    ctx.connection.rpc.handle(
+      ONBOARDING_RPC_CHANNEL,
+      (endpoint, payload, signal) => onboarding.handleRpc(endpoint, payload, signal),
+      { authority: 'loopback' },
+    )
+  } catch (error) {
+    ctx.logger?.warn?.(
+      'dsh-feishu-remote: onboarding RPC 注册失败（手工配置仍可用）：%s',
+      error instanceof Error ? error.message : String(error),
+    )
+  }
   await sync()
 }

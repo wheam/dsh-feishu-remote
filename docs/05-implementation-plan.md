@@ -13,7 +13,8 @@
 > 2026-08-23：工作目录改为 DSH Workspace Registry 驱动；新增首次选择/新建、
 > `originKey → workspaceId` 持久绑定、旧会话 cwd 自动迁移和 `/workspace` 切换。
 > 2026-08-23：首次开通目标改为官方 `registerApp()` PersonalAgent Device Flow；一次扫码
-> 创建/授权应用、保存凭据并识别 owner。状态机、安全边界与发布前置见 docs/16（待实现）。
+> 创建/授权应用、保存凭据并识别 owner。实现与自动化测试已完成，真实租户验收及包发布
+> 前置见 docs/16。
 > Round 12 修复后相关契约测试全绿；当前总数以 `pnpm run test` 输出为准。
 > 本文档是本仓库的"当前方案"单一事实源；
 > 若与 01-04 冲突，以本文为准。已通过三轮独立 review——第一轮 Codex
@@ -257,7 +258,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 - **设置卡片（P1）**：CLI 向导删除后，配置编辑 = cordis.patch.yml + GUI 卡片双通道；
   `role('secret')` 的保证是已保存值不回显浏览器（首次设置经 browser→host wire），
   宿主可读、0600 明文落盘（写入文档口径）。
-- **扫码开通（P1，待实现）**：默认加载空配置以注册 onboarding RPC 和设置页；Host 调用
+- **扫码开通（P1，已实现，真实租户待验收）**：默认加载空配置以注册 onboarding RPC 和设置页；Host 调用
   `registerApp()`，浏览器只持有短期二维码 URL；返回 Secret 写入按 App ID 派生的独立
   credential ref，App ID/ref/owner/群白名单通过一次 settings `update()` 原子切换，随后沿
   现有 watcher 热启动 bridge。跨 credentials/settings 采用补偿式提交，完整方案见 docs/16。

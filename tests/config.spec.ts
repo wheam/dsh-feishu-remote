@@ -69,6 +69,13 @@ describe('resolveConfig (Workspace Registry routing, fail-closed sender access)'
     expect(config.appSecret).toBe('env-secret')
   })
 
+  it('does not let the legacy default env secret shadow a custom credential ref', () => {
+    expect(() => resolveConfig(
+      { ...BASE, appSecret: '', appSecretRef: 'DSH_FEISHU_APP_SECRET_NEW' },
+      { DSH_FEISHU_APP_SECRET: 'old-default-secret' },
+    )).toThrow('missing app secret')
+  })
+
   it('normalizes the native command allowlist', () => {
     const config = resolveConfig({ ...BASE, commandAllowlist: ['  status ', 'sessions', 'status'] })
     expect(config.commandAllowlist).toEqual(['status', 'sessions'])

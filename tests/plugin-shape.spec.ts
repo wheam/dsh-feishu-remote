@@ -21,6 +21,8 @@ describe('dsh-feishu-remote loader contract', () => {
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string } }
       keywords?: string[]
       peerDependencies?: Record<string, string>
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
     }
     expect(manifest.dsh?.bundle?.patch).toBe('./cordis.patch.yml')
     expect(manifest.dsh?.client?.platform).toBe('web')
@@ -28,13 +30,20 @@ describe('dsh-feishu-remote loader contract', () => {
     // Locked, not ranged (docs/05 §7: 精确版本，不用 ^).
     expect(manifest.peerDependencies?.['@deepseek-ai/dsh-agent']).toBe('0.1.1-rc.2')
     expect(manifest.peerDependencies?.['@deepseek-ai/dsh-user-approval']).toBe('0.1.1-rc.2')
-    expect(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')).toContain('name: dsh-feishu-remote')
+    expect(manifest.devDependencies?.qrcode).toBe('1.5.4')
+    expect(manifest.dependencies?.qrcode).toBeUndefined()
+    const bundlePatch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    expect(bundlePatch).toContain('name: dsh-feishu-remote')
+    expect(bundlePatch).toContain('disabled: false')
   })
 
   it('keeps the keyed settings slot contract used by 0.1.1-rc.2', () => {
     const client = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(client).toContain('name: "settings.plugin.item"')
     expect(client).toContain('key: SETTINGS_NS')
+    expect(client).toContain('connection.isLoopback === false')
+    expect(client).toContain('key: "onboarding"')
+    expect(client).not.toContain('selectField("brand", ["feishu", "lark", "larkoffice"])')
     expect(client).not.toContain('id: "dsh-feishu-remote",\n\t\t\t\torder: 60')
   })
 
@@ -48,6 +57,7 @@ describe('dsh-feishu-remote loader contract', () => {
       'tools',
       'systemPrompt',
       'agentPresets',
+      'connection',
       'sessionPersistence',
       'approval',
       'userQuestions',

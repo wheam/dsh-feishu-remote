@@ -1,6 +1,6 @@
 # PersonalAgent 扫码创建与一键开通方案
 
-> 状态：**方案已定，尚未实现**（2026-08-23）。
+> 状态：**实现与自动化测试已完成，真实 Feishu/Lark 租户验收待跑**（2026-08-23）。
 >
 > 目标：插件安装完成后，用户只需在 DSH 设置页点击一次并用手机飞书扫码，即可创建、
 > 授权、绑定自己的机器人；不再要求用户手工进入飞书开放平台创建企业自建应用、复制
@@ -79,7 +79,6 @@ registerApp({
   appPreset: {
     name: 'DSH Remote · {user}',
     desc: '用飞书远程操控本机 DeepSeek Harness',
-    avatar: '<受控的公开 HTTPS 图标 URL>',
   },
   addons: {
     // 保留 PersonalAgent 平台模板，在其上叠加本插件能力。
@@ -105,6 +104,9 @@ registerApp({
   onStatusChange,
 })
 ```
+
+当前实现暂用飞书平台默认头像；发布受控的公开 HTTPS 图标资产后再补 `appPreset.avatar`，避免
+为了头像把注册二维码或用户信息发送给第三方服务。
 
 选择 `preset: true` 的理由：先与已跑通的 PersonalAgent 默认模板保持一致，再增量申请本插件
 能力，避免首版因误删模板内隐含基座配置导致机器人或长连接不可用。真实租户记录最终授权
@@ -132,8 +134,7 @@ SDK 只校验 addons 的 JSON 形状，不校验权限名称；平台不认识�
 
 ### 4.1 加载与入口
 
-当前 bundle patch 默认 `disabled: true`，这会让缺少配置的新用户看不到 Host 设置命名空间。
-实现扫码开通时调整为：
+bundle patch 已从 `disabled: true` 调整为默认启用空配置，使缺少凭据的新用户也能看到设置页：
 
 - 插件条目默认启用、`config: {}`；
 - `apply()` 先注册 settings 与 onboarding RPC；
@@ -156,9 +157,12 @@ idle
 约束：
 
 - 注册会话只驻留内存，最长不超过 SDK 返回的有效期；新建会话会 abort 旧会话。
+- 开始前先检查 settings 与 credential provider 可写；只读部署不会先创建应用再报保存失败。
 - RPC 只返回 QR URL、过期时间、阶段和脱敏错误；绝不返回 App Secret。
+- RPC 只允许 Host loopback；LAN/Tailscale 页面明确提示回到 Host 本机，不循环显示原始 403。
 - 页面离开不会自动取消已经扫码确认的提交；显式「取消」才 abort。
 - 同一结果只能提交一次；重复轮询不得重复写凭据或重复重启 channel。
+- 每轮扫码保存开始时核对配置仍与开始扫码时一致，避免覆盖期间发生的较新手工修改。
 - Host 停止时 abort 注册并清空内存中的临时 Secret。
 
 ### 4.3 凭据与配置提交
@@ -168,8 +172,8 @@ idle
 1. 校验 `client_id` 形状、`client_secret` 非空、`user_info.open_id`（若有）。
 2. 用新凭据做短时、只读的应用身份探测，至少取得 bot identity；失败不触碰旧配置。
 3. 从 App ID 派生新的、无 Secret 信息的独立引用，例如
-   `DSH_FEISHU_APP_SECRET_<SHA256(client_id) 前 12 位>`。不要覆盖当前配置正在引用的凭据，
-   也避免多个 web profile 共用默认引用时互相踩写。
+   `DSH_FEISHU_APP_SECRET_<SHA256(client_id) 前 12 位>_<注册会话 hash 前 8 位>`。不要覆盖
+   当前配置正在引用的凭据，也避免多个 web profile 或重复补权互相踩写。
 4. `ctx.credentials.set(credentialRef(newRef), client_secret)` 写入 DSH provider 管理的
    `~/.dsh/.credentials.yaml`，不经过浏览器和 settings value。
 5. 使用 settings namespace 的一次 `update(patch)` 原子写入 `appId`、`appSecretRef`、
@@ -189,9 +193,9 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 - 开始前快照旧 App ID、credential ref、owner 与群白名单；新凭据探测成功后才落盘；
 - 新 Secret 总是写入独立 `newRef`，旧 Secret 和旧 settings 在切换前保持原样；
 - credential 写成功但 settings `update()` 失败：`unset(newRef)`，旧配置无需重写即可继续工作；
-- settings 更新成功后若出现确定性凭据/权限错误：用一次 `update()` 恢复旧配置元组，再
-  `unset(newRef)`；若仅是断网或飞书暂时不可达，则保留新配置供重试，UI 显示
-  「已创建、未连接」，不得谎报完成；
+- settings 更新成功后，若这是重新绑定或补权，则任意连接健康检查失败都用一次 `update()`
+  恢复旧配置元组，再 `unset(newRef)`，避免把仍可用的旧机器人替换成坏配置；只有首次绑定因
+  断网或飞书暂时不可达时保留新配置供重试，UI 显示「已创建、未连接」，不得谎报完成；
 - 新 channel 确认 connected 后也不自动删除旧 credential ref，因为它可能仍被另一个 profile
   使用；设置页可在确认无引用后提供显式清理；
 - 不自动删除已在飞书创建的 PersonalAgent。删除属于外部破坏性操作，只提供后台链接和说明；
@@ -204,8 +208,9 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 保持 fail-closed。重新创建应用时不合并旧 `allowedOpenIds`，因为旧 open_id 不能当作新应用下
 的用户身份直接复用。若返回缺少 open_id：
 
-1. 使用新应用身份调用 `application/v6/applications` 查询 owner，`user_id_type=open_id`；
-2. 查询仍失败则应用可保存为「待确认 owner」，但 channel 不接受任何消息；
+1. 使用新应用身份调用 `application.v6.application.get` 查询 owner，`user_id_type=open_id`；
+2. 查询仍失败则不切换本地配置，页面报告「无法确认 owner」；飞书侧已创建的应用保留并给出
+   手工处理说明，但 channel 不接受任何新消息；
 3. 不得临时设置 `allowAllUsers: true`，也不回退到“第一个发消息的人自动成为 owner”。
 
 首版继续以配置中的 `allowedOpenIds` 为运行时事实源；后续可增加周期性 owner 刷新，使飞书后台
@@ -229,14 +234,16 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 
 ### 已连接
 
-- 展示 bot 名称、租户品牌、连接状态、owner 已识别、核心/增强权限状态；
+- 展示 bot 名称、租户品牌、连接状态、owner 已识别；仅当租户 API 返回完整投影时显示
+  核心/增强权限状态，否则明确说明以真实连接健康状态为准；
 - 操作：测试连接、补开权限、重新绑定；
 - 不显示 Secret，不显示完整 open_id，默认只显示尾部四位用于排障。
 
 ### 错误文案
 
-错误必须指向下一步：二维码过期→刷新；用户拒绝→重新开始；凭据存储只读→说明被环境变量
-遮蔽；权限缺失→补开权限；长连接失败→重试并保留已创建状态；Lark 域识别→自动切换并展示。
+错误必须指向下一步：二维码过期→刷新；用户拒绝→重新开始；凭据存储只读→扫码前拦截并说明；
+权限/owner 探测失败→对已创建 App 补权而不是再创建一个；首次长连接失败→保留并重试；重新
+绑定失败→恢复旧 App；Lark 域识别→自动切换并展示。
 
 ## 6. 发布与安装前置
 
@@ -254,13 +261,13 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 
 | 步骤 | 内容 | 验收 |
 | --- | --- | --- |
-| A | 抽出 `RegistrationService`，封装 `registerApp`、abort、TTL、脱敏状态 | 单元测试覆盖成功/拒绝/过期/并发替换/停机 |
-| B | 注册 Host RPC，设置页加入 onboarding 状态机与二维码 | Secret 从未出现在 RPC、DOM、日志快照 |
-| C | credential + settings 补偿式提交，owner 自动写入 | 任一步失败均不破坏旧可工作配置 |
-| D | 权限探测与核心/增强降级 | 缺增强权限仍可私聊和群内 @；缺核心权限 fail-closed |
-| E | channel 热启动与 UI 健康状态 | 扫码后无需重启 `dsh web`，直接显示 bot 名称和 connected |
-| F | scoped npm 发布与 fresh profile 安装 | 新 Mac 一条命令安装，包内容和来源可验证 |
-| G | 真实 Feishu/Lark 租户验收 | 见 §8，全部通过才报告“一扫即用” |
+| A ✅ | 抽出 `PersonalAgentOnboardingService`，封装 `registerApp`、abort、脱敏状态 | 单元测试覆盖成功、取消、只读预检、迟到会话、凭据/设置与连接失败 |
+| B ✅ | 注册 loopback-only Host RPC，设置页加入 onboarding 状态机与本地二维码 | Secret 不进入 RPC、DOM、日志快照；二维码不经过第三方服务 |
+| C ✅ | 独立 credential ref + settings 原子 patch + 补偿回滚，owner 自动写入 | settings 失败删除新凭据；重新绑定任意连接失败恢复旧配置；首次超时保留重试 |
+| D ✅ | v6 应用权限探测与核心/增强降级 | 已知缺核心权限时切换前 fail-closed；未知时以真实连接作最终健康闸 |
+| E ✅ | channel 热启动与 UI 健康状态 | settings watcher 热重载；页面轮询展示 bot、brand、owner 尾号和 connected |
+| F ⏳ | scoped npm 发布与 fresh profile 安装 | 新 Mac 一条命令安装，包内容和来源可验证 |
+| G ⏳ | 真实 Feishu/Lark 租户验收 | 见 §8，全部通过才对外报告“一扫即用” |
 
 ## 8. 验收矩阵
 
@@ -280,6 +287,8 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 - `.credentials.yaml` 不可写、同名环境变量遮蔽、settings 写失败；
 - 新凭据有效但长连接暂时失败、飞书断网后恢复；
 - 已有手工 App 用户不被强制迁移；重新绑定失败保留旧 App；
+- 扫码期间手工配置被修改、旧扫码迟到过期、连接重试与新扫码并发；
+- localhost 正常开通、LAN/Tailscale 页面显示本机限定提示且不发起特权 RPC；
 - 国内飞书与国际 Lark 域自动切换；
 - PersonalAgent 忽略某项 addons、敏感权限需要额外审批时的降级；
 - dsh 版本不匹配时安装闸拒绝启用。

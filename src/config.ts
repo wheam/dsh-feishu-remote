@@ -107,7 +107,8 @@ function unique(values: string[]): string[] {
 export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.env): ResolvedConfig {
   const appId = (config.appId || env.DSH_FEISHU_APP_ID || '').trim()
   const appSecretRef = (config.appSecretRef || 'DSH_FEISHU_APP_SECRET').trim()
-  const appSecret = (config.appSecret || env[appSecretRef] || env.DSH_FEISHU_APP_SECRET || '').trim()
+  const defaultSecret = appSecretRef === 'DSH_FEISHU_APP_SECRET' ? env.DSH_FEISHU_APP_SECRET : undefined
+  const appSecret = (config.appSecret || env[appSecretRef] || defaultSecret || '').trim()
   if (appId === '') throw new Error('dsh-feishu-remote: missing app id (set DSH_FEISHU_APP_ID or appId)')
   if (appSecretRef === '') throw new Error('dsh-feishu-remote: appSecretRef cannot be empty')
   credentialRef(appSecretRef)
@@ -193,7 +194,8 @@ export async function resolveRuntimeConfig(
 ): Promise<ResolvedConfig> {
   const appSecretRef = (config.appSecretRef || 'DSH_FEISHU_APP_SECRET').trim()
   credentialRef(appSecretRef)
-  const directSecret = (config.appSecret || env[appSecretRef] || env.DSH_FEISHU_APP_SECRET || '').trim()
+  const defaultSecret = appSecretRef === 'DSH_FEISHU_APP_SECRET' ? env.DSH_FEISHU_APP_SECRET : undefined
+  const directSecret = (config.appSecret || env[appSecretRef] || defaultSecret || '').trim()
   const resolvedSecret = directSecret === ''
     ? (await ctx.credentials.resolve(credentialRef(appSecretRef)))?.value ?? ''
     : directSecret
