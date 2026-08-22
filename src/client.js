@@ -294,8 +294,7 @@ window.__ModuleLoader__.load({
 				fields: [
 					{ field: "provider", spec: textField("provider"), kind: "text", labelKey: "f.provider", hintKey: "f.providerHint", placeholderKey: "p.provider" },
 					{ field: "model", spec: textField("model"), kind: "text", labelKey: "f.model", hintKey: "f.modelHint", placeholderKey: "p.model" },
-					{ field: "agentPreset", spec: textField("agentPreset"), kind: "text", labelKey: "f.agentPreset", hintKey: "f.agentPresetHint", placeholderKey: "p.agentPreset" },
-					{ field: "cardPreset", spec: selectField("cardPreset", ["compact", "standard", "developer"]), kind: "select", labelKey: "f.cardPreset", hintKey: "f.cardPresetHint" }
+					{ field: "agentPreset", spec: textField("agentPreset"), kind: "text", labelKey: "f.agentPreset", hintKey: "f.agentPresetHint", placeholderKey: "p.agentPreset" }
 				]
 			},
 			{
@@ -314,6 +313,8 @@ window.__ModuleLoader__.load({
 					{ field: "contextBackend", spec: selectField("contextBackend", ["auto", "cli", "sdk"]), kind: "select", labelKey: "f.contextBackend", hintKey: "f.contextBackendHint" },
 					// feishuCliPath deliberately absent: arbitrary-exec path stays a
 					// trusted-admin setting (docs/15 F-09), not GUI-editable.
+					{ field: "contextP2pMaxMessages", spec: numberField("contextP2pMaxMessages"), kind: "number", labelKey: "f.contextP2pMaxMessages", hintKey: "f.contextP2pMaxMessagesHint", placeholderKey: "p.contextP2pMaxMessages" },
+					{ field: "contextP2pMaxChars", spec: numberField("contextP2pMaxChars"), kind: "number", labelKey: "f.contextP2pMaxChars", hintKey: "f.contextP2pMaxCharsHint", placeholderKey: "p.contextP2pMaxChars" },
 					{ field: "contextMaxMessages", spec: numberField("contextMaxMessages"), kind: "number", labelKey: "f.contextMaxMessages", hintKey: "f.contextMaxMessagesHint", placeholderKey: "p.contextMaxMessages" },
 					{ field: "contextMaxChars", spec: numberField("contextMaxChars"), kind: "number", labelKey: "f.contextMaxChars", hintKey: "f.contextMaxCharsHint", placeholderKey: "p.contextMaxChars" },
 					{ field: "contextTimeoutMs", spec: numberField("contextTimeoutMs"), kind: "number", labelKey: "f.contextTimeoutMs", hintKey: "f.contextTimeoutMsHint", placeholderKey: "p.contextTimeoutMs" },
@@ -511,15 +512,16 @@ window.__ModuleLoader__.load({
 			"f.provider": "Provider", "f.providerHint": "Override model provider; empty = deployment default.",
 			"f.model": "Model", "f.modelHint": "Override model; empty = deployment default.",
 			"f.agentPreset": "Agent preset", "f.agentPresetHint": "Preset id to mount (empty = deployment default, usually standard).",
-			"f.cardPreset": "Card density", "f.cardPresetHint": "compact / standard / developer.",
-			"f.progressUpdateMs": "Card update throttle (ms)", "f.progressUpdateMsHint": "Streaming card patch cadence; default 600ms.",
+			"f.progressUpdateMs": "Card update throttle (ms)", "f.progressUpdateMsHint": "Mutable-card patch cadence; default 600ms.",
 			"f.interactiveTimeoutMs": "Approval timeout (ms)", "f.interactiveTimeoutMsHint": "Pending approvals settle as unavailable after this; default 10min.",
 			"f.maxLiveAgents": "Max live agents", "f.maxLiveAgentsHint": "Hard cap on live sessions (0 = unlimited).",
 			"f.commandAllowlist": "Native command allowlist", "f.commandAllowlistHint": "Comma-separated Harness command names allowed to pass through; anything else is rejected.",
 			"f.contextMode": "Context backfill", "f.contextModeHint": "auto = inject Feishu thread/chat history before each plain message (off disables it).",
 			"f.contextBackend": "Context backend", "f.contextBackendHint": "auto prefers the official lark-cli and falls back to the bundled SDK; cli/sdk force one.",
-			"f.contextMaxMessages": "Context max messages", "f.contextMaxMessagesHint": "Window size in messages per injection (1-500; default 150).",
-			"f.contextMaxChars": "Context max chars", "f.contextMaxCharsHint": "Window size in characters per injection (1000-500000; default 100000).",
+			"f.contextP2pMaxMessages": "Private-chat message cap", "f.contextP2pMaxMessagesHint": "Additional cap for long-running private chats (1-500; default 80, about two CLI pages). The global cap still applies.",
+			"f.contextP2pMaxChars": "Private-chat character cap", "f.contextP2pMaxCharsHint": "Additional character cap for private chats (1000-500000; default 50000). The global cap still applies.",
+			"f.contextMaxMessages": "Thread/global message cap", "f.contextMaxMessagesHint": "Global ceiling and thread window size per injection (1-500; default 150).",
+			"f.contextMaxChars": "Thread/global character cap", "f.contextMaxCharsHint": "Global ceiling and thread character window (1000-500000; default 100000).",
 			"f.contextTimeoutMs": "Context fetch timeout (ms)", "f.contextTimeoutMsHint": "History fetch timeout; on timeout the message proceeds without context (fail-open).",
 			"f.contextIncludeBot": "Include bot replies", "f.contextIncludeBotHint": "Keep the bot's own history replies in the context window."
 		};
@@ -550,15 +552,16 @@ window.__ModuleLoader__.load({
 			"f.provider": "Provider", "f.providerHint": "覆盖模型 provider；留空 = 部署默认。",
 			"f.model": "模型", "f.modelHint": "覆盖模型；留空 = 部署默认。",
 			"f.agentPreset": "Agent preset", "f.agentPresetHint": "要挂载的 preset id（留空 = 部署默认，通常 standard）。",
-			"f.cardPreset": "卡片密度", "f.cardPresetHint": "compact / standard / developer。",
-			"f.progressUpdateMs": "卡片更新节流（毫秒）", "f.progressUpdateMsHint": "流式卡片 patch 节奏；默认 600ms。",
+			"f.progressUpdateMs": "卡片更新节流（毫秒）", "f.progressUpdateMsHint": "可变进度卡 patch 节奏；默认 600ms。",
 			"f.interactiveTimeoutMs": "审批超时（毫秒）", "f.interactiveTimeoutMsHint": "待审批超过该时长结算为 unavailable；默认 10 分钟。",
 			"f.maxLiveAgents": "live agent 上限", "f.maxLiveAgentsHint": "live 会话硬上限（0 = 不限）。",
 			"f.commandAllowlist": "原生命令透传白名单", "f.commandAllowlistHint": "逗号分隔的 Harness 命令名；其余命令一律拒绝。",
 			"f.contextMode": "上下文回填", "f.contextModeHint": "auto = 每条普通消息前注入飞书话题/聊天历史；off 完全关闭。",
 			"f.contextBackend": "上下文获取后端", "f.contextBackendHint": "auto 优先官方 lark-cli、装不上自动降级已打包的 SDK；cli/sdk 强制其一。",
-			"f.contextMaxMessages": "上下文消息条数上限", "f.contextMaxMessagesHint": "单次注入窗口的消息条数（1-500；默认 150）。",
-			"f.contextMaxChars": "上下文字符上限", "f.contextMaxCharsHint": "单次注入窗口的字符数（1000-500000；默认 100000）。",
+			"f.contextP2pMaxMessages": "私聊消息条数上限", "f.contextP2pMaxMessagesHint": "长期私聊的额外上限（1-500；默认 80，约两页 CLI 基础读取）；仍受全局上限约束。",
+			"f.contextP2pMaxChars": "私聊字符上限", "f.contextP2pMaxCharsHint": "私聊的额外字符上限（1000-500000；默认 50000）；仍受全局上限约束。",
+			"f.contextMaxMessages": "话题/全局消息上限", "f.contextMaxMessagesHint": "全局硬上限，同时是话题单次注入窗口（1-500；默认 150）。",
+			"f.contextMaxChars": "话题/全局字符上限", "f.contextMaxCharsHint": "全局硬上限，同时是话题字符窗口（1000-500000；默认 100000）。",
 			"f.contextTimeoutMs": "上下文拉取超时（毫秒）", "f.contextTimeoutMsHint": "历史拉取超时；超时后消息照常处理、本次不注入（fail-open）。",
 			"f.contextIncludeBot": "包含机器人自己的回复", "f.contextIncludeBotHint": "上下文窗口中是否保留机器人自己的历史回复。"
 		};
@@ -578,6 +581,8 @@ window.__ModuleLoader__.load({
 				"p.interactiveTimeoutMs": "Example: 600000",
 				"p.maxLiveAgents": "Example: 8 (0 = unlimited)",
 				"p.commandAllowlist": "Example: status, sessions",
+				"p.contextP2pMaxMessages": "Example: 80",
+				"p.contextP2pMaxChars": "Example: 50000",
 				"p.contextMaxMessages": "Example: 150",
 				"p.contextMaxChars": "Example: 100000",
 				"p.contextTimeoutMs": "Example: 10000"
@@ -596,6 +601,8 @@ window.__ModuleLoader__.load({
 				"p.interactiveTimeoutMs": "例如：600000",
 				"p.maxLiveAgents": "例如：8（0 = 不限）",
 				"p.commandAllowlist": "例如：status, sessions",
+				"p.contextP2pMaxMessages": "例如：80",
+				"p.contextP2pMaxChars": "例如：50000",
 				"p.contextMaxMessages": "例如：150",
 				"p.contextMaxChars": "例如：100000",
 				"p.contextTimeoutMs": "例如：10000"
@@ -605,7 +612,7 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			// 前端优雅降级（docs/11 事故教训）：无论未来 slot/API 契约如何变化，
 			// 本模块的任何注册失败只影响自己的设置卡（不显示 + 控制台报错），
-			// 绝不拖垮宿主界面。rc.7 keyed-slot 注册保持不变。
+			// 绝不拖垮宿主界面。keyed-slot 契约已在 dsh 0.1.1-rc.2 复核。
 			try {
 				ctx.effect(() => ctx.locale.register(NS, { en: { ...en, ...placeholders.en }, zh: { ...zh, ...placeholders.zh } }), "dsh-feishu-remote: dictionaries");
 				const settingsScope = ctx.settingsScope.bind({ namespace: SETTINGS_NS });

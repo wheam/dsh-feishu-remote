@@ -1,14 +1,16 @@
 # 实现方案（Phase 1 落地方案）
 
-> 状态：**步骤 0-6 与 P1 设置卡片 + P1 流式卡片已实现，Codex 十一轮 review 终审 APPROVE；
-> 流式卡片经 Round 12 独立 review（2 P1 / 4 P2 / 1 NIT，修复对照见 docs/10）**
+> 状态：**步骤 0-6 与 P1 设置卡片 + P1 进度卡片已实现，Codex 十一轮 review 终审 APPROVE；
+> 进度更新链路经 Round 12 独立 review（2 P1 / 4 P2 / 1 NIT，修复对照见 docs/10）**
 > （2026-08-18：仓库骨架、通道层、出站调度器、回合归属账本、审批闭环、话题映射、
 > 流式节流全部落地，104 个契约测试全绿，构建产物约 2.4MB，mock 冒烟通过；
 > 47 项 review findings 修复对照见 docs/10；真实租户验收待 docs/09-onboarding.md
 > 凭据执行）。
 > 2026-08-19：进度卡升级为飞书流式更新卡片（运行期 `streaming_mode: true` +
 > `streaming_config`，节流默认 600ms，终态显式关闭流式模式，见 §2.5）；
-> Round 12 修复后 112 个契约测试全绿。
+> 2026-08-22：极简卡改为「最新进展 → 最终总结」，正文会缩短，因此普通任务卡停用
+> append-oriented `streaming_mode`，继续用约 600ms 的整卡 patch。
+> Round 12 修复后相关契约测试全绿；当前总数以 `pnpm run test` 输出为准。
 > 本文档是本仓库的"当前方案"单一事实源；
 > 若与 01-04 冲突，以本文为准。已通过三轮独立 review——第一轮 Codex
 > （gpt-5.6-sol）报告见 06-codex-review.md；第二轮 DeepSeek / Claude Opus 5 /
@@ -64,7 +66,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
   恢复且终态最终送达"。
 - **永久错误兜底**：230025（超长）/230031（超 14 天）/消息撤回/目标失效归类为 permanent，patch 失败改发新终态卡；`patchCard` 是裸调用（无重试、无 classifyError 包装），必须走本插件出站调度器。
 - **3 秒回调预算**：入站回调 handler 只做鉴权+入队即返回（chatQueue 关闭后 handler 内联执行，长任务会拖垮 SDK 事件循环）；耗时的 state I/O、agent 创建、卡片更新全部异步。
-- SDK 版本锁死（package.json 精确版本），随 rc.7 一起冻结。
+- SDK 版本锁死（package.json 精确版本），当前与 dsh `0.1.1-rc.2` 一起冻结。
 - 备选通道：im-hub 手写 protobuf 帧层（约 200 行零依赖），接口隔离保证可替换。
 
 ## 2. 关键机制设计
@@ -129,28 +131,24 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    备选：`$DSH_HOME/.agent-presets` 放 `feishu` preset = standard 去掉 ask-user
    （GUI 打开该 session 时同样无提问，因为恢复按记录的 preset 组合）。
    P1：provider multiplexer 或 agent-scoped 覆盖方案验证后恢复原生结构化提问。
-5. **流式卡片（原“流式节流”，Phase 1 已升级为飞书流式更新模式）**：监听 `session/event`，
-   按回合聚合 `TurnProgress`（`assistant/chunk` text-delta + `assistant/message` 兜底 +
-   `tool/call`/`tool/result` 轨迹 + usage）；`scheduleProgress` 节流默认 **600ms**
+5. **可变进度卡片**：监听 `session/event`，
+   按回合聚合 `TurnProgress`（`assistant/chunk` text-delta + `assistant/message` 兜底；
+   `tool/call` 只标记该 assistant step 属于临时过程）；`scheduleProgress` 节流默认 **600ms**
    （单消息 patch 5 QPS 内留裕量）；首条发卡、之后 `updateCard` 更新同一 messageId；
    `turn/end` 终态卡（`turn/end.reason.kind` 为 completed/aborted/blocked/error/
    max-tokens/interrupted，需二次映射，不是直接 cancelled）。出站走 §1.3 的应用级
    调度器 + 每会话串行队列。
-   **流式渲染（同 zarazhangrui/lark-coding-agent-bridge run 卡片的
-   `channel.stream({card})` 模式）**：运行期卡片
-   `config` 携带 `streaming_mode: true` + `streaming_config`（70ms/1 字符/fast），
-   600ms 全量 patch 刷新同一张卡；终态卡显式 `streaming_mode: false` 关闭流式模式
-   （去掉生成中光标、固化摘要），标题/按钮随之切换。审批/状态等非进度卡不携带
-   streaming 字段。**口径（Round 12 F1 修正 + 复核）**：官方只对 cardkit 实体 +
-   `cardElement.content` 路径契约化"打字机"渲染；参考仓库 run 卡片的流式路径
-   （`@larksuite/channel` 的 card 模式）内部即 `im.v1.message.patch` 整卡刷新，
-   其 CardKit 管理卡（createCard/updateCardById）用于配置类卡片、与本卡无关；
-   客户端对 streaming 卡片的增量上屏行为**以真实租户视觉验收为准**（docs/09 §7），
-   未承诺 token 级打字机。
+   **极简渲染**：约 600ms 全量 patch 刷新同一张无标题栏卡；运行期只展示最新 assistant
+   进展。终态把同一张卡替换为最后一个非空、未请求工具的 assistant 总结；此前的过程
+   文字和工具轨迹不再回显，但仍完整保留在 DSH 会话历史。因为 step 切换与终态总结都会
+   让正文变短，普通任务卡不携带 append-oriented `streaming_mode`，避免客户端将新正文
+   追加到旧正文后形成残影。
+   普通回合卡不显示目录、模型、session、token、上下文统计或操作按钮；审批卡的批准/
+   拒绝按钮作为安全边界保留。审批/状态卡同样不携带 streaming 字段。
    **终态优先（Round 12 F2 + 复核）**：turn/end 后，链上排队的非终态进度更新
    一律跳过（终态卡是完整快照）；终态 patch **绕过**每回合 sendChain 直接入调度器
    （同 messageId 的 patch 由调度器按代际串行/合并，终态必胜过仍排队的陈旧
-   patch）；`/view` 切换视图走显式重渲染，结算后仍可用。
+   patch）；历史 `/view` 动作仍兼容解析，并明确回复该功能已停用；普通回合卡统一使用极简视图。
    **working reaction（敲键盘，Round 13）**：飞书回合被认领（`agent/inbox/claimed`
    命中 pendingClaims）时给触发消息加 `Typing` reaction、`turn/end` 移除；装饰性、
    best-effort（标记在 await 前同步写入以防 turn/end 微任务竞态；失败静默、残留
@@ -163,14 +161,14 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    **卡片约束（SDK 实测）**：patch 前后 config 均需 `update_multi: true`（群聊共享
    更新）；patch 单条消息 5 QPS、仅 14 天内、≤30KB。**体积预算**：发送前按完整 JSON
    UTF-8 字节预检，正文上限沿用 lark-bridge 的 `cardBodyMaxChars`（默认 12000、
-   上限 28000），超限截断+折叠+必要时另发新卡；超长全文落工作区文件并回显
+   上限 28000），超限截断+折叠+必要时另发新卡；超长最终回复落工作区文件并回显
    session id（手机打不开 loopback Web UI，替代"附 Web UI 链接"）。
-   **patch 永久失败兜底**：230025（超长）/230031（超 14 天）/230010/230011/230110
+   **patch 永久失败兜底**：230001/230002（格式/参数错误）/230025（超长）/230031（超 14 天）/230010/230011/230110
    （不存在/撤回/删除）/230013（机器人对用户不可用）/230027（无权限）/232009（群
    解散）/404/99991400 → 改发新终态卡；群解散/机器人失去权限 → 记录审计 + 显式失败
    状态（验收承诺收窄为"目标仍可写时终态最终送达"）。
-   卡片结构借鉴 zarazhangrui/lark-coding-agent-bridge：streaming_mode + 工具调用
-   轨迹折叠 + footer 终态映射（done/interrupted/idle_timeout/error）。
+   卡片结构保留终态映射（done/interrupted/idle_timeout/error），显示层采用
+   「最新进展 → 最终总结」的单正文结构。
    **可选后续升级**：cardkit 元素级文本流式（SDK 已封装 `channel.stream()` 的
    markdown 模式 = cardkit 实体 + `cardElement.content`，100ms/50 字符节流 +
    sequence/uuid 幂等 + 收尾 summary），token 级打字机更细腻，但会绕过本插件
@@ -191,7 +189,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    原子替换 route/map、最后 dispose 旧 handle，失败保留旧 session（参考实现的先拆后建
    不具备回滚）；绑定仅进程内有效，重启回落前缀最新（文档明示）。预检借鉴 feishu-bridge
    sentinel probe；cwd 恢复校验借鉴 zarazhangrui policyFingerprint（cwd+access+attachments
-   摘要，防运行期漂移）。状态文件仅存轻量元数据（pending-new 标记、卡片视图偏好），
+   摘要，防运行期漂移）。状态文件仅存轻量元数据（pending-new 标记，以及为旧版本兼容保留的卡片视图值），
    损坏时隔离为 `.corrupt-<ts>`、告警、从空状态重建，禁止静默覆盖。
 7. **命令集**：`/new` `/status` `/stop`（`agent.cancel({kind:'user'}, { keepInbox: true })`
    ——默认会清空排队消息，必须 keepInbox；语义=只取消当前 turn，后续消息照常进入下一回合）
@@ -283,7 +281,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 
 ## 7. 风险
 
-- dsh rc 期内部接口变动 → 锁死 rc.7（peerDependencies 精确版本，不用 `^`），升级自适配后再解锁。
+- dsh rc 期内部接口变动 → 锁死 `0.1.1-rc.2`（peerDependencies 精确版本，不用 `^`），升级自适配后再解锁。
 - SDK 大依赖 → 接口隔离 + 版本锁死 + 构建期 bundle；断网期间审批走超时 fail-closed。
 - web profile 三项共存（preset/answerer/userQuestions）→ spike 先行，不过不写主线代码。
 - live agent 无上限 → `maxLiveAgents` 硬上限（P1），超限拒绝新话题。

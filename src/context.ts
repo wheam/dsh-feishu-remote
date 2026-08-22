@@ -183,17 +183,18 @@ export class ContextFetchGate {
 
 // ---------------------------------------------------------------- spawn CLI
 
-/** Env whitelist + the three CLI variables (docs/13 F-09: minimal env, no process.env spread). */
+/** Minimal CLI environment (docs/13 F-09: no process.env spread and no long-lived secret). */
 const ENV_WHITELIST = ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'LANG', 'LC_ALL', 'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'no_proxy', 'NO_PROXY']
 
-function cliEnv(base: NodeJS.ProcessEnv, appId: string, appSecret: string, extra: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+function cliEnv(
+  base: NodeJS.ProcessEnv,
+  extra: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const key of ENV_WHITELIST) {
     const value = base[key]
     if (value !== undefined) env[key] = value
   }
-  env.LARKSUITE_CLI_APP_ID = appId
-  env.LARKSUITE_CLI_APP_SECRET = appSecret
   env.LARKSUITE_CLI_NO_UPDATE_NOTIFIER = '1'
   env.LARKSUITE_CLI_NO_SKILLS_NOTIFIER = '1'
   // Test seam: extra is appended LAST and never rides into production callers.
@@ -332,16 +333,20 @@ export interface CliBootstrapOptions {
  * One-time lark-cli configuration bootstrap (docs/15 §集成缺口): v1.0.88 only
  * mints bot tokens from LOCAL config (`config.json` with a plain/file/keychain
  * secret ref) — env credentials alone fail with `token_missing` (verified on
- * a real tenant, 2026-08-20). Probe `config show`; when our appId is not the
- * configured one, run `config init --app-id … --app-secret-stdin` (secret via
- * stdin, never argv/env exposure beyond the CLI's own storage) and re-probe.
+ * a real tenant, 2026-08-20). Probe `config show`, then always refresh the
+ * current app through `config init --app-id … --app-secret-stdin`: matching
+ * appId alone cannot detect an appSecret rotation. The secret travels through
+ * stdin, never argv/env exposure beyond the CLI's own storage, then we re-probe.
  * Any failure returns false — the caller taints the CLI and falls back to SDK.
  */
 export async function ensureCliConfigured(
   executable: CliExecutable,
   options: CliBootstrapOptions,
 ): Promise<boolean> {
-  const env = cliEnv(process.env, options.appId, options.appSecret, options.env)
+  // Config-management commands must not receive LARKSUITE_CLI_APP_ID/SECRET:
+  // the CLI treats those as externally managed credentials and rejects
+  // `config show/init`. The secret reaches init exclusively through stdin.
+  const env = cliEnv(process.env, options.env)
   const spawn = (args: string[], stdin?: string) => spawnCli([...executable.argv, ...args], {
     env,
     timeoutMs: options.timeoutMs,
@@ -361,8 +366,7 @@ export async function ensureCliConfigured(
   }
   try {
     const configured = await probe()
-    if (configured === options.appId) return true
-    if (configured !== undefined) {
+    if (configured !== undefined && configured !== options.appId) {
       options.logger?.warn?.(
         'dsh-feishu-remote: lark-cli 已配置其他应用（%s），将重新初始化为当前应用 %s',
         configured, options.appId,
@@ -572,13 +576,13 @@ function strictEnvelope(stdout: string, dataField: 'messages'): { messages: unkn
 
 // ---------------------------------------------------------------- providers
 
-/** Primary backend: the official Feishu CLI, driven headlessly via minimal env credentials. */
+/** Primary backend: the official Feishu CLI, driven headlessly via its bootstrapped local profile. */
 export class LarkCliProvider implements FeishuContextProvider {
   readonly kind = 'cli' as const
   private readonly executable: CliExecutable | undefined
 
   constructor(
-    private readonly config: Pick<ResolvedConfig, 'appId' | 'appSecret' | 'feishuCliPath'>,
+    private readonly config: Pick<ResolvedConfig, 'feishuCliPath'>,
     options: {
       executable?: CliExecutable
       env?: NodeJS.ProcessEnv
@@ -608,7 +612,11 @@ export class LarkCliProvider implements FeishuContextProvider {
     const listArgs = spec.origin === 'thread'
       ? ['im', '+threads-messages-list', '--thread', spec.threadId ?? '', '--order', 'desc', '--page-size', String(CLI_PAGE_SIZE), '--page-all', '--page-limit', String(pageLimit), '--no-reactions', '--as', 'bot', '--format', 'json']
       : ['im', '+chat-messages-list', '--chat-id', spec.chatId, '--order', 'desc', '--page-size', String(CLI_PAGE_SIZE), '--page-all', '--page-limit', String(pageLimit), '--no-reactions', '--as', 'bot', '--format', 'json']
-    const env = cliEnv(this.baseEnv, this.config.appId, this.config.appSecret, this.extraEnv)
+    // API commands must also avoid external app credentials. lark-cli v1.0.88
+    // does not mint a bot token from those variables; after ensureCliConfigured
+    // it must read the local profile it owns. This also keeps appSecret out of
+    // every history-read child process.
+    const env = cliEnv(this.baseEnv, this.extraEnv)
     const stdout = await spawnCli([...executable.argv, ...listArgs], { env, timeoutMs: spec.timeoutMs, maxBytes: CLI_MAX_BUFFER, signal: spec.signal })
     const { messages: rawMessages, complete } = strictEnvelope(stdout, 'messages')
     if (!complete) {

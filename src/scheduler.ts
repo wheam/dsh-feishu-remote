@@ -78,6 +78,7 @@ export function classifyOutboundError(error: unknown): {
   // (Codex Round 12 finding F5).
   if (code === 230025) return { kind: 'permanent', status, code }   // 超长
   if (code === 230031) return { kind: 'permanent', status, code }   // 超 14 天
+  if (code === 230001 || code === 230002) return { kind: 'permanent', status, code } // 格式/参数错误
   if (code === 230010) return { kind: 'permanent', status, code }   // 消息不存在
   if (code === 230011) return { kind: 'permanent', status, code }   // 消息已撤回
   if (code === 230110) return { kind: 'permanent', status, code }   // 消息已删除

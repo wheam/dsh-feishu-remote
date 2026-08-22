@@ -16,7 +16,7 @@ function fakeSettings() {
 }
 
 describe('dsh-feishu-remote loader contract', () => {
-  it('declares the official Harness bundle metadata with exact rc.7 pins', () => {
+  it('declares the official Harness bundle metadata with exact 0.1.1-rc.2 pins', () => {
     const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string } }
       keywords?: string[]
@@ -26,12 +26,12 @@ describe('dsh-feishu-remote loader contract', () => {
     expect(manifest.dsh?.client?.platform).toBe('web')
     expect(manifest.keywords).toContain('dsh-plugin')
     // Locked, not ranged (docs/05 §7: 精确版本，不用 ^).
-    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-agent']).toBe('0.1.0-rc.7')
-    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-user-approval']).toBe('0.1.0-rc.7')
+    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-agent']).toBe('0.1.1-rc.2')
+    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-user-approval']).toBe('0.1.1-rc.2')
     expect(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')).toContain('name: dsh-feishu-remote')
   })
 
-  it('registers the rc.7 keyed settings slot by namespace', () => {
+  it('keeps the keyed settings slot contract used by 0.1.1-rc.2', () => {
     const client = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(client).toContain('name: "settings.plugin.item"')
     expect(client).toContain('key: SETTINGS_NS')

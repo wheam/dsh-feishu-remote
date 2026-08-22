@@ -12,7 +12,6 @@
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import type { Config } from './config.js'
-import type { CardPreset } from './types.js'
 
 export const SETTINGS_NAMESPACE = settingsNamespace('feishu-remote')
 
@@ -30,7 +29,6 @@ export const flatSchema = Schema.object({
   agentPreset: Schema.string().default(''),
   progressUpdateMs: Schema.number().step(1).min(250).default(600),
   interactiveTimeoutMs: Schema.number().step(1).min(1000).default(10 * 60 * 1000),
-  cardPreset: Schema.union(['compact', 'standard', 'developer'] as const).default('standard'),
   maxLiveAgents: Schema.number().step(1).min(0).default(0),
   commandAllowlist: Schema.string().default(''),
   contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
@@ -38,6 +36,8 @@ export const flatSchema = Schema.object({
   // NOTE (docs/15 F-09): feishuCliPath is deliberately NOT in the GUI schema —
   // an arbitrary executable path is equivalent to local code execution and
   // stays a trusted-admin setting (cordis.patch.yml / DSH_FEISHU_CLI_PATH).
+  contextP2pMaxMessages: Schema.number().step(1).min(1).max(500).default(80),
+  contextP2pMaxChars: Schema.number().step(1).min(1000).max(500000).default(50000),
   contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
   contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
   contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
@@ -58,11 +58,12 @@ export interface FlatSettings {
   agentPreset: string
   progressUpdateMs: number
   interactiveTimeoutMs: number
-  cardPreset: 'compact' | 'standard' | 'developer'
   maxLiveAgents: number
   commandAllowlist: string
   contextMode: 'off' | 'auto'
   contextBackend: 'auto' | 'cli' | 'sdk'
+  contextP2pMaxMessages: number
+  contextP2pMaxChars: number
   contextMaxMessages: number
   contextMaxChars: number
   contextTimeoutMs: number
@@ -89,11 +90,12 @@ export function flatten(config: Config): FlatSettings {
     agentPreset: config.agentPreset ?? '',
     progressUpdateMs: config.progressUpdateMs ?? 600,
     interactiveTimeoutMs: config.interactiveTimeoutMs ?? 10 * 60 * 1000,
-    cardPreset: config.cardPreset ?? 'standard',
     maxLiveAgents: config.maxLiveAgents ?? 0,
     commandAllowlist: (config.commandAllowlist ?? []).join(', '),
     contextMode: config.contextMode ?? 'auto',
     contextBackend: config.contextBackend ?? 'auto',
+    contextP2pMaxMessages: config.contextP2pMaxMessages ?? 80,
+    contextP2pMaxChars: config.contextP2pMaxChars ?? 50000,
     contextMaxMessages: config.contextMaxMessages ?? 150,
     contextMaxChars: config.contextMaxChars ?? 100000,
     contextTimeoutMs: config.contextTimeoutMs ?? 10000,
@@ -123,11 +125,12 @@ export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config
     agentPreset: value.agentPreset ?? '',
     progressUpdateMs: value.progressUpdateMs ?? 600,
     interactiveTimeoutMs: value.interactiveTimeoutMs ?? 10 * 60 * 1000,
-    cardPreset: (value.cardPreset ?? 'standard') as CardPreset,
     maxLiveAgents: value.maxLiveAgents ?? 0,
     commandAllowlist: splitIds(value.commandAllowlist),
     contextMode: value.contextMode ?? 'auto',
     contextBackend: value.contextBackend ?? 'auto',
+    contextP2pMaxMessages: value.contextP2pMaxMessages ?? 80,
+    contextP2pMaxChars: value.contextP2pMaxChars ?? 50000,
     contextMaxMessages: value.contextMaxMessages ?? 150,
     contextMaxChars: value.contextMaxChars ?? 100000,
     contextTimeoutMs: value.contextTimeoutMs ?? 10000,

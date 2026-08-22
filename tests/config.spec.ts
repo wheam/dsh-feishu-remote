@@ -20,6 +20,10 @@ describe('resolveConfig (single project, fail-closed)', () => {
     expect(config.workingReaction).toBe(true)
     expect(config.interactiveTimeoutMs).toBe(10 * 60 * 1000)
     expect(config.cardBodyMaxChars).toBe(12000)
+    expect(config.contextP2pMaxMessages).toBe(80)
+    expect(config.contextP2pMaxChars).toBe(50000)
+    expect(config.contextMaxMessages).toBe(150)
+    expect(config.contextMaxChars).toBe(100000)
     expect(config.statePath).toMatch(/feishu-remote[\\/]cli_test\.json$/u)
   })
 
@@ -80,5 +84,7 @@ describe('resolveConfig (single project, fail-closed)', () => {
     expect(resolved.maxLiveAgents).toBe(0)
     expect(resolved.progressUpdateMs).toBe(600)
     expect(resolved.interactiveTimeoutMs).toBe(10 * 60 * 1000)
+    expect(resolved.contextP2pMaxMessages).toBe(80)
+    expect(resolved.contextP2pMaxChars).toBe(50000)
   })
 })

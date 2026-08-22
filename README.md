@@ -10,9 +10,9 @@
 
 ## 状态
 
-**Phase 1（docs/05 步骤 0-6 + P1 设置卡片 + P1 流式卡片）已实现，经 Codex 十一轮 review 终审 APPROVE，流式卡片经 Round 12 独立 review 修复后关闭**：
-核心链路（通道层 / 调度器 / 回合归属账本 / 审批闭环 / 话题映射 / 流式卡片）全部落地，
-112 个契约测试全绿，构建产物约 2.4MB（SDK 构建期 bundle，external 仅 `@deepseek-ai/*`），
+**Phase 1（docs/05 步骤 0-6 + P1 设置卡片 + P1 进度卡片）已实现，经 Codex 十一轮 review 终审 APPROVE，进度更新链路经 Round 12 独立 review 修复后关闭**：
+核心链路（通道层 / 调度器 / 回合归属账本 / 审批闭环 / 话题映射 / 可变进度卡片）全部落地，
+契约测试与构建检查全绿，构建产物约 2.4MB（SDK 构建期 bundle，external 仅 `@deepseek-ai/*`），
 mock 冒烟（真实 dsh web 进程内加载）通过。
 **真实飞书租户端到端初验已通过（2026-08-19）**：私聊 `/help` 回命令卡，白名单/长连接/
 事件订阅全链路正常（见 docs/09 §7 验收记录）。
@@ -25,12 +25,12 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 - **审批闭环**：answerer 以 `{ prepend: true }` 注册 + **回合归属账本**（飞书回合才认领、GUI 回合放行）；六条结算路径（按钮 / 文字 / abort / 超时 / 停机 / 通道终态失效）均有测试；终态显式 `updateCard`；卡片 pending 绑定操作者/会话/截止时间。
 - **即时反馈**：飞书回合认领时给触发消息加「敲键盘」reaction、`turn/end` 移除（装饰性、失败静默，同参考实现的 working reaction；`workingReaction: false` 可关，需 `im:message.reactions:write_only` 权限）。
 - **交互隔离**：飞书会话 setup 内先 `presets.mount` 再 `tools.restrict({deny:['ask_user_question','exit_plan_mode']})`——飞书会话不存在通往浏览器的提问路径。
-- **流式卡片**：进度卡运行期携带 `streaming_mode: true`（+`streaming_config` 打印参数），`session/event` 按回合聚合、约 600ms patch 同一张卡片（与 zarazhangrui/lark-coding-agent-bridge run 卡片的 `channel.stream({card})` 模式同路径：其内部即整卡 message.patch 刷新）；完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；turn 结束后跳过排队的陈旧进度更新、终态 patch 绕过回合链直接入调度器（同 messageId 按代际合并，终态必胜，Round 12 F2）；终态卡显式 `streaming_mode: false` 关闭流式并切换标题/按钮；`turn/end.reason.kind` 六枚举二次映射。官方契约化的 token 级打字机需 cardkit 实体（`cardElement.content`），留作可选后续升级；客户端视觉行为以真实租户验收为准（docs/09 §7）。
-- **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230025/230031/230010/230011/230110/230013/230027/232009/404/99991400）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
+- **极简进度卡片**：运行中只显示「正在处理」与最新一段 assistant 进展，约 600ms 普通 patch 同一张无标题栏卡片；turn 结束后，同一张卡清掉过程，只保留最后一个非空、未请求工具的 assistant 总结。因为正文会由长变短，普通任务卡不启用飞书 append-oriented `streaming_mode`，避免打字机拼接残影。普通回合卡不再显示目录、模型、session、工具轨迹、token、上下文统计或操作按钮；私聊也不再带原消息引用横幅，群话题仍保持原位回复。完整过程继续保存在 DSH 会话历史/Web GUI；审批卡保留批准/拒绝按钮作为安全边界。完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；终态优先与失败兜底不变。
+- **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230001/230002/230025/230031/230010/230011/230110/230013/230027/232009/404/99991400）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
 - **安全**：白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围 fail-closed（`allowedChatIds` 空 = 群聊全拒）；白名单外消息在宿主日志回显发送者 open_id 自举；出站脱敏；状态文件 0600 原子写、损坏隔离为 `.corrupt-<ts>` 从空重建。
-- **命令集**：`/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/view` `/help` `/commands`；Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
+- **命令集**：`/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/help` `/commands`；旧 `/view` 与旧卡片动作仅返回停用提示。Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
 - **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
-- **飞书上下文回填（docs/13 v1，2026-08-20）**：每条普通消息注入上下文——话题内全部消息、私聊尽量回溯。官方 `lark-cli` 主路径（`@larksuite/cli@1.0.88` optional 依赖 + postinstall 自动装二进制，`pnpm-workspace.yaml allowBuilds` 放行；CLI 缺失自动降级已 bundle 的 SDK 直连，`contextBackend: auto|cli|sdk`）；增量水位窗口（新会话全量注入、后续回合只注入新消息，水位按 session 持久化）+ 因果 cutoff + JSON 帧防注入 + system prompt 不可信边界规则；全局并发 2 + 熔断；控制命令零拉取；回合卡脚注与 `/status` 显示上下文统计。群历史需 `im:message.group_msg` 权限（docs/09 §3）。
+- **飞书上下文回填（docs/13 v1.2）**：每条普通消息注入上下文——话题读取最近 150 条/100,000 字符，长期私聊另受更紧的 80 条/50,000 字符上限约束（两者均可配置，实际取私聊与全局上限的较小值，不会扫描几万条历史）。官方 `lark-cli` 主路径（`@larksuite/cli@1.0.88` optional 依赖 + postinstall 自动装二进制，`pnpm-workspace.yaml allowBuilds` 放行；CLI 缺失自动降级已 bundle 的 SDK 直连，`contextBackend: auto|cli|sdk`）；增量水位窗口（新会话全量注入、后续回合只注入新消息，水位按 session 持久化）+ 因果 cutoff + JSON 帧防注入 + system prompt 不可信边界规则；全局并发 2 + 熔断；控制命令零拉取；普通回合卡不显示上下文统计，诊断信息仍可通过 `/status` 查看。群历史需 `im:message.group_msg` 权限（docs/09 §3）。
 
 ## 安装
 
@@ -39,7 +39,7 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 > `--dump-config` / HTTP 200 不能单独当作安装成功，必须完成浏览器控制台 +
 > 插件 UI 的端到端验收（事故背景见 docs/11）。
 
-前置：Node ≥ 22、pnpm（`dsh plugin` 依赖 pnpm）。本插件**锁死 dsh `0.1.0-rc.7`**（peerDependencies 精确版本）。
+前置：Node ≥ 22、pnpm（`dsh plugin` 依赖 pnpm）。本插件**锁死 dsh `0.1.1-rc.2`**（peerDependencies 精确版本）。
 
 ```bash
 # 1. 安装到 web profile（本仓路径）
@@ -61,14 +61,14 @@ dsh plugin --profile web add link:/path/to/dsh-feishu-remote
 # 4. 重启 web 进程（改码后重跑 build + 重启）
 ```
 
-改码后：`pnpm run check`（typecheck + 112 tests + bundle 构建），然后重启 web 进程验证。
+改码后：`pnpm run check`（typecheck + 契约测试 + bundle 构建），然后重启 web 进程验证。
 
 ## 开发
 
 ```bash
 pnpm install
 pnpm run typecheck   # tsc --noEmit
-pnpm run test        # vitest：10 个 spec / 112 用例（契约测试，无真实凭据）
+pnpm run test        # vitest 契约测试（无真实凭据）
 pnpm run build       # esbuild bundle → lib/index.js（~2.4MB）+ lib/client.js + THIRD_PARTY_NOTICES
 ```
 
@@ -91,7 +91,7 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
 | [docs/10-implementation-reviews.md](docs/10-implementation-reviews.md) | 实现阶段十一轮 Codex review 记录（47 项 findings 修复对照，终审 APPROVE） |
 | [docs/11-incident-rc7-keyed-slot.md](docs/11-incident-rc7-keyed-slot.md) | 事故记录：rc.7 keyed slot 契约导致 Mac App 无法进入界面（已修复勿回退） |
 | [docs/12-plugin-install-checklist.md](docs/12-plugin-install-checklist.md) | 插件安装/更新/升级固定检查规则（强制流程，端到端验收才算成功） |
-| [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（话题全量 + 私聊回溯，官方 lark-cli + SDK 兜底；**v1 已实现，真实租户验收待跑**） |
+| [docs/13-feishu-context.md](docs/13-feishu-context.md) | 飞书上下文回填设计规格（话题 + 有界私聊回溯，官方 lark-cli + SDK 兜底；**v1.2 已实现，私聊/话题基础读取已通过真实租户验证，完整验收待跑**） |
 | [docs/14-context-codex-review.md](docs/14-context-codex-review.md) | docs/13 的 Codex 独立 review 记录（15 项 findings 处置对照，修订已并入规格） |
 | [docs/15-context-impl-review.md](docs/15-context-impl-review.md) | 飞书上下文回填实现阶段 Codex review（14 项 findings 处置对照，修订已并入实现） |
 
@@ -106,6 +106,9 @@ stdin 逐行输入消息、stdout 打印回复。审批闭环的按钮路径依�
 - 本插件只做密钥形态脱敏（`redactSecrets`），**不承诺**对群讨论中的个人信息/业务敏感内容做清洗——
   群场景请只在 `allowedChatIds` 明确授权的群内使用；
 - 逃生门：`contextMode: off` 完全关闭该功能；`contextIncludeBot: false` 不注入机器人自己的历史回复。
+- 每次 bridge 启动后的首次读取前都会刷新本地 CLI profile（可覆盖同 App ID 下的 Secret 轮换）；
+  并发首条消息共享一次初始化。secret 只经该次初始化的 stdin 传递，不会进入后续历史读取
+  子进程的 argv 或环境变量。
 - 另注意：`feishuCliPath`（任意可执行路径）仅作为受信任管理员配置（cordis.patch.yml / 环境变量），
   Web GUI 设置卡不可修改——它等价于本机代码执行权限。
 

@@ -21,7 +21,7 @@
 | F-06 | P0 | CLI 解析硬编码路径，registry/pnpm 布局下失效；`auto` 运行期不降级 | ✅ 成立（tarball consumer 实测） | **采纳**。解析改 `createRequire(import.meta.url).resolve('@larksuite/cli/package.json')`（repo 与 profile 布局都成立）→ wrapper → 原生 → 直连 → PATH；`auto` 模式 CLI 运行期失败 → **taint + 降级 SDK 重试一次**，此后固定 SDK。 |
 | F-07 | P0 | SDK 挂起调用不被 timeout 中止；CLI 无 teardown 中止 | ✅ SDK 挂起复现（timeoutMs=20 实测 100ms 仍 pending） | **采纳**。SDK 每页调用与超时/lifetime signal race；CLI 改 spawn 持 ChildProcess 句柄，超时/abort → `kill(SIGKILL)`；fetch 返回后复查 `this.stopped`。 |
 | F-08 | P0 | `senderIsBot = isOwnBot \|\| sender_type='app'` 把其他机器人当本机器人 | ✅ 成立 | **采纳**。拆 `isOwnBot`（仅 open_bot_id 对齐）与 `isBotApp`；其他机器人保留真实名字/显示「机器人」，`contextIncludeBot:false` 只剔本机器人。 |
-| F-09 | P0 | 子进程 env 整体透传 process.env；GUI 可配任意可执行路径 | ✅ 成立（fixture 继承 TEST_* 即证） | **采纳**。子进程 env = 白名单最小集（PATH/HOME/TMP/代理等）+ 3 个 `LARKSUITE_CLI_*`；`feishuCliPath` 移出 GUI 设置卡（仅 cordis.patch.yml / env），README 声明其等价本机代码执行。 |
+| F-09 | P0 | 子进程 env 整体透传 process.env；GUI 可配任意可执行路径 | ✅ 成立（fixture 继承 TEST_* 即证） | **采纳**。子进程 env 改为白名单最小集，`feishuCliPath` 移出 GUI 设置卡（仅 cordis.patch.yml / env），README 声明其等价本机代码执行。v1.2 真实联调后进一步移除 API 子进程的 App 凭据；secret 仅在一次性 `config init` 时走 stdin。 |
 | F-10 | P0 | 熔断只在 gate 前检查，排队 waiter 在熔断打开后仍执行 | ✅ 成立 | **采纳**。run() 获得槽位后**复查**熔断；openCircuit 时 reject 全部排队 waiter；gate 时钟可注入（fake cooldown 测试）。 |
 | F-11 | P0 | SDK post 解析不解 locale 包装（`{zh_cn:{...}}`）→ 空文本丢消息 | ✅ 成立（SDK 自身 convertPost 先 unwrapLocale） | **采纳**。extractPostText 增加 locale key 解包 + 单键对象兜底。 |
 | F-12 | P1 | 水位写 fire-and-forget，teardown 不等；50 条淘汰未入规格 | ✅ 成立 | **采纳（折中）**。pendingStateWrites 追踪、teardown 有界 drain；淘汰语义写入 docs/13（淘汰 → 该会话回落全量窗口，无害）。 |
@@ -69,10 +69,32 @@
   执行 `config init --app-id … --app-secret-stdin`（secret 走 stdin），失败 taint → SDK。
   实现：`src/context.ts ensureCliConfigured` + bridge `ensureCliReady`；单测 5 例 +
   bridge 集成 1 例；全量 **167 用例**全绿。
+- **v1.2 真实联调补充（2026-08-22）**：带 `LARKSUITE_CLI_APP_ID/SECRET` 执行
+  `config show/init` 会被 CLI 判定为“外部凭据、不支持配置管理”，而 API 读取也不会使用本地
+  profile 铸造的 token，最终报 `token_missing`。现已统一改为：secret 只经一次性 init 的
+  stdin 传递；探测与历史读取子进程均使用最小环境并从本地 profile 取凭据。
+  修复后以构建产物中的正式 `LarkCliProvider` 实测：测试话题拉取 2 条并完整生成
+  `feishu-context` JSON 帧（2 条、建立水位）；真实私聊拉取 20 条，落在 80 条 / 50,000 字符
+  的新预算内。CLI 本地配置权限为 `0600`。
 
 ## 遗留（用户侧）
 
 1. ✅ 已把 bot 拉进测试群 → 群/话题读取终验通过（见上）。
-2. 按 docs/12 流程重启 web 进程，加载含上下文回填的新 build（当前运行进程仍是旧代码）。
+2. ✅ 2026-08-22 已按 docs/12 流程重启 web 进程加载 v1.2：HTTP 200、设置卡四项预算值正确，
+   页面就绪后无新增 console warn/error。
 3. docs/13 §7 真实租户验收清单逐项跑（长话题、CLI↔SDK 切换、隐私复核）。
    测试群里留有 2 条【权限验证】消息与 1 个测试话题，可直接当验收素材或忽略。
+
+## Claude Code 独立复核后的加固（2026-08-22）
+
+Claude Code Opus 4.8（1M、xhigh、只读 plan 模式）对 v1.2 给出 **APPROVE，无 P0/P1**，并指出
+两个 P2 鲁棒性缺口；Codex 复核成立后已修复：
+
+1. 不同 origin 并发冷启动时，旧的 `cliBootstrapped` 布尔值可能让第二条消息在 `config init`
+   完成前抢跑，误报 `token_missing` 并让本实例永久降级 SDK。现改为共享 `cliReadyPromise`，
+   所有并发调用等待同一初始化结果。
+2. 旧逻辑只比较 appId，同 appId 更换 appSecret 后会跳过 init。现每个 bridge 实例首次读取前
+   都幂等执行一次 `config init --app-secret-stdin`，刷新当前 secret；后续 API 读取仍不携带 secret。
+
+新增回归测试覆盖同 appId Secret 轮换，以及私聊/话题两个 origin 并发冷启动只 init 一次且
+均走 CLI、不误降级 SDK。

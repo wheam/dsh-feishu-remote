@@ -35,6 +35,8 @@ describe('classifyOutboundError', () => {
   it('classifies permanent business failures as non-retryable', () => {
     expect(classifyOutboundError(feishuError(230025)).kind).toBe('permanent') // 超长
     expect(classifyOutboundError(feishuError(230031)).kind).toBe('permanent') // 超 14 天
+    expect(classifyOutboundError(feishuError(230001)).kind).toBe('permanent') // 格式错误
+    expect(classifyOutboundError(feishuError(230002)).kind).toBe('permanent') // 参数错误
     expect(classifyOutboundError(feishuError(230010)).kind).toBe('permanent') // 消息不存在
     expect(classifyOutboundError(feishuError(230011)).kind).toBe('permanent') // 已撤回（Round 12 F5）
     expect(classifyOutboundError(feishuError(230110)).kind).toBe('permanent') // 已删除（Round 12 F5）

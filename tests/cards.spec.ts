@@ -8,112 +8,104 @@ function progress(partial: Partial<TurnProgress> = {}): TurnProgress {
     startedAt: 1_000,
     prompt: 'hello',
     visibleText: 'Hello from the harness.',
-    steps: [{ turn: 1, step: 1, chunks: 'Hello', final: 'Hello from the harness.' }],
-    tools: [{ callId: 'c1', name: 'bash', summary: 'ls', startedAt: 1_100, finishedAt: 1_500 }],
-    inputTokens: 10,
-    outputTokens: 20,
-    cacheReadTokens: 0,
+    steps: [{ turn: 1, step: 1, chunks: 'Hello', final: 'Hello from the harness.', hasToolCalls: false }],
     terminal: false,
     ...partial,
   }
 }
 
 describe('card templates', () => {
-  it('builds a mutable progress card with tool trace and stats', () => {
+  it('builds a headerless progress card with only the latest assistant text', () => {
     const card = buildTurnCard({
-      progress: progress(),
-      sessionId: 'feishu-abc-1',
-      cwd: '/tmp/work',
-      model: 'v4-pro',
-      preset: 'standard',
+      progress: progress({
+        visibleText: 'Earlier progress.Latest progress.',
+        steps: [
+          { turn: 1, step: 1, chunks: '', final: 'Earlier progress.', hasToolCalls: true },
+          { turn: 1, step: 2, chunks: 'Latest progress.', hasToolCalls: false },
+        ],
+      }),
       maxBodyChars: 12000,
-      now: 3_000,
-    }) as { schema: string; config: { update_multi: boolean }; body: { elements: object[] } }
+    }) as { schema: string; config: { update_multi: boolean }; header?: object; body: { elements: object[] } }
     expect(card.schema).toBe('2.0')
     expect(card.config.update_multi).toBe(true)
+    expect(card).not.toHaveProperty('header')
     const body = JSON.stringify(card.body)
-    expect(body).toContain('Hello from the harness')
-    expect(body).toContain('bash')
-    expect(body).toContain('停止任务')
-    expect(body).not.toContain('/tmp/work') // standard preset hides cwd
+    expect(body).toContain('正在处理')
+    expect(body).toContain('Latest progress')
+    expect(body).not.toContain('Earlier progress')
+    for (const clutter of ['bash', '停止任务', '/tmp/work', 'v4-pro', 'feishu-abc-1', 'token', '飞书上下文']) {
+      expect(body, clutter).not.toContain(clutter)
+    }
   })
 
-  it('renders terminal outcome headers and actions', () => {
+  it('renders a headerless terminal card with only the final answer', () => {
     const card = buildTurnCard({
-      progress: progress({ visibleText: '' }),
-      sessionId: 'feishu-abc-1',
-      cwd: '/tmp/work',
-      model: 'v4-pro',
-      preset: 'standard',
+      progress: progress({
+        visibleText: 'I will inspect the code.The fix is complete and tests pass.',
+        terminalText: 'The fix is complete and tests pass.',
+        steps: [
+          { turn: 1, step: 1, chunks: '', final: 'I will inspect the code.', hasToolCalls: true },
+          { turn: 1, step: 2, chunks: '', final: 'The fix is complete and tests pass.', hasToolCalls: false },
+        ],
+      }),
       maxBodyChars: 12000,
       outcome: 'completed',
-    }) as { header: { title: { content: string }; template: string }; body: { elements: object[] } }
-    expect(card.header.title.content).toContain('已完成')
-    expect(card.header.template).toBe('green')
-    expect(JSON.stringify(card.body)).toContain('新会话')
-    expect(JSON.stringify(card.body)).not.toContain('停止任务')
+    }) as { header?: object; body: { elements: object[] } }
+    expect(card).not.toHaveProperty('header')
+    const body = JSON.stringify(card.body)
+    expect(body).toContain('✅ 完成')
+    expect(body).toContain('The fix is complete and tests pass.')
+    expect(body).not.toContain('I will inspect the code.')
+    for (const clutter of ['新会话', '查看状态', '视图：开发者', '停止任务', '/tmp/work', 'v4-pro', 'feishu-abc-1', 'token']) {
+      expect(body, clutter).not.toContain(clutter)
+    }
   })
 
-  it('runs in Feishu streaming mode while the turn is live (typewriter updates)', () => {
+  it('uses ordinary mutable patches so shorter progress cannot trigger typewriter artifacts', () => {
     const card = buildTurnCard({
       progress: progress(),
-      sessionId: 'feishu-abc-1',
-      cwd: '/tmp/work',
-      model: 'v4-pro',
-      preset: 'standard',
       maxBodyChars: 12000,
     }) as { config: Record<string, unknown>; body: { elements: Array<{ element_id?: string }> } }
-    expect(card.config.streaming_mode).toBe(true)
-    expect(card.config.streaming_config).toEqual({
-      print_frequency_ms: { default: 70 },
-      print_step: { default: 1 },
-      print_strategy: 'fast',
-    })
-    // The output markdown element keeps a stable id so the client can diff it.
+    expect(card.config).not.toHaveProperty('streaming_mode')
+    expect(card.config).not.toHaveProperty('streaming_config')
+    // The output markdown element keeps a stable id across full-card patches.
     expect(card.body.elements.some(element => element.element_id === 'bridge_output')).toBe(true)
   })
 
-  it('closes streaming mode on the terminal card', () => {
+  it('falls back from a blank terminalText to the latest non-empty step', () => {
     const card = buildTurnCard({
-      progress: progress(),
-      sessionId: 'feishu-abc-1',
-      cwd: '/tmp/work',
-      model: 'v4-pro',
-      preset: 'standard',
+      progress: progress({ terminalText: '' }),
       maxBodyChars: 12000,
       outcome: 'completed',
-    }) as { config: Record<string, unknown> }
-    expect(card.config.streaming_mode).toBe(false)
-    expect(card.config).not.toHaveProperty('streaming_config')
+    }) as { body: { elements: object[] } }
+    expect(JSON.stringify(card.body)).toContain('Hello from the harness.')
   })
 
-  it('closes streaming mode for every terminal outcome (Round 12 F6)', () => {
+  it('keeps every terminal outcome out of streaming mode', () => {
     for (const outcome of ['completed', 'cancelled', 'blocked', 'error'] as const) {
       const card = buildTurnCard({
         progress: progress(),
-        sessionId: 'feishu-abc-1',
-        cwd: '/tmp/work',
-        model: 'v4-pro',
-        preset: 'standard',
         maxBodyChars: 12000,
         outcome,
       }) as { config: Record<string, unknown> }
-      expect(card.config.streaming_mode, outcome).toBe(false)
+      expect(card.config, outcome).not.toHaveProperty('streaming_mode')
     }
   })
 
-  it('keeps live semantics on the running oversize fallback card (Round 12 F4)', () => {
-    const running = buildOversizeCard('running', true, 'feishu-abc-1') as {
+  it('keeps live semantics on the headerless oversize fallback card', () => {
+    const running = buildOversizeCard('running') as {
       config: Record<string, unknown>
-      header: { title: { content: string } }
+      header?: object
       body: { elements: object[] }
     }
-    expect(running.config.streaming_mode).toBe(true)
-    expect(running.header.title.content).toContain('生成中')
-    expect(JSON.stringify(running.body)).toContain('停止任务')
+    expect(running.config).not.toHaveProperty('streaming_mode')
+    expect(running).not.toHaveProperty('header')
+    expect(JSON.stringify(running.body)).toContain('正在处理')
+    expect(JSON.stringify(running.body)).not.toContain('停止任务')
     for (const outcome of ['completed', 'cancelled', 'blocked', 'error'] as const) {
-      const card = buildOversizeCard(outcome) as { config: Record<string, unknown>; body: { elements: object[] } }
-      expect(card.config.streaming_mode).toBe(false)
+      const card = buildOversizeCard(outcome) as { config: Record<string, unknown>; header?: object; body: { elements: object[] } }
+      expect(card.config).not.toHaveProperty('streaming_mode')
+      expect(card).not.toHaveProperty('header')
       expect(JSON.stringify(card.body)).not.toContain('停止任务')
     }
   })
@@ -134,7 +126,6 @@ describe('card templates', () => {
       connected: true,
       pendingApprovals: 0,
       failedDeliveries: 0,
-      preset: 'standard',
     }) as { config: Record<string, unknown> }
     expect(status.config).not.toHaveProperty('streaming_mode')
   })
@@ -171,7 +162,6 @@ describe('card templates', () => {
       model: 'v4-pro',
       connected: false,
       pendingApprovals: 2,
-      preset: 'standard',
     }) as { header: { template: string }; body: { elements: object[] } }
     expect(card.header.template).toBe('red')
     expect(JSON.stringify(card.body)).toContain('未连接')

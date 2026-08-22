@@ -1,20 +1,22 @@
-# 飞书上下文回填（话题全量 + 私聊回溯）设计规格
+# 飞书上下文回填（话题 + 有界私聊回溯）设计规格
 
-> 状态：**v1.1 已实现（2026-08-20，经实现阶段 Codex review 一轮修正）**。本文档是本功能的
-> 单一事实源（延续 docs/05 的惯例）。`pnpm run check` 全绿（11 spec / 167 用例，含
-> tests/context.spec.ts 38 例 + bridge 集成 9 例）；真实租户验收（§7）与群历史权限配置待跑。
+> 状态：**v1.2 已实现（2026-08-22）**。v1.1 的 CLI/SDK 回填实现已经实现阶段 Codex review；
+> v1.2 增加长期私聊的独立双重上限，并适配 dsh `0.1.1-rc.2`。本文档是本功能的单一事实源
+> （延续 docs/05 的惯例）。私聊与群/话题基础读取已在真实租户通过；§7 的长话题、后端切换、
+> 增量与隐私复核仍待完整跑完。
 > 2026-08-19 设计阶段经 Codex（gpt-5.6-sol）独立 review（15 findings 处置见
 > docs/14-context-codex-review.md）；2026-08-20 实现阶段经第二轮 Codex review（14 findings
 > 处置见 docs/15-context-impl-review.md），两轮修订均已并入本文档与实现。
 >
 > 需求来源：飞书里与机器人聊天（含话题群），机器人只"看见"@过它的消息——
 > 话题中未被 @ 的讨论、私聊中更早的往来，它一概不知道。目标：每条入站普通消息
-> 注入飞书上下文：**话题 → 话题内全部消息；私聊 → 尽量向前回溯**。
+> 注入飞书上下文：**话题 → 预算内的完整近期窗口；私聊 → 按更紧预算有界回溯**。
 > 实现载体：飞书官方 CLI `@larksuite/cli`（`lark-cli`），SDK 直连兜底。
 >
 > 三个决策点已于 2026-08-19 与用户定案：
 > 1. **SDK 兜底：要**（`auto` 模式，CLI 首选）；
-> 2. **预算放大**：默认 150 条 / 100,000 字符（模型有 1M 上下文，给足）；
+> 2. **有界预算**：话题/全局默认 150 条 / 100,000 字符；长期私聊额外限制为
+>    80 条 / 50,000 字符（约两页 CLI 基础读取，实际取私聊与全局上限的较小值）；
 > 3. **群历史权限**：`im:message.group_msg` 由用户另派 Codex 在开发者后台配置，本仓只固化文档。
 
 ## 1. 调研事实（2026-08-19，含本机实测）
@@ -31,10 +33,11 @@
     （container_id_type=chat），支持 `--order desc`、`--page-size 50`、`--page-all --page-limit N`。
   - 话题消息 `lark-cli im +threads-messages-list` —— container_id_type=thread；`--thread` 接受
     `omt_`（thread_id）或 `om_`（根消息 id），自动解析。
-- **headless 关键点（实测）**：凭证走环境变量 `LARKSUITE_CLI_APP_ID` / `LARKSUITE_CLI_APP_SECRET`
-  （另有 `LARKSUITE_CLI_TENANT_ACCESS_TOKEN`），**无需交互式 `config init` / OAuth 登录**。
-  假凭据跑 `whoami --as bot` 返回 `"identity":"bot","tokenStatus":"ready"`——与插件现有
-  appId/appSecret 直接复用（注意：该探测不校验 secret 本身，真实读取以租户验收为准）。
+- **headless 关键点（真实租户修正）**：`whoami --as bot` 在仅有
+  `LARKSUITE_CLI_APP_ID` / `LARKSUITE_CLI_APP_SECRET` 时会显示 ready，但这不代表 CLI 已经
+  铸造 bot token；实际消息读取会报 `token_missing`。必须先建立 CLI 本地配置。插件会自动
+  每个 bridge 实例首次读取前执行一次 `config init --app-secret-stdin`，之后 API 读取都不再注入外部 App 凭据，
+  而是使用 CLI 自己管理的本地 profile（无需 OAuth 登录，详见 §3.2）。
 - 输出契约（官方源码核实）：`--format json`（默认）成功写 stdout，信封 `{ok:true, data, meta}`
   （含 `meta.pagination.complete`）；错误写 stderr、退出码非 0；
   **判断成功看 `ok==true`（或退出码 0），不要看 `code==0`**。两条命令的业务数组都是
@@ -100,14 +103,19 @@
   （session 级静态）不合适。构造 `content: [上下文块, 用户原文]`；上下文块用
   **JSON 对象帧**（`{"type":"feishu-context","count":N,"messages":[...]}` 作为首个 text 块），
   每条消息文本在渲染层做分隔符转义——群成员可写内容无法伪造闭合边界（F8）。
-- **F3 话题 = 全量，私聊 = 回溯。** 话题：`+threads-messages-list --thread <threadId ?? rootId>`
+- **F3 话题 = 预算窗口，私聊 = 有界回溯。** 话题：`+threads-messages-list --thread <threadId ?? rootId>`
   （事件携带）；若事件 `rootId` 不在结果中（老话题），**补取根消息前置**——CLI 走
   `+messages-mget --message-ids <rootId>`、SDK 走 seam `getMessage`（`im.v1.message.get`），
   补取失败 fail-open 仅告警（docs/15 F-05）。
   私聊：`+chat-messages-list --chat-id <chatId>`（事件里的 p2p chat id，bot 身份可用）。
   两条命令统一 `--order desc` + `--page-all` 分页，取满预算为止。
-- **F4 预算默认 150 条 / 100,000 字符，上限 500 条 / 500,000 字符。** 模型侧 DeepSeek 有
-  1M 上下文，窗口给足；100K 字符 ≈ 60–150K token（随语言波动）。DeepSeek 上下文缓存是
+- **F4 双层有界预算。** 话题/全局默认 150 条 / 100,000 字符，上限 500 条 / 500,000 字符；
+  长期私聊额外默认 80 条 / 50,000 字符，实际预算分别为
+  `min(contextMaxMessages, contextP2pMaxMessages)` 与 `min(contextMaxChars, contextP2pMaxChars)`。
+  80 条加一个 cutoff 观察位仍只需两页基础 CLI 拉取，避免私聊累计几万条后出现无界扫描；
+  50K 字符通常约 25–50K token（随语言/代码比例波动），足够覆盖近期对话又控制单回合成本。
+  模型侧 DeepSeek 有
+  1M 上下文，但不以此放弃预算。DeepSeek 上下文缓存是
   **前缀匹配、尽力而为**（[官方文档](https://api-docs.deepseek.com/guides/kv_cache)），
   窗口滑动时命中不可依赖；且桥接器允许任意 provider/model，不能普遍假设 1M——
   成本由预算封顶承担，`contextMode: off` 是逃生门。**拉取页数**：`--page-limit`
@@ -152,13 +160,14 @@
   群场景仅在 `allowedChatIds` 授权群内发生；日志与错误文本不打印上下文原文；
   `redactSecrets` 只管密钥形态，**不是**个人信息清洗器——不承诺脱敏群讨论。
   **子进程环境最小化**（docs/15 F-09）：CLI 子进程只继承白名单环境变量（PATH/HOME/TMP/
-  代理等）+ 三个 `LARKSUITE_CLI_*`，不整体透传 `process.env`；`feishuCliPath` 是
+  代理等）与两个 notifier 开关，不整体透传 `process.env`，也不在 API 读取时传 appSecret；
+  每个 bridge 实例初始化所需的 secret 只经 stdin 交给 CLI 一次。`feishuCliPath` 是
   **受信任管理员配置**（cordis.patch.yml / `DSH_FEISHU_CLI_PATH`），不进 Web GUI 设置卡——
   任意可执行路径等价于本机代码执行。
-- **F10 回合统计精确归属。**（Codex F-09 修正）「飞书上下文 N 条 · 约 Xk 字符」要挂在
-  **具体回合**上：把 `{backend, count, chars, truncated, fullWindow}` 作为 `pendingClaims`
-  的不可变元数据，`agent/inbox/claimed` 时复制进对应 `TurnProgress`（与 replyTo 同一条
-  既有链路）；卡片脚注从 TurnProgress 取数，GUI 回合/并发回合互不串扰。
+- **F10 回合统计精确归属。**（Codex F-09 修正）上下文统计要挂在**具体回合**上：把
+  `{backend, count, chars, truncated, fullWindow}` 作为 `pendingClaims` 的不可变元数据，
+  `agent/inbox/claimed` 时复制进对应 `TurnProgress`（与 reply context 同一条既有链路）；
+  GUI 回合/并发回合互不串扰。普通回合卡为保持极简不展示该统计。
 
 ## 3. 设计
 
@@ -211,19 +220,18 @@ export interface ContextMessage {
 ```bash
 # 话题
 lark-cli im +threads-messages-list --thread <threadId|rootId> --order desc \
-  --page-size 50 --page-all --page-limit <ceil(maxMessages/50)> --no-reactions --as bot --format json
+  --page-size 50 --page-all --page-limit <ceil((maxMessages+1)/50)> --no-reactions --as bot --format json
 # 私聊
 lark-cli im +chat-messages-list --chat-id <chatId> --order desc \
-  --page-size 50 --page-all --page-limit <ceil(maxMessages/50)> --no-reactions --as bot --format json
+  --page-size 50 --page-all --page-limit <ceil((maxMessages+1)/50)> --no-reactions --as bot --format json
 ```
 
 - spawn 用 **`spawn` + 参数数组**（无 shell，防注入），持有 ChildProcess 句柄：超时或
   lifetime abort → `kill(SIGKILL)`（docs/15 F-07）；输出流式累计、**16 MiB 上限**（超限即
   kill 并 fail-open，绝不静默截断）；
-  env 为**白名单最小集**（PATH/HOME/TMP/代理等）+ `LARKSUITE_CLI_APP_ID` /
-  `LARKSUITE_CLI_APP_SECRET` + 两个 NOTIFIER 变量，**不整体透传 process.env**（docs/15 F-09）；
-  日志/异常输出**永不打印 env**。预留优化：SDK 侧换取短时 tenant token 后改传
-  `LARKSUITE_CLI_TENANT_ACCESS_TOKEN`，进一步减小长期 secret 进子进程环境的暴露面。
+  env 为**白名单最小集**（PATH/HOME/TMP/代理等）+ 两个 NOTIFIER 变量，**不整体透传
+  process.env，也不注入 `LARKSUITE_CLI_APP_ID/SECRET`**（docs/15 F-09）；日志/异常输出
+  **永不打印 env**。CLI 从每实例启动时刷新的本地 profile 读取凭据并自行管理 token。
 - 解析 stdout 信封：`ok !== true` 或退出码非 0 → 抛错（走 F5）；CLI 业务数组严格取
   **`data.messages`**，且 **`meta.pagination.complete` 必须为 boolean**（缺失 = schema 漂移
   → 抛错；false = 被 page-limit 截断，接受并记告警；docs/15 F-04）。CLI 与 SDK 各建**严格
@@ -235,13 +243,17 @@ lark-cli im +chat-messages-list --chat-id <chatId> --order desc \
   （对仓库开发与 profile/registry 的 pnpm 虚拟存储布局都成立）→ 其 `scripts/run.js`
   （wrapper，二进制缺失自动补装）→ 其 `bin/lark-cli`（原生快路径）→ 插件根目录直连路径
   → PATH 扫描 → 均无 → SDK（F1）；运行期 CLI 失败 → `auto` 模式 taint + 降级 SDK 重试一次。
-- **CLI 一次性配置引导（docs/15 §集成缺口，2026-08-20 真实租户实测发现）**：lark-cli
+- **CLI 每实例一次的配置刷新（docs/15 §集成缺口，2026-08-20 真实租户实测发现）**：lark-cli
   v1.0.88 **只从本地 config.json（secret 为 plain/file/keychain 引用）铸造 bot token**，
-  仅环境变量会报 `token_missing`。插件在 `auto/cli` 后端首次拉取前探测
-  `config show`：未配置或配置了其他应用 → 自动执行
+  仅环境变量会报 `token_missing`。插件在每个 bridge 实例的 `auto/cli` 后端首次拉取前探测
+  `config show`，随后**无论 appId 是否已匹配都执行**
   `config init --app-id <appId> --app-secret-stdin --brand feishu|lark`（secret 走 **stdin**，
-  不进 argv/env 回显，由 CLI 存入其自身存储——macOS keychain / 文件），再复探测；
-  任一步失败 → taint + 降级 SDK（`cli` 强制则本次不注入并告警）。每 bridge 实例只跑一次。
+  不进 argv/env 回显，由 CLI 存入其自身存储——macOS keychain / 文件），以覆盖同 appId 下的
+  appSecret 轮换，再复探测；不同 origin 的并发首条消息共享同一个初始化 Promise，全部等待
+  profile 刷新完成后再读取；
+  `config show/init` 与后续 API 命令的子进程环境均不含外部 App 凭据（否则 CLI 会拒绝
+  config 管理，API 读取也会落到 `token_missing`）；
+  初始化或复探测失败 → taint + 降级 SDK（`cli` 强制则本次不注入并告警）。每 bridge 实例只跑一次。
 
 **SdkProvider**（兜底）：经 channel seam 新增的窄操作
 `LarkChannelLike.listMessages({ containerIdType, containerId, pageToken })` 与
@@ -273,8 +285,8 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 - 上下文块：`{ type: 'text', text: '{"type":"feishu-context","count":N,"fullWindow":bool,"messages":[…] }' }`
   （JSON 对象帧，F2）作为 content 第一个块；用户原文块不变。`pendingPrompt`（卡片显示用，
   700 字符 bounded）不变。
-- 回合卡片：终态卡脚注追加一行「飞书上下文 N 条 · 约 Xk 字符」（compact 视图不显示），
-  数据来自 TurnProgress 的回合统计（F10）；上下文全文**不回显**（F8/F9）。
+- 回合卡片：上下文统计仍归属到准确的 TurnProgress，供审计与内部状态使用；普通终态卡
+  为保持极简不再显示统计脚注，上下文全文也**不回显**（F8/F9）。
 - `/status` 卡新增一行：上下文 `已启用（cli | sdk）` / `不可用（原因）` / `已关闭` / `熔断中`。
 - system prompt `feishu-remote` 段追加不可信边界规则（F8 第 1 条）。
 
@@ -285,8 +297,10 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 | `contextMode` | `off` \| `auto` | `auto` | 上下文回填开关 |
 | `contextBackend` | `auto` \| `cli` \| `sdk` | `auto` | 获取后端选择（F1） |
 | `feishuCliPath` | string | `''` | CLI 显式路径（env `DSH_FEISHU_CLI_PATH` 等价）；**仅受信任管理员配置，不进 GUI 设置卡**（docs/15 F-09） |
-| `contextMaxMessages` | number | `150` | 单次窗口消息条数上限（1–500） |
-| `contextMaxChars` | number | `100000` | 单次窗口字符上限（1000–500000） |
+| `contextP2pMaxMessages` | number | `80` | 私聊额外消息上限（1–500）；实际还受 `contextMaxMessages` 约束 |
+| `contextP2pMaxChars` | number | `50000` | 私聊额外字符上限（1000–500000）；实际还受 `contextMaxChars` 约束 |
+| `contextMaxMessages` | number | `150` | 全局硬上限，同时是话题窗口上限（1–500） |
+| `contextMaxChars` | number | `100000` | 全局硬上限，同时是话题字符上限（1000–500000） |
 | `contextTimeoutMs` | number | `10000` | 拉取超时（1000–60000） |
 | `contextIncludeBot` | boolean | `true` | 是否包含**本机器人**的历史回复（F7；其他 bot 不受影响） |
 
@@ -302,15 +316,16 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 | 1 | `src/context.ts`（新）：接口 + LarkCliProvider + SdkProvider + renderTranscript + CLI 解析/自举 + 全局并发/熔断 |
 | 2 | `src/channel.ts` / `src/types.ts`：`LarkChannelLike.listMessages` 窄 seam（+ mock 通道实现） |
 | 3 | `src/config.ts` / `src/settings.ts` / `src/types.ts`：§4 配置全链路；`src/state.ts` 水位字段 |
-| 4 | `src/bridge.ts`：普通消息路径注入（命令 guard 之后）；system prompt 边界规则；`/status` 行；终态卡脚注（F10 链路） |
+| 4 | `src/bridge.ts`：普通消息路径注入（命令 guard 之后）；system prompt 边界规则；`/status` 行；TurnProgress 回合统计归属 |
 | 5 | `package.json` + `pnpm-workspace.yaml`：`@larksuite/cli@1.0.88` 依赖 + `allowBuilds` map 加 `"@larksuite/cli": true`（§1.3） |
-| 6 | `tests/context.spec.ts`：见 §6；全量 `pnpm run check`（typecheck + 167 用例 + build） |
+| 6 | `tests/context.spec.ts`：见 §6；全量 `pnpm run check`（typecheck + 契约测试 + build） |
 | 7 | 文档：docs/09 权限清单、README 表（本步已完成 docs/13） |
 | 8 | 真实租户验收：§7；按 docs/12 安装清单走端到端 |
 
 ## 6. 测试计划（契约测试，无真实凭据）
 
 - 参数构建：origin 两分支 → 命令/flag 正确；**必须含 `--page-all`**；page-limit 推导；
+  私聊默认 80 条保持两页基础拉取；私聊/全局上限取较小值；
   `threadId ?? rootId` 回退；thread 场景 root mget 二次调用与失败 fail-open。
 - 信封解析：`ok:true/false`、**严格 `data.messages`**、**`meta.pagination.complete` 严格
   boolean**（缺失抛错 / false 告警）、退出码非 0。
@@ -324,6 +339,8 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
   保留名字、时间正序、条数/字符双重截断（**只数可渲染消息**）、头注省略数、帧结构完整。
 - Provider 选择：`auto`（CLI 缺失 → SDK；CLI 运行期失败 → **taint + 降级 SDK 重试一次**）、
   `cli` 强制、`sdk` 强制；`feishuCliPath` 优先级；createRequire 解析（repo/profile 布局）。
+- CLI 引导：同 appId 仍重写新 secret；两个不同 origin 冷启动并发时只 init 一次，且两边均在
+  init 完成后读取，不得误触发 SDK 降级。
 - SDK 路径：非零 `code`、data 缺失、page_token 不前进即停、**挂起调用超时/abort race**、
   locale 解包 post、getMessage 根补取。
 - 全局并发：多 origin 同时拉取 → 最多 2 并发；连续 3 次失败 → 熔断 → **排队 waiter 被拒** → 恢复。
@@ -343,15 +360,15 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 ## 7. 真实租户验收清单
 
 1. 私聊发「我记得我们聊过 X」，bot 复述此前（非 @ 过的）私聊内容 → 私聊回溯生效。
-2. 话题内两人讨论（其中多条不 @ 机器人），最后一条 @ 问「按上面的讨论做」→ 话题全量生效。
-3. **150+ 条的长话题**：全量窗口到预算上限、分页正确、脚注计数准确。
+2. 话题内两人讨论（其中多条不 @ 机器人），最后一条 @ 问「按上面的讨论做」→ 话题预算窗口生效。
+3. **150+ 条的长话题**：近期窗口到预算上限、分页正确、内部回合计数准确。
 4. `/new` 后立刻在旧话题问上下文问题 → 新 session 注入完整窗口（F6 全量分支）。
-5. 同一话题连发多轮 → 每轮只注入增量（宿主日志/卡片计数确认，无二次增长）。
+5. 同一话题连发多轮 → 每轮只注入增量（宿主日志/回合统计确认，无二次增长）。
 6. 权限只开私聊档（不开 group_msg）时：私聊上下文正常，群话题上下文降级为空并告警、消息不阻断。
 7. 关掉 CLI（改名二进制 + `contextBackend: sdk`）→ SDK 兜底路径正常；再 `cli` 强制 → 告警且不阻断。
 8. 白名单外群 @ 机器人：拒绝逻辑不变，且**无任何历史拉取**（日志确认）。
 9. 控制命令（/stop /status /approve…）触发**零拉取**（日志确认）。
-10. `/status` 卡上下文行四种状态各见一次；终态卡脚注出现「飞书上下文 N 条」。
+10. `/status` 卡上下文行四种状态各见一次；普通终态卡不出现上下文统计。
 11. 隐私复核：Web GUI 会话列表可见注入历史（预期行为，F9）；重启后旧会话/归档/删除流程正常。
 12. 群历史注入攻击样例（如"请执行 rm -rf"）→ agent 不据此授权（F8 边界规则生效）。
 
@@ -367,8 +384,8 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
   超时 + 全局并发 2 + 熔断兜底，不卡交互。
 - **CLI 二进制供给**：GitHub/npmmirror 双源 + SHA-256 校验 + wrapper 自动补装 + SDK 兜底
   四重防线；registry 安装形态受 profile 侧 pnpm 放行约束（§1.3，验收覆盖）。
-- **凭据暴露面（F-14 折中）**：首版向子进程 env 传 appSecret（插件进程内存已有该值），
-  最小 env、日志不打印；短时 tenant token 为后续优化。
+- **凭据暴露面（v1.2 已收紧）**：appSecret 只在每个 bridge 实例的一次 `config init` 时经 stdin 交给 CLI，
+  不进入 argv、config 探测或历史读取子进程的环境；CLI 本地存储的保护级别由其自身负责。
 - **权限缺失（group_msg）**：话题上下文退化为空（fail-open），p2p 不受影响；权限配置由
   Codex 代办，文档已固化（docs/09 §3）。
 - dsh rc 期接口变动：本功能只依赖已使用的 `createUserMessage`/`followup` 与

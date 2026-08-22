@@ -10,7 +10,6 @@ import type {
   WSConnectionStatus,
 } from '@larksuiteoapi/node-sdk'
 
-export type CardPreset = 'compact' | 'standard' | 'developer'
 export type LarkBrand = 'feishu' | 'lark' | 'larkoffice'
 
 /** Runtime configuration after environment fallbacks and path normalization (single project). */
@@ -37,13 +36,14 @@ export interface ResolvedConfig {
   interactiveTimeoutMs: number
   enableApprovals: boolean
   cardBodyMaxChars: number
-  cardPreset: CardPreset
   agentPreset?: string
   maxLiveAgents: number
   commandAllowlist: string[]
   contextMode: 'off' | 'auto'
   contextBackend: 'auto' | 'cli' | 'sdk'
   feishuCliPath: string
+  contextP2pMaxMessages: number
+  contextP2pMaxChars: number
   contextMaxMessages: number
   contextMaxChars: number
   contextTimeoutMs: number
@@ -59,20 +59,13 @@ export interface TurnContextStats {
   fullWindow: boolean
 }
 
-export interface ToolProgress {
-  callId: string
-  name: string
-  summary: string
-  startedAt: number
-  finishedAt?: number
-  failed?: boolean
-}
-
 export interface TurnStepText {
   turn: number
   step: number
   chunks: string
   final?: string
+  /** True when this assistant step requested tools, so its text is progress commentary rather than the final answer. */
+  hasToolCalls?: boolean
 }
 
 export interface TurnProgress {
@@ -82,10 +75,8 @@ export interface TurnProgress {
   visibleText: string
   /** Per-step chunk/final buffers; the complete `assistant/message` REPLACES the step's chunks (dedup fix). */
   steps: TurnStepText[]
-  tools: ToolProgress[]
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number
+  /** Terminal user-facing answer selected from the last non-tool assistant step. */
+  terminalText?: string
   progressMessageId?: string
   terminal: boolean
   outcome?: 'completed' | 'cancelled' | 'blocked' | 'error'

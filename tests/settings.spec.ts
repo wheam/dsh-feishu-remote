@@ -15,8 +15,9 @@ describe('settings namespace (flat ↔ nested)', () => {
     expect(flat.appId).toBe('cli_1')
     expect(flat.allowedOpenIds).toBe('ou_1, ou_2')
     expect(flat.allowedChatIds).toBe('')
-    expect(flat.cardPreset).toBe('standard')
     expect(flat.appSecretRef).toBe('DSH_FEISHU_APP_SECRET')
+    expect(flat.contextP2pMaxMessages).toBe(80)
+    expect(flat.contextP2pMaxChars).toBe(50000)
     expect('appSecret' in flat).toBe(false)
   })
 
@@ -37,16 +38,16 @@ describe('settings namespace (flat ↔ nested)', () => {
       cwd: '/tmp/work',
       workspaceRoot: '/tmp/work',
       progressUpdateMs: 500,
-      cardPreset: 'developer',
     })
     const config = unflatten(flat, entry)
     expect(config.appId).toBe('cli_1')
     expect(config.allowedOpenIds).toEqual(['ou_1'])
     expect(config.allowedChatIds).toEqual(['oc_1'])
     expect(config.progressUpdateMs).toBe(500)
-    expect(config.cardPreset).toBe('developer')
     expect(config.appSecretRef).toBe('DSH_FEISHU_APP_SECRET')
     expect(config.brand).toBe('feishu')
+    expect(config.contextP2pMaxMessages).toBe(80)
+    expect(config.contextP2pMaxChars).toBe(50000)
   })
 
   it('parses empty list strings as empty arrays (fail-closed)', () => {

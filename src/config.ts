@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import Schema from '@deepseek-ai/schemastery'
-import type { CardPreset, LarkBrand, ResolvedConfig } from './types.js'
+import type { LarkBrand, ResolvedConfig } from './types.js'
 import { canonicalPath, isInside, parseBooleanEnv, parseCsv } from './security.js'
 
 export interface Config {
@@ -39,13 +39,16 @@ export interface Config {
   interactiveTimeoutMs?: number
   enableApprovals?: boolean
   cardBodyMaxChars?: number
-  cardPreset?: CardPreset
   agentPreset?: string
   maxLiveAgents?: number
   commandAllowlist?: string[]
   contextMode?: 'off' | 'auto'
   contextBackend?: 'auto' | 'cli' | 'sdk'
   feishuCliPath?: string
+  /** 私聊额外上限；实际值还会受 contextMaxMessages 全局上限约束。 */
+  contextP2pMaxMessages?: number
+  /** 私聊额外字符上限；实际值还会受 contextMaxChars 全局上限约束。 */
+  contextP2pMaxChars?: number
   contextMaxMessages?: number
   contextMaxChars?: number
   contextTimeoutMs?: number
@@ -75,13 +78,14 @@ export const ConfigSchema: Schema<Config> = Schema.object({
   interactiveTimeoutMs: Schema.number().step(1).min(1000).default(10 * 60 * 1000),
   enableApprovals: Schema.boolean().default(true),
   cardBodyMaxChars: Schema.number().step(1).min(1000).max(28000).default(12000),
-  cardPreset: Schema.union(['compact', 'standard', 'developer'] as const).default('standard'),
   agentPreset: Schema.string().default(''),
   maxLiveAgents: Schema.number().step(1).min(0).default(0),
   commandAllowlist: Schema.array(Schema.string()).default([]),
   contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
   contextBackend: Schema.union(['auto', 'cli', 'sdk'] as const).default('auto'),
   feishuCliPath: Schema.string().default(''),
+  contextP2pMaxMessages: Schema.number().step(1).min(1).max(500).default(80),
+  contextP2pMaxChars: Schema.number().step(1).min(1000).max(500000).default(50000),
   contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
   contextMaxChars: Schema.number().step(1).min(1000).max(500000).default(100000),
   contextTimeoutMs: Schema.number().step(1).min(1000).max(60000).default(10000),
@@ -139,9 +143,6 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     ...(config.allowedChatIds ?? []),
     ...parseCsv(env.DSH_FEISHU_ALLOWED_CHAT_IDS),
   ])
-  if (allowAllUsers && !parseBooleanEnv(env.DSH_FEISHU_ALLOW_ALL_USERS) && !config.allowAllUsers) {
-    throw new Error('dsh-feishu-remote: allowAllUsers must be set explicitly in config or DSH_FEISHU_ALLOW_ALL_USERS')
-  }
 
   return {
     appId,
@@ -166,13 +167,14 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     interactiveTimeoutMs: config.interactiveTimeoutMs ?? 10 * 60 * 1000,
     enableApprovals: config.enableApprovals ?? true,
     cardBodyMaxChars: config.cardBodyMaxChars ?? 12000,
-    cardPreset: config.cardPreset ?? 'standard',
     ...(agentPreset === undefined || agentPreset === '' ? {} : { agentPreset }),
     maxLiveAgents: config.maxLiveAgents ?? 0,
     commandAllowlist: unique(config.commandAllowlist ?? []),
     contextMode: config.contextMode ?? 'auto',
     contextBackend: config.contextBackend ?? 'auto',
     feishuCliPath: (config.feishuCliPath ?? env.DSH_FEISHU_CLI_PATH ?? '').trim(),
+    contextP2pMaxMessages: config.contextP2pMaxMessages ?? 80,
+    contextP2pMaxChars: config.contextP2pMaxChars ?? 50000,
     contextMaxMessages: config.contextMaxMessages ?? 150,
     contextMaxChars: config.contextMaxChars ?? 100000,
     contextTimeoutMs: config.contextTimeoutMs ?? 10000,

@@ -248,6 +248,7 @@ class FakeChannel implements LarkChannelLike {
 
   readonly getMessageCalls: string[] = []
   rootMessageItem?: Record<string, unknown>
+  downloadGate?: Promise<Buffer>
 
   async getMessage(messageId: string): Promise<Record<string, unknown> | undefined> {
     this.getMessageCalls.push(messageId)
@@ -255,6 +256,7 @@ class FakeChannel implements LarkChannelLike {
   }
 
   async downloadMessageResource(): Promise<Buffer> {
+    if (this.downloadGate !== undefined) return this.downloadGate
     throw new Error('no downloads in tests')
   }
 }
@@ -477,6 +479,17 @@ describe('bridge lifecycle and answerer ordering', () => {
     expect(h.bridge).toBeDefined()
     expect(h.channel.connectCalls).toBeGreaterThanOrEqual(1)
   })
+
+  it('aborts a pending attachment download when the bridge stops', async () => {
+    const h = await makeHarness()
+    h.channel.downloadGate = new Promise<Buffer>(() => undefined)
+    const wrapped = Reflect.get(h.bridge, 'channel') as LarkChannelLike
+    const download = wrapped.downloadMessageResource('om_1', 'file_1', 'file', 1024)
+
+    await h.bridge.stop()
+
+    await expect(download).rejects.toThrow('飞书通道已关闭')
+  })
 })
 
 describe('fail-closed allowlists', () => {
@@ -519,6 +532,48 @@ describe('session creation and mapping', () => {
     expect(agent.followups).toHaveLength(1)
     const followup = agent.followups[0] as { source?: { kind?: string }; content?: unknown }
     expect(followup.source?.kind).toBe('user')
+  })
+
+  it('does not quote private-chat task cards, but keeps group cards in their thread', async () => {
+    const privateHarness = await makeHarness()
+    await privateHarness.emitMessage('private task')
+    await waitFor(() => privateHarness.agents.created.length === 1)
+    const privateSessionId = privateHarness.agents.created[0]!.options.sessionId!
+    const privateAgent = privateHarness.agents.live.get(privateSessionId)!
+    const privateMessage = privateAgent.followups.at(-1) as { id?: unknown }
+    await privateHarness.emitSessionEvent(privateSessionId, 'turn/start', { turn: 1 })
+    await privateHarness.emitClaim(privateSessionId, privateMessage.id, 1)
+    await privateHarness.emitSessionEvent(privateSessionId, 'assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', text: 'working' },
+    })
+    await waitFor(() => privateHarness.channel.sent.some(item => item.input.card !== undefined))
+    const privateCard = privateHarness.channel.sent.find(item => item.input.card !== undefined)!
+    expect(privateCard.options).toEqual({})
+
+    const threadHarness = await makeHarness()
+    await threadHarness.emitMessage('thread task', {
+      chatId: 'oc_grp',
+      chatType: 'group',
+      threadId: 'omt_2',
+      rootId: 'om_root_2',
+    })
+    const inboundId = `om_in_${messageSeq}`
+    await waitFor(() => threadHarness.agents.created.length === 1)
+    const threadSessionId = threadHarness.agents.created[0]!.options.sessionId!
+    const threadAgent = threadHarness.agents.live.get(threadSessionId)!
+    const threadMessage = threadAgent.followups.at(-1) as { id?: unknown }
+    await threadHarness.emitSessionEvent(threadSessionId, 'turn/start', { turn: 1 })
+    await threadHarness.emitClaim(threadSessionId, threadMessage.id, 1)
+    await threadHarness.emitSessionEvent(threadSessionId, 'assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', text: 'working' },
+    })
+    await waitFor(() => threadHarness.channel.sent.some(item => item.input.card !== undefined))
+    const threadCard = threadHarness.channel.sent.find(item => item.input.card !== undefined)!
+    expect(threadCard.options).toEqual({ replyTo: inboundId, replyInThread: true })
   })
 
   it('reuses the live session per origin; separate threads get separate sessions', async () => {
@@ -763,7 +818,7 @@ describe('turn ledger and approval routing', () => {
   })
 })
 
-describe('streaming aggregation', () => {
+describe('progress aggregation', () => {
   it('replaces step chunks with the full assistant message (no helhello duplication)', async () => {
     const h = await makeHarness()
     await h.emitMessage('say hello')
@@ -783,28 +838,125 @@ describe('streaming aggregation', () => {
     const lastCard = JSON.stringify(h.channel.patched.at(-1)!.card)
     expect(lastCard).toContain('hello')
     expect(lastCard).not.toContain('helhello')
-    expect(lastCard).toContain('已完成')
+    expect(lastCard).toContain('✅ 完成')
   })
 
-  it('keeps the live card in streaming mode and closes it on the terminal patch', async () => {
+  it('replaces tool-bearing progress with the final assistant summary at turn end', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('fix it')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '我先检查代码和运行测试。' },
+          { type: 'tool-call', id: 'call_1', name: 'bash', arguments: '{"command":"pnpm test"}' },
+        ],
+      },
+    } as never)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 2,
+      message: { role: 'assistant', content: [{ type: 'text', text: '修改完成，测试已经通过。' }] },
+    })
+    // DSH may append an empty assistant message that exists only to carry usage.
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 2,
+      message: { role: 'assistant', content: [] },
+      usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0 },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.patched.length > 0)
+    const terminal = JSON.stringify(h.channel.patched.at(-1)!.card)
+    expect(terminal).toContain('✅ 完成')
+    expect(terminal).toContain('修改完成，测试已经通过。')
+    expect(terminal).not.toContain('我先检查代码和运行测试。')
+    expect(terminal).not.toContain('pnpm test')
+    expect(terminal).not.toContain('bash')
+  })
+
+  it('uses the non-empty final summary when progress cards are disabled', async () => {
+    const h = await makeHarness({ progressCards: false })
+    await h.emitMessage('fix it quietly')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '先执行检查。' },
+          { type: 'tool-call', id: 'call_2', name: 'bash', arguments: '{}' },
+        ],
+      },
+    } as never)
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 2,
+      message: { role: 'assistant', content: [{ type: 'text', text: '处理完成。' }] },
+    })
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 2,
+      message: { role: 'assistant', content: [] },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('处理完成。')))
+    const result = h.channel.sent.find(item => String(item.input.markdown).includes('处理完成。'))!
+    expect(result.input.markdown).toBe('处理完成。')
+    expect(String(result.input.markdown)).not.toContain('先执行检查。')
+  })
+
+  it('keeps the latest non-empty partial text for a cancelled turn', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('start then cancel')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', text: '已完成到一半。' },
+    })
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    await h.emitSessionEvent(sessionId, 'turn/end', {
+      turn: 1,
+      reason: { kind: 'aborted', reason: { kind: 'user' } },
+    } as never)
+    await waitFor(() => h.channel.patched.length > 0)
+    const terminal = JSON.stringify(h.channel.patched.at(-1)!.card)
+    expect(terminal).toContain('⏹️ 已停止')
+    expect(terminal).toContain('已完成到一半。')
+  })
+
+  it('uses ordinary patches for live and terminal cards', async () => {
     const h = await makeHarness()
     await h.emitMessage('stream')
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
     await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
-    // The first card lands as a SEND while the turn runs → streaming mode on.
+    // The first card lands as a regular mutable SEND while the turn runs.
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
     const live = h.channel.sent.find(item => item.input.card !== undefined)!
-    expect((live.input.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
-    // The terminal update patches the same card with streaming_mode: false.
+    expect((live.input.card as { config: Record<string, unknown> }).config).not.toHaveProperty('streaming_mode')
+    // The terminal update patches that same card and replaces the progress.
     await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
     await waitFor(() => h.channel.patched.length > 0)
-    const terminal = h.channel.patched.at(-1)!.card as { config: Record<string, unknown> }
-    expect(terminal.config.streaming_mode).toBe(false)
+    const terminal = h.channel.patched.at(-1)!
+    expect(terminal.messageId).toBe(live.messageId)
+    expect((terminal.card as { config: Record<string, unknown> }).config).not.toHaveProperty('streaming_mode')
   })
 
-  it('patches live updates on the same message at streaming_mode:true, terminal closes it (Round 12 F6)', async () => {
+  it('patches live updates and the terminal result on the same message', async () => {
     const h = await makeHarness()
     await h.emitMessage('stream')
     await waitFor(() => h.agents.created.length === 1)
@@ -814,22 +966,22 @@ describe('streaming aggregation', () => {
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
     const live = h.channel.sent.find(item => item.input.card !== undefined)!
     const messageId = live.messageId
-    expect((live.input.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
-    // More output → a live PATCH on the SAME message, still in streaming mode.
+    expect((live.input.card as { config: Record<string, unknown> }).config).not.toHaveProperty('streaming_mode')
+    // More output → a live PATCH on the SAME message.
     await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' more' } })
     await waitFor(() => h.channel.patched.length > 0)
     const livePatch = h.channel.patched.at(-1)!
     expect(livePatch.messageId).toBe(messageId)
-    expect((livePatch.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
-    // Terminal patch closes streaming mode on that same card.
+    expect((livePatch.card as { config: Record<string, unknown> }).config).not.toHaveProperty('streaming_mode')
+    // Terminal result patches that same card.
     await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
     await waitFor(() => h.channel.patched.length > 1)
     const terminal = h.channel.patched.at(-1)!
     expect(terminal.messageId).toBe(messageId)
-    expect((terminal.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+    expect((terminal.card as { config: Record<string, unknown> }).config).not.toHaveProperty('streaming_mode')
   })
 
-  it('drops stale queued progress work after turn/end and still serves /view (Round 12 F2)', async () => {
+  it('drops stale queued progress work after turn/end and explains legacy /view actions', async () => {
     const h = await makeHarness()
     await h.emitMessage('stream')
     await waitFor(() => h.agents.created.length === 1)
@@ -848,15 +1000,13 @@ describe('streaming aggregation', () => {
     release()
     await waitFor(() => h.channel.patched.length > 0)
     // Exactly one live SEND; the queued progress update was dropped, so the
-    // FIRST patch is already the terminal one (streaming_mode: false).
+    // FIRST patch is already the terminal one.
     expect(h.channel.sent.filter(item => item.input.card !== undefined)).toHaveLength(1)
     expect(h.channel.patched).toHaveLength(1)
-    expect((h.channel.patched[0]!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
-    // /view explicit re-render still works after the turn settled.
-    const before = h.channel.patched.length
+    expect(JSON.stringify(h.channel.patched[0]!.card)).toContain('✅ 完成')
+    // Old already-sent /view buttons stay parseable and receive a clear deprecation reply.
     await h.emitCardAction({ bridge: 'dsh-feishu-remote', action: 'view', sessionId })
-    await waitFor(() => h.channel.patched.length > before)
-    expect((h.channel.patched.at(-1)!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('极简视图')))
   })
 
   it('enqueues the terminal patch while a stale progress patch is mid-flight (Round 12 F2 bypass)', async () => {
@@ -882,9 +1032,9 @@ describe('streaming aggregation', () => {
     await waitFor(() => h.scheduler.pendingCount >= 2, 'terminal patch enqueued despite stale patch in flight')
     release()
     await waitFor(() => h.channel.patched.length === 2)
-    // Per-messageId scheduler ordering: stale patch first, terminal last.
-    expect((h.channel.patched[0]!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(true)
-    expect((h.channel.patched[1]!.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+    // Per-messageId scheduler ordering: stale progress first, terminal result last.
+    expect(JSON.stringify(h.channel.patched[0]!.card)).toContain('正在处理')
+    expect(JSON.stringify(h.channel.patched[1]!.card)).toContain('✅ 完成')
     expect(h.channel.patched[1]!.messageId).toBe(h.channel.patched[0]!.messageId)
   })
 
@@ -906,11 +1056,11 @@ describe('streaming aggregation', () => {
     } as never)
     await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
     release()
-    // Fallback = a fresh TERMINAL card SEND (streaming_mode: false). If the
+    // Fallback = a fresh TERMINAL card SEND. If the
     // fallback re-chained behind itself, this would deadlock and never land.
     await waitFor(() => h.channel.sent.filter(item => item.input.card !== undefined).length >= 2, 'fresh terminal card after chained-patch permanent failure')
     const cards = h.channel.sent.filter(item => item.input.card !== undefined)
-    expect((cards.at(-1)!.input.card as { config: Record<string, unknown> }).config.streaming_mode).toBe(false)
+    expect(JSON.stringify(cards.at(-1)!.input.card)).toContain('✅ 完成')
   })
 
   it('drops replayed events by the seq watermark', async () => {
@@ -974,6 +1124,20 @@ describe('working reaction (敲键盘)', () => {
 })
 
 describe('commands', () => {
+  it('documents command-based task control and deprecates /view clearly', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('/help')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('只有审批卡保留')))
+    const help = String(h.channel.sent.at(-1)!.input.markdown)
+    expect(help).toContain('/stop')
+    expect(help).not.toContain('/view compact')
+    expect(help).not.toContain('按钮可直接处理审批、停止任务和新建会话')
+
+    await h.emitMessage('/view developer')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('/view` 已停用')))
+    expect(h.agents.created).toHaveLength(0)
+  })
+
   it('/stop cancels only the current turn and keeps the inbox', async () => {
     const h = await makeHarness()
     await h.emitMessage('run')
@@ -1222,7 +1386,7 @@ describe('single terminal card (Codex P1-4 regression)', () => {
     await new Promise(resolve => setTimeout(resolve, 30))
     const cards = h.channel.sent.filter(item => (item.input as { card?: unknown }).card !== undefined)
     expect(cards).toHaveLength(1)
-    expect(JSON.stringify(cards[0]!.input)).toContain('已完成')
+    expect(JSON.stringify(cards[0]!.input)).toContain('✅ 完成')
   })
 })
 
@@ -1481,20 +1645,31 @@ function followupContent(agent: { followups: Array<{ content: Array<{ type: stri
 
 /** Fake CLI for the docs/15 bootstrap integration test: config show/init + one im list envelope. */
 const BOOTSTRAP_CLI_FIXTURE = `#!/usr/bin/env node
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-const statePath = join(dirname(fileURLToPath(import.meta.url)), 'state.json')
+const fixtureDir = dirname(fileURLToPath(import.meta.url))
+const statePath = join(fixtureDir, 'state.json')
+const logPath = join(fixtureDir, 'calls.jsonl')
 const argv = process.argv.slice(2)
+appendFileSync(logPath, JSON.stringify({ argv, configured: existsSync(statePath) }) + '\\n')
 if (argv[0] === 'config' && argv[1] === 'show') {
   if (existsSync(statePath)) { process.stdout.write(JSON.stringify({ appId: readFileSync(statePath, 'utf8').trim(), appSecret: '****', brand: 'feishu', profile: 'x' })); process.exit(0) }
   process.stdout.write(JSON.stringify({ ok: false, error: { type: 'config', subtype: 'not_configured' } })); process.exit(0)
 } else if (argv[0] === 'config' && argv[1] === 'init') {
   process.stdin.setEncoding('utf8')
   process.stdin.on('data', () => undefined)
-  process.stdin.on('end', () => { writeFileSync(statePath, argv[argv.indexOf('--app-id') + 1]); process.exit(0) })
+  process.stdin.on('end', () => {
+    // Widen the cold-start window so two different origins deterministically
+    // exercise the shared bootstrap promise instead of racing config init.
+    setTimeout(() => {
+      writeFileSync(statePath, argv[argv.indexOf('--app-id') + 1])
+      process.exit(0)
+    }, 150)
+  })
   process.stdin.resume()
-} else if (argv[0] === 'im' && argv[1] === '+chat-messages-list') {
+} else if (argv[0] === 'im' && (argv[1] === '+chat-messages-list' || argv[1] === '+threads-messages-list')) {
+  if (!existsSync(statePath)) { process.stderr.write('token_missing'); process.exit(3) }
   process.stdout.write(JSON.stringify({
     ok: true,
     data: { messages: [ { message_id: 'om_b1', msg_type: 'text', content: 'cli 引导后内容', sender: { id: 'ou_a', name: '小明', sender_type: 'user' }, create_time: '2026-08-19 10:00', deleted: false, updated: false } ] },
@@ -1524,13 +1699,13 @@ describe('context backfill (docs/13)', () => {
     expect(frame.count).toBe(1)
     expect(frame.messages[0]!.n).toBe('小明')
     expect(content[1]!.text).toBe('接着干')
-    // Stats ride the claim ledger → turn → terminal card footer (docs/13 F10).
+    // Stats remain available internally but ordinary turn cards stay concise.
     await h.emitClaim(sessionId, agent.followups[0]!.id, 1)
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
     await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
     const card = h.channel.sent.find(item => item.input.card !== undefined)!
-    expect(JSON.stringify(card.input.card)).toContain('飞书上下文 1 条')
+    expect(JSON.stringify(card.input.card)).not.toContain('飞书上下文')
   })
 
   it('injects incrementally: the second message carries the watermark and injects nothing new', async () => {
@@ -1603,6 +1778,35 @@ describe('context backfill (docs/13)', () => {
     await waitFor(() => agent.followups.length === 1)
     const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<Record<string, unknown>> }
     expect(frame.messages.length).toBe(1)
+  })
+
+  it('uses a tighter private-chat window while preserving the larger thread window', async () => {
+    const privateProvider = new FakeContextProvider()
+    const privateHarness = await makeHarness({ contextMode: 'auto' }, { contextProvider: privateProvider })
+    await privateHarness.emitMessage('私聊问题')
+    await waitFor(() => privateProvider.calls.length === 1)
+    expect(privateProvider.calls[0]!.maxMessages).toBe(80)
+    expect(privateProvider.calls[0]!.maxChars).toBe(50_000)
+
+    const threadProvider = new FakeContextProvider()
+    const threadHarness = await makeHarness({ contextMode: 'auto' }, { contextProvider: threadProvider })
+    await threadHarness.emitMessage('话题问题', {
+      chatType: 'group', chatId: 'oc_grp', threadId: 'omt_limits', rootId: 'om_root_limits',
+    })
+    await waitFor(() => threadProvider.calls.length === 1)
+    expect(threadProvider.calls[0]!.maxMessages).toBe(150)
+    expect(threadProvider.calls[0]!.maxChars).toBe(100_000)
+  })
+
+  it('lets the global context ceiling tighten the private-chat window', async () => {
+    const provider = new FakeContextProvider()
+    const h = await makeHarness({
+      contextMode: 'auto', contextMaxMessages: 40, contextMaxChars: 20_000,
+    }, { contextProvider: provider })
+    await h.emitMessage('私聊问题')
+    await waitFor(() => provider.calls.length === 1)
+    expect(provider.calls[0]!.maxMessages).toBe(40)
+    expect(provider.calls[0]!.maxChars).toBe(20_000)
   })
 
   it('sdk backend drives the channel seam (p2p chat container)', async () => {
@@ -1686,11 +1890,43 @@ describe('context backfill (docs/13)', () => {
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     const agent = h.agents.live.get(sessionId)!
-    await waitFor(() => agent.followups.length === 1)
+    await waitFor(() => agent.followups.length === 1, 'CLI bootstrap followup', 3_000)
     const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ x: string }> }
     expect(frame.messages[0]!.x).toContain('cli 引导后内容')
     // SDK seam was never touched; the CLI was the serving backend.
     expect(h.channel.listed.length).toBe(0)
     expect(h.ctx.logger.info).not.toHaveBeenCalledWith(expect.stringContaining('降级 SDK'))
+  })
+
+  it('shares an in-flight CLI bootstrap across concurrent private and thread origins', async () => {
+    const root = await tempWorkspace()
+    const script = join(root, 'fake-cli.mjs')
+    const log = join(root, 'calls.jsonl')
+    await writeFile(script, BOOTSTRAP_CLI_FIXTURE, { mode: 0o755 })
+    const h = await makeHarness({ contextMode: 'auto', contextBackend: 'auto', feishuCliPath: script })
+
+    // Different origins bypass each other's FIFO queue and therefore reach
+    // ensureCliReady concurrently on a cold bridge.
+    await h.emitMessage('私聊并发问题')
+    await h.emitMessage('话题并发问题', { chatType: 'group', chatId: 'oc_grp', threadId: 'omt_race' })
+
+    await waitFor(() => h.agents.created.length === 2, 'two concurrent context sessions', 4_000)
+    await waitFor(
+      () => [...h.agents.live.values()].every(agent => agent.followups.length === 1),
+      'both CLI-backed followups',
+      4_000,
+    )
+    for (const agent of h.agents.live.values()) {
+      const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ x: string }> }
+      expect(frame.messages[0]!.x).toContain('cli 引导后内容')
+    }
+    expect(h.channel.listed).toHaveLength(0) // neither origin fell back to SDK
+    expect(h.ctx.logger.info).not.toHaveBeenCalledWith(expect.stringContaining('降级 SDK'))
+
+    const calls = (await readFile(log, 'utf8')).trim().split('\n')
+      .map(line => JSON.parse(line) as { argv: string[]; configured: boolean })
+    expect(calls.filter(call => call.argv[0] === 'config' && call.argv[1] === 'init')).toHaveLength(1)
+    expect(calls.filter(call => call.argv[0] === 'im')).toHaveLength(2)
+    expect(calls.filter(call => call.argv[0] === 'im').every(call => call.configured)).toBe(true)
   })
 })

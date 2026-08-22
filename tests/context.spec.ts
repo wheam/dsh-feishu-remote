@@ -384,7 +384,7 @@ describe('LarkCliProvider', () => {
 
   function provider(script: string, options: { logger?: { warn: ReturnType<typeof vi.fn> }; env?: NodeJS.ProcessEnv } = {}) {
     return new LarkCliProvider(
-      { appId: 'cli_test', appSecret: 'secret', feishuCliPath: '' },
+      { feishuCliPath: '' },
       { executable: { argv: [process.execPath, script], via: 'configured' }, ...(options.logger === undefined ? {} : { logger: options.logger as never }), ...(options.env === undefined ? {} : { env: options.env }) },
     )
   }
@@ -416,13 +416,21 @@ describe('LarkCliProvider', () => {
       expect(call.argv[call.argv.indexOf('--page-limit') + 1]).toBe('4') // ceil((150+1)/50)
       expect(call.argv).toContain('--no-reactions')
       expect(call.argv[call.argv.indexOf('--as') + 1]).toBe('bot')
-      expect(call.appId).toBe('cli_test')
-      expect(call.hasSecret).toBe(true)
+      expect(call.appId).toBeUndefined()
+      expect(call.hasSecret).toBe(false)
       // Minimal env: unrelated process.env never reaches the child (docs/15 F-09).
       expect(call.leaked).toBeNull()
     } finally {
       delete process.env.SECRET_LEAK
     }
+  })
+
+  it('keeps the recommended 80-message private window to two base CLI pages', async () => {
+    const { script, log } = await fixtureRoot()
+    await provider(script, { env: { TEST_FIXTURE_LOG: log, TEST_FIXTURE_MODE: 'ok' } })
+      .fetchHistory(spec({ maxMessages: 80, maxChars: 50_000 }))
+    const call = JSON.parse(await (await import('node:fs/promises')).readFile(log, 'utf8')) as { argv: string[] }
+    expect(call.argv[call.argv.indexOf('--page-limit') + 1]).toBe('2') // ceil((80+1)/50)
   })
 
   it('builds the thread command with --thread and om_/omt_ input', async () => {
@@ -481,7 +489,7 @@ describe('LarkCliProvider', () => {
 
   it('throws when no executable is resolvable', async () => {
     const bare = new LarkCliProvider(
-      { appId: 'cli_test', appSecret: 'secret', feishuCliPath: '' },
+      { feishuCliPath: '' },
       { executable: undefined, env: { PATH: '/nonexistent' }, moduleUrl: 'file:///nonexistent/x.js' },
     )
     await expect(bare.fetchHistory(spec())).rejects.toThrow('lark-cli 未安装')
@@ -616,7 +624,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 const statePath = join(dirname(fileURLToPath(import.meta.url)), 'state.json')
 const argv = process.argv.slice(2)
-const log = (payload) => { if (process.env.TEST_FIXTURE_LOG) appendFileSync(process.env.TEST_FIXTURE_LOG, JSON.stringify(payload) + '\\n') }
+const log = (payload) => { if (process.env.TEST_FIXTURE_LOG) appendFileSync(process.env.TEST_FIXTURE_LOG, JSON.stringify({
+  ...payload,
+  hasExternalCredentials: typeof process.env.LARKSUITE_CLI_APP_ID === 'string' || typeof process.env.LARKSUITE_CLI_APP_SECRET === 'string',
+}) + '\\n') }
 if (argv[0] === 'config' && argv[1] === 'show') {
   log({ argv })
   if (existsSync(statePath)) {
@@ -671,9 +682,9 @@ describe('ensureCliConfigured', () => {
     }
   }
 
-  async function readLogLines(log: string): Promise<Array<{ argv: string[]; secret?: string }>> {
+  async function readLogLines(log: string): Promise<Array<{ argv: string[]; secret?: string; hasExternalCredentials: boolean }>> {
     const text = await (await import('node:fs/promises')).readFile(log, 'utf8')
-    return text.trim().split('\n').map(line => JSON.parse(line) as { argv: string[]; secret?: string })
+    return text.trim().split('\n').map(line => JSON.parse(line) as { argv: string[]; secret?: string; hasExternalCredentials: boolean })
   }
 
   it('bootstraps a fresh workspace: probes not_configured, inits with stdin secret, re-probes ready', async () => {
@@ -686,18 +697,26 @@ describe('ensureCliConfigured', () => {
     expect(call.argv).toContain('--app-secret-stdin')
     expect(call.secret).toBe('sekret') // secret rides stdin, never argv
     expect(call.argv.includes('sekret')).toBe(false)
+    expect((await readLogLines(log)).every(entry => !entry.hasExternalCredentials)).toBe(true)
   })
 
-  it('returns true without init when our app is already configured', async () => {
+  it('re-initializes a matching app so an appSecret rotation reaches the local CLI profile', async () => {
     const root = await tempRoot()
     const script = join(root, 'fake-cli.mjs')
     const log = join(root, 'call.json')
     await writeFile(script, BOOTSTRAP_FIXTURE)
     await writeFile(join(root, 'state.json'), 'cli_me')
-    expect(await ensureCliConfigured(executable(script), options(log))).toBe(true)
-    const calls = await readLogLines(log) // only the probe ran
-    expect(calls.length).toBe(1)
-    expect(calls[0]!.argv).toEqual(['config', 'show'])
+    expect(await ensureCliConfigured(executable(script), options(log, { appSecret: 'rotated-secret' }))).toBe(true)
+    const calls = await readLogLines(log)
+    expect(calls.map(call => call.argv.slice(0, 2))).toEqual([
+      ['config', 'show'],
+      ['config', 'init'],
+      ['config', 'show'],
+    ])
+    const init = calls[1]!
+    expect(init.secret).toBe('rotated-secret')
+    expect(init.argv).not.toContain('rotated-secret')
+    expect(calls.every(call => !call.hasExternalCredentials)).toBe(true)
   })
 
   it('re-initializes when another app is configured', async () => {
