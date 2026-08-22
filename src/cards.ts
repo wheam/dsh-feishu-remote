@@ -5,6 +5,7 @@
  */
 import type { BridgeAction, TurnProgress } from './types.js'
 import { bounded, redactSecrets } from './security.js'
+import type { WorkspaceParentSuggestion } from './workspace.js'
 
 type CardTemplate = 'blue' | 'green' | 'orange' | 'red' | 'grey' | 'purple'
 type ButtonType = 'default' | 'primary' | 'danger'
@@ -39,6 +40,14 @@ function buttonRow(buttons: ButtonSpec[], rowId: string): object {
       elements: [button(spec, index, rowId)],
     })),
   }
+}
+
+function buttonRows(buttons: ButtonSpec[], rowId: string, perRow = 2): object[] {
+  const rows: object[] = []
+  for (let index = 0; index < buttons.length; index += perRow) {
+    rows.push(buttonRow(buttons.slice(index, index + perRow), `${rowId}_${index / perRow}`))
+  }
+  return rows
 }
 
 function markdown(content: string, elementId?: string): object {
@@ -82,6 +91,13 @@ function card(
 function compactPath(path: string): string {
   const home = process.env.HOME
   return home !== undefined && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+}
+
+function workspaceTitle(title: string, showPaths: boolean): string {
+  const clean = bounded(redactSecrets(title), 80)
+  if (showPaths) return clean
+  const leaf = clean.replace(/\\/gu, '/').split('/').filter(Boolean).at(-1)
+  return leaf === undefined || leaf.trim() === '' ? 'Workspace' : leaf
 }
 
 function latestStepText(progress: TurnProgress): string {
@@ -178,6 +194,8 @@ export interface StatusCardInput {
   sessionId: string
   status: 'idle' | 'running'
   cwd: string
+  workspaceTitle: string
+  showPath: boolean
   provider: string
   model: string
   connected: boolean
@@ -194,6 +212,9 @@ export interface StatusCardInput {
 
 export function buildStatusCard(input: StatusCardInput): object {
   const status = input.status === 'running' ? '运行中' : '空闲'
+  const workspaceLine = input.showPath
+    ? `**目录**：${compactPath(input.cwd)}`
+    : `**Workspace**：${bounded(redactSecrets(input.workspaceTitle), 80)}`
   const contextLine = input.context === undefined || input.context.mode === 'off'
     ? '**飞书上下文**：已关闭'
     : input.context.circuitOpen
@@ -206,13 +227,100 @@ export function buildStatusCard(input: StatusCardInput): object {
       `**状态**：${status}`,
       `**飞书长连接**：${input.connected ? '已连接' : '未连接'}`,
       `**会话**：\`${input.sessionId}\``,
-      `**目录**：${compactPath(input.cwd)}`,
+      workspaceLine,
       `**模型**：${input.provider} / ${input.model}`,
       `**待审批**：${input.pendingApprovals}`,
       `**送达失败（审计）**：${input.failedDeliveries}`,
       contextLine,
     ].join('\n')),
   ], `${status} · ${input.model}`)
+}
+
+export interface WorkspaceCardItem {
+  id: string
+  title: string
+  path: string
+}
+
+export interface WorkspaceChooserCardInput {
+  token: string
+  workspaces: WorkspaceCardItem[]
+  currentWorkspaceId?: string
+  showPaths: boolean
+  hasPendingPrompt: boolean
+}
+
+/** First-use and `/workspace` picker. Paths are deliberately hidden in groups. */
+export function buildWorkspaceChooserCard(input: WorkspaceChooserCardInput): object {
+  const rows = input.workspaces.slice(0, 10).flatMap((workspace, index) => {
+    const current = workspace.id === input.currentWorkspaceId
+    const detail = input.showPaths ? `\n${compactPath(workspace.path)}` : ''
+    return [
+      markdown(`**${workspaceTitle(workspace.title, input.showPaths)}**${current ? ' · 当前' : ''}${detail}`),
+      buttonRow([{
+        label: current ? '继续使用' : '选择此 Workspace',
+        type: current ? 'default' : 'primary',
+        value: {
+          bridge: 'dsh-feishu-remote',
+          action: 'workspace-select',
+          token: input.token,
+          workspaceId: workspace.id,
+        },
+      }], `workspace_pick_${index}`),
+    ]
+  })
+  const intro = input.hasPendingPrompt
+    ? '这条消息尚未执行。先选择工作区，绑定完成后会自动继续。'
+    : '选择这个飞书会话要使用的 DSH Workspace。'
+  const empty = input.workspaces.length === 0
+    ? [markdown('还没有已登记的 Workspace。你可以新建项目文件夹，或提供一个已有文件夹。')]
+    : []
+  return card('选择 Workspace', 'blue', [
+    markdown(intro),
+    ...empty,
+    ...rows,
+    ...buttonRows([
+      {
+        label: '新建 Workspace',
+        type: 'primary',
+        value: { bridge: 'dsh-feishu-remote', action: 'workspace-new', token: input.token },
+      },
+      {
+        label: '使用路径…',
+        value: { bridge: 'dsh-feishu-remote', action: 'workspace-path', token: input.token },
+      },
+    ], 'workspace_create'),
+    markdown('_也可以发送 `/workspace use ~/路径` 或 `/workspace create ~/路径`。_'),
+  ], '选择或新建工作区')
+}
+
+export function buildWorkspaceCreateCard(
+  token: string,
+  parents: WorkspaceParentSuggestion[],
+  showPaths: boolean,
+): object {
+  const buttons: ButtonSpec[] = parents.map(parent => ({
+    label: `${parent.recommended ? '推荐 · ' : ''}${parent.title}`,
+    type: parent.recommended ? 'primary' : 'default',
+    value: {
+      bridge: 'dsh-feishu-remote',
+      action: 'workspace-parent',
+      token,
+      parentId: parent.id,
+    },
+  }))
+  const details = showPaths && parents.length > 0
+    ? parents.map(parent => `- ${parent.title}：${compactPath(parent.path)}`).join('\n')
+    : ''
+  return card('新建 Workspace', 'blue', [
+    markdown('先选择新项目文件夹放在哪里；下一步只需发送项目名称。'),
+    ...(details === '' ? [] : [markdown(details)]),
+    ...buttonRows(buttons, 'workspace_parent'),
+    buttonRow([{
+      label: '自定义完整路径…',
+      value: { bridge: 'dsh-feishu-remote', action: 'workspace-path', token },
+    }], 'workspace_custom_path'),
+  ], '选择新 Workspace 的位置')
 }
 
 export function parseBridgeAction(value: unknown): BridgeAction | undefined {
@@ -227,6 +335,17 @@ export function parseBridgeAction(value: unknown): BridgeAction | undefined {
       return typeof action.sessionId === 'string' ? action as BridgeAction : undefined
     case 'approval':
       return typeof action.token === 'string' && (action.decision === 'allow' || action.decision === 'reject')
+        ? action as BridgeAction
+        : undefined
+    case 'workspace-select':
+      return typeof action.token === 'string' && typeof action.workspaceId === 'string'
+        ? action as BridgeAction
+        : undefined
+    case 'workspace-new':
+    case 'workspace-path':
+      return typeof action.token === 'string' ? action as BridgeAction : undefined
+    case 'workspace-parent':
+      return typeof action.token === 'string' && typeof action.parentId === 'string'
         ? action as BridgeAction
         : undefined
     default:

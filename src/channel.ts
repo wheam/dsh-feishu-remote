@@ -50,7 +50,10 @@ export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike
       },
     },
     outbound: {
-      allowedFileDirs: [config.workspaceRoot],
+      // The bridge sends generated attachments as in-memory buffers. Retain a
+      // configured legacy root only for compatibility with direct SDK file
+      // sends; an empty list is safer than widening this to the whole home dir.
+      allowedFileDirs: config.workspaceRoot === '' ? [] : [config.workspaceRoot],
       ssrfGuard: true,
       retry: { maxAttempts: 1, baseDelayMs: 0 },
       textChunkLimit: 4000,

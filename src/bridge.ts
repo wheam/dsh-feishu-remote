@@ -17,6 +17,7 @@
  * - every outbound API call flows through the application-level scheduler (D7)
  */
 import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -29,10 +30,18 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
-import type {} from '@deepseek-ai/dsh-workspace'
+import { WorkspaceId, type Workspace } from '@deepseek-ai/dsh-workspace'
 import type { CardActionEvent, NormalizedMessage, ReactionEvent, SendOptions } from '@larksuiteoapi/node-sdk'
 import type { SessionGroupDescriptor, SessionGroupsService } from 'dsh-session-groups'
-import { buildApprovalCard, buildOversizeCard, buildStatusCard, buildTurnCard, parseBridgeAction } from './cards.js'
+import {
+  buildApprovalCard,
+  buildOversizeCard,
+  buildStatusCard,
+  buildTurnCard,
+  buildWorkspaceChooserCard,
+  buildWorkspaceCreateCard,
+  parseBridgeAction,
+} from './cards.js'
 import { DEFAULT_CHANNEL_FACTORY } from './channel.js'
 import {
   CircuitOpenError,
@@ -61,6 +70,13 @@ import { OutboundScheduler, classifyOutboundError, type OutboundTask, type TaskR
 import { bounded, boundedUtf8Buffer, canonicalPath, redactSecrets, saveOversizedText } from './security.js'
 import { BridgeStateStore } from './state.js'
 import { resolveFeishuSessionGroup } from './session-groups.js'
+import {
+  createWorkspacePath,
+  listWorkspaceParentSuggestions,
+  resolveExistingWorkspacePath,
+  workspacePathForName,
+  type WorkspaceParentSuggestion,
+} from './workspace.js'
 import type {
   BridgeAction,
   ChannelFactory,
@@ -76,6 +92,9 @@ const HELP_TEXT = `## DeepSeek Harness Feishu Remote
 - 直接发消息：排入当前飞书会话的下一回合
 - \`/steer <内容>\`：在运行中把内容送到最近一步
 - \`/status\`：查看连接、模型、目录和会话状态
+- \`/workspace\`：选择、新建或切换当前飞书会话的 DSH Workspace
+- \`/workspace use <路径或名称>\`：使用已有目录/已登记 Workspace
+- \`/workspace create <完整路径>\`：创建一个项目文件夹并绑定
 - \`/stop\`：停止当前回合（后续消息照常进入下一回合）
 - \`/approve\` / \`/reject\`：允许或拒绝当前一次工具审批（文字兜底，必需路径）
 - \`/new\`：登记新会话（下一条普通消息创建全新会话）
@@ -94,6 +113,12 @@ const WORKING_REACTION_EMOJI = 'Typing'
 /** Bound Feishu group-name lookups while still converging after a rename. */
 const SESSION_GROUP_METADATA_TTL_MS = 60_000
 
+/** Slash commands that must remain usable while a Workspace prompt is open. */
+const BRIDGE_COMMAND_NAMES = new Set([
+  'start', 'help', 'workspace', 'new', 'stop', 'approve', 'reject',
+  'status', 'steer', 'sessions', 'resume', 'view', 'commands',
+])
+
 type ActionableOrigin = Extract<Origin, { kind: 'p2p' | 'group' | 'thread' }>
 
 interface RouteContext {
@@ -107,6 +132,8 @@ interface RouteContext {
 interface BridgeSession {
   readonly key: string
   readonly prefix: string
+  /** Durable DSH Workspace identity selected for this Feishu origin. */
+  workspaceId: string
   /** Provider-owned virtual group carried across /new and /resume swaps. */
   group?: SessionGroupDescriptor
   route: RouteContext
@@ -159,6 +186,20 @@ interface PendingApproval {
   signal?: AbortSignal
   onAbort?: () => void
   resolve: (outcome: ApprovalOutcome) => void
+}
+
+interface PendingWorkspaceFlow {
+  token: string
+  origin: ActionableOrigin
+  expectedOpenId: string
+  chatId: string
+  requestMessage: NormalizedMessage
+  mode: 'choose' | 'await-path' | 'await-name'
+  /** The first ordinary user message waits here and is replayed after binding. */
+  initialMessage?: NormalizedMessage
+  parents?: WorkspaceParentSuggestion[]
+  selectedParent?: string
+  timer: ReturnType<typeof setTimeout>
 }
 
 function errorMessage(error: unknown): string {
@@ -219,6 +260,7 @@ export class FeishuRemoteBridge {
   private readonly creating = new Map<string, Promise<BridgeSession>>()
   private readonly agents = new Map<string, BridgeSession>()
   private readonly pendingApprovals = new Map<string, PendingApproval>()
+  private readonly pendingWorkspaces = new Map<string, PendingWorkspaceFlow>()
   private readonly originQueues = new Map<string, Promise<void>>()
   /** Feishu chat_mode is authoritative for ordinary-group vs topic routing. */
   private readonly groupChatModes = new Map<string, GroupChatMode>()
@@ -591,6 +633,8 @@ export class FeishuRemoteBridge {
       if (entry.progressTimer !== undefined) clearTimeout(entry.progressTimer)
     }
     for (const pending of [...this.pendingApprovals.values()]) this.settleApproval(pending, 'unavailable')
+    for (const pending of this.pendingWorkspaces.values()) clearTimeout(pending.timer)
+    this.pendingWorkspaces.clear()
     // Close the outbound gate FIRST: producers that enqueue now settle 'closed'
     // immediately instead of hanging on a dead channel (review #5 F2).
     this.scheduler.close()
@@ -817,19 +861,55 @@ export class FeishuRemoteBridge {
         }
       }
       const text = message.content.trim()
+      if (text === '') return
+      const pendingWorkspace = this.pendingWorkspaces.get(origin.key)
+      const workspaceControlCommand = /^\/workspace(?:\s|$)/iu.test(text)
+      const slashName = /^\/([^\s/]+)/u.exec(text)?.[1]?.toLowerCase()
+      const knownSlashCommand = slashName !== undefined
+        && (BRIDGE_COMMAND_NAMES.has(slashName) || this.config.commandAllowlist.includes(slashName))
+      const pathLikeReply = /^(?:工作区)?(?:用|使用)\s+/u.test(text) || text.startsWith('/') || text.startsWith('~')
+      if (pendingWorkspace !== undefined && pendingWorkspace.expectedOpenId !== message.senderId) {
+        await this.safeSend(message.chatId, {
+          markdown: '另一位成员正在为这个飞书会话选择 Workspace；请等对方完成后再发送任务。',
+        }, message)
+        return
+      }
+      if (pendingWorkspace !== undefined && !workspaceControlCommand && !knownSlashCommand
+        && (pendingWorkspace.mode !== 'choose' || pathLikeReply)) {
+        if (pendingWorkspace.mode === 'choose') pendingWorkspace.mode = 'await-path'
+        await this.completeWorkspaceTextInput(pendingWorkspace, message, text)
+        return
+      }
+      if (pendingWorkspace !== undefined && pendingWorkspace.mode === 'choose'
+        && !workspaceControlCommand && !knownSlashCommand) {
+        await this.safeSend(message.chatId, {
+          markdown: '正在等待 Workspace 选择；最先那条任务已经保留，绑定完成后会自动继续。',
+        }, message)
+        return
+      }
       if (text.startsWith('/')) {
         await this.handleCommand(message, text, origin)
         return
       }
-      if (text === '') return
+      const directWorkspacePath = /^工作区(?:用|使用)\s+((?:~\/|\/).+)$/u.exec(text)?.[1]
+      if (directWorkspacePath !== undefined) {
+        try {
+          await this.bindWorkspace(message, origin, await this.workspaceFromSelector(directWorkspacePath))
+        } catch (error) {
+          await this.safeSend(message.chatId, { markdown: `❌ ${bounded(errorMessage(error), 700)}` }, message)
+        }
+        return
+      }
+      const workspace = await this.resolveWorkspaceForOrigin(message, origin, true)
+      if (workspace === undefined) return
       // /new pending protocol: the marker must win over the live-session fast
       // path (Codex P1-2); rotateToFresh consumes the marker atomically.
       let entry: BridgeSession
       if (this.state.isPendingNew(origin.key) && this.sessions.has(origin.key)) {
         await this.refreshSessionGroup(this.sessions.get(origin.key)!, message, origin)
-        entry = await this.rotateToFresh(origin)
+        entry = await this.rotateToFresh(origin, workspace)
       } else {
-        entry = await this.ensureSession(message, origin)
+        entry = await this.ensureSession(message, origin, workspace)
       }
       // Private and ordinary-group task cards are fresh messages in the chat.
       // Threads require replyTo + replyInThread to stay in the topic.
@@ -1053,6 +1133,358 @@ export class FeishuRemoteBridge {
     }
   }
 
+  // ------------------------------------------------------------- workspaces
+
+  private workspaceRegistry(): Context['workspaceRegistry'] {
+    const registry = this.ctx.get('workspaceRegistry')
+    if (registry === undefined) throw new Error('DSH Workspace Registry 当前不可用。')
+    return registry
+  }
+
+  private async availableWorkspaces(): Promise<Workspace[]> {
+    const items = this.workspaceRegistry().list()
+    const statuses = await Promise.all(items.map(async workspace => ({
+      workspace,
+      status: await workspace.status().catch(() => 'missing-dir' as const),
+    })))
+    return statuses.filter(item => item.status === 'ok').map(item => item.workspace)
+  }
+
+  private workspaceLabel(workspace: Workspace, chatType: 'p2p' | 'group'): string {
+    const clean = bounded(redactSecrets(workspace.title), 80)
+    if (chatType === 'p2p') return clean
+    return basename(clean.replace(/\\/gu, '/')) || 'Workspace'
+  }
+
+  /**
+   * Resolve one origin's durable Workspace. Existing pre-feature Feishu
+   * Sessions migrate by their persisted cwd; a genuinely fresh origin never
+   * inherits the bridge process cwd or the legacy plugin checkout setting.
+   */
+  private async resolveWorkspaceForOrigin(
+    message: NormalizedMessage,
+    origin: ActionableOrigin,
+    preservePrompt: boolean,
+  ): Promise<Workspace | undefined> {
+    const registry = this.workspaceRegistry()
+    const active = this.sessions.get(origin.key)
+    if (active !== undefined) {
+      const workspace = registry.get(WorkspaceId(active.workspaceId))
+      if (workspace !== undefined) {
+        if (await workspace.status().catch(() => 'missing-dir' as const) === 'ok') return workspace
+        await this.safeSend(message.chatId, {
+          markdown: `⚠️ 已绑定的 Workspace **${this.workspaceLabel(workspace, message.chatType)}** 当前不可用；绑定已保留，请恢复该目录后重试，或发送 \`/workspace\` 主动切换。`,
+        }, message)
+        return undefined
+      }
+    }
+
+    const boundId = this.state.workspaceFor(origin.key)
+    if (boundId !== undefined) {
+      const workspace = registry.get(WorkspaceId(boundId))
+      if (workspace !== undefined) {
+        if (await workspace.status().catch(() => 'missing-dir' as const) === 'ok') return workspace
+        await this.safeSend(message.chatId, {
+          markdown: `⚠️ 已绑定的 Workspace **${this.workspaceLabel(workspace, message.chatType)}** 当前不可用；绑定已保留，请恢复该目录后重试，或发送 \`/workspace\` 主动切换。`,
+        }, message)
+        return undefined
+      }
+      // The Registry record itself was deleted. Only this case is allowed to
+      // clear the binding and fall through to legacy migration / first use.
+      await this.state.setWorkspace(origin.key, undefined)
+    }
+
+    // Upgrade path: old bridge releases encoded the Workspace only in the
+    // Session header. Resolve that cwd through the registry and persist it.
+    const prefix = sessionPrefix(origin.key)
+    const legacy = activeSessionsForPrefix(await this.freshHeaders(), prefix, this.archivedIds())
+      .filter(header => header.cwd !== undefined)
+      .sort((left, right) => right.createdAt - left.createdAt)
+    for (const header of legacy) {
+      const workspace = await registry.resolveByPath(header.cwd!).catch(() => undefined)
+      if (workspace === undefined) continue
+      await this.state.setWorkspace(origin.key, String(workspace.id))
+      return workspace
+    }
+
+    const available = await this.availableWorkspaces()
+    if (available.length === 1) {
+      await this.state.setWorkspace(origin.key, String(available[0]!.id))
+      return available[0]
+    }
+    await this.showWorkspaceChooser(message, origin, preservePrompt ? message : undefined, available)
+    return undefined
+  }
+
+  private installWorkspaceFlow(input: Omit<PendingWorkspaceFlow, 'token' | 'timer'>): PendingWorkspaceFlow {
+    const previous = this.pendingWorkspaces.get(input.origin.key)
+    if (previous !== undefined) clearTimeout(previous.timer)
+    const token = randomUUID()
+    const flow: PendingWorkspaceFlow = {
+      ...input,
+      token,
+      timer: setTimeout(() => {
+        if (this.pendingWorkspaces.get(input.origin.key)?.token === token) {
+          this.pendingWorkspaces.delete(input.origin.key)
+          if (input.initialMessage !== undefined) {
+            void this.safeSend(input.chatId, {
+              markdown: '⌛ Workspace 选择已超时；刚才保留的任务没有执行，请重新发送。',
+            }, input.requestMessage).catch(error => {
+              this.ctx.logger?.warn?.('dsh-feishu-remote: Workspace 超时提示发送失败：%s', errorMessage(error))
+            })
+          }
+        }
+      }, this.config.interactiveTimeoutMs),
+    }
+    this.pendingWorkspaces.set(input.origin.key, flow)
+    return flow
+  }
+
+  private settleWorkspaceFlow(flow: PendingWorkspaceFlow): void {
+    if (this.pendingWorkspaces.get(flow.origin.key)?.token !== flow.token) return
+    clearTimeout(flow.timer)
+    this.pendingWorkspaces.delete(flow.origin.key)
+  }
+
+  private async showWorkspaceChooser(
+    message: NormalizedMessage,
+    origin: ActionableOrigin,
+    initialMessage?: NormalizedMessage,
+    workspaces?: Workspace[],
+  ): Promise<void> {
+    const previous = this.pendingWorkspaces.get(origin.key)
+    const heldMessage = initialMessage ?? previous?.initialMessage
+    const flow = this.installWorkspaceFlow({
+      origin,
+      expectedOpenId: message.senderId,
+      chatId: message.chatId,
+      requestMessage: message,
+      mode: 'choose',
+      ...(heldMessage === undefined ? {} : { initialMessage: heldMessage }),
+    })
+    const available = workspaces ?? await this.availableWorkspaces()
+    await this.safeSend(message.chatId, {
+      card: buildWorkspaceChooserCard({
+        token: flow.token,
+        workspaces: available.map(workspace => ({
+          id: String(workspace.id),
+          title: workspace.title,
+          path: workspace.path,
+        })),
+        currentWorkspaceId: this.state.workspaceFor(origin.key),
+        showPaths: message.chatType === 'p2p',
+        hasPendingPrompt: flow.initialMessage !== undefined,
+      }),
+    }, message)
+  }
+
+  private async handleWorkspaceCommand(
+    message: NormalizedMessage,
+    origin: ActionableOrigin,
+    argument: string,
+  ): Promise<void> {
+    const [rawSubcommand = '', ...parts] = argument.trim().split(/\s+/u)
+    const subcommand = rawSubcommand.toLowerCase()
+    const value = parts.join(' ').trim()
+    try {
+      if (subcommand === '' || subcommand === 'list') {
+        await this.showWorkspaceChooser(message, origin)
+        return
+      }
+      if (subcommand === 'new') {
+        const previous = this.pendingWorkspaces.get(origin.key)
+        const parents = await listWorkspaceParentSuggestions()
+        const flow = this.installWorkspaceFlow({
+          origin,
+          expectedOpenId: message.senderId,
+          chatId: message.chatId,
+          requestMessage: message,
+          mode: 'choose',
+          parents,
+          ...(previous?.initialMessage === undefined ? {} : { initialMessage: previous.initialMessage }),
+        })
+        await this.safeSend(message.chatId, {
+          card: buildWorkspaceCreateCard(flow.token, parents, message.chatType === 'p2p'),
+        }, message)
+        return
+      }
+      if (subcommand === 'current') {
+        const workspace = await this.resolveBoundWorkspace(origin)
+        await this.safeSend(message.chatId, {
+          markdown: workspace === undefined
+            ? '当前飞书会话尚未绑定 Workspace。发送 `/workspace` 进行选择。'
+            : `当前 Workspace：**${this.workspaceLabel(workspace, message.chatType)}**${message.chatType === 'p2p' ? `\n\n\`${workspace.path}\`` : ''}`,
+        }, message)
+        return
+      }
+      if (subcommand === 'use' || subcommand === 'add') {
+        if (value === '') throw new Error(`用法：/workspace ${subcommand} <Workspace 名称、ID 或路径>`)
+        const workspace = await this.workspaceFromSelector(value)
+        await this.bindWorkspace(message, origin, workspace)
+        return
+      }
+      if (subcommand === 'create') {
+        if (value === '') throw new Error('用法：/workspace create <新项目的完整路径>')
+        const path = await createWorkspacePath(value)
+        const registry = this.workspaceRegistry()
+        const workspace = await registry.resolveByPath(path) ?? await registry.create(path)
+        await this.bindWorkspace(message, origin, workspace)
+        return
+      }
+      throw new Error('用法：`/workspace`、`/workspace use <路径或名称>`、`/workspace create <完整路径>`。')
+    } catch (error) {
+      await this.safeSend(message.chatId, { markdown: `❌ ${bounded(errorMessage(error), 700)}` }, message)
+    }
+  }
+
+  private async resolveBoundWorkspace(origin: ActionableOrigin): Promise<Workspace | undefined> {
+    const active = this.sessions.get(origin.key)
+    const id = active?.workspaceId ?? this.state.workspaceFor(origin.key)
+    if (id === undefined) return undefined
+    return this.workspaceRegistry().get(WorkspaceId(id))
+  }
+
+  private async workspaceFromSelector(selector: string): Promise<Workspace> {
+    const registry = this.workspaceRegistry()
+    const direct = registry.get(WorkspaceId(selector))
+    if (direct !== undefined) return direct
+    const matches = registry.list().filter(workspace => workspace.title.toLocaleLowerCase() === selector.toLocaleLowerCase())
+    if (matches.length === 1) return matches[0]!
+    if (matches.length > 1) throw new Error('有多个同名 Workspace，请改用 Workspace ID 或完整路径。')
+    const path = await resolveExistingWorkspacePath(selector)
+    return await registry.resolveByPath(path) ?? await registry.create(path)
+  }
+
+  private async completeWorkspaceTextInput(
+    flow: PendingWorkspaceFlow,
+    message: NormalizedMessage,
+    text: string,
+  ): Promise<void> {
+    if (flow.expectedOpenId !== message.senderId || flow.chatId !== message.chatId) return
+    try {
+      let path: string
+      if (flow.mode === 'await-name') {
+        if (flow.selectedParent === undefined) throw new Error('新建位置已经失效，请重新执行 /workspace。')
+        path = await createWorkspacePath(workspacePathForName(flow.selectedParent, text))
+      } else {
+        const raw = text.replace(/^(?:工作区)?(?:用|使用)\s+/u, '').trim()
+        try {
+          path = await resolveExistingWorkspacePath(raw)
+        } catch (existingError) {
+          try {
+            path = await createWorkspacePath(raw)
+          } catch {
+            throw existingError
+          }
+        }
+      }
+      const registry = this.workspaceRegistry()
+      const workspace = await registry.resolveByPath(path) ?? await registry.create(path)
+      await this.bindWorkspace(message, flow.origin, workspace, flow)
+    } catch (error) {
+      await this.safeSend(message.chatId, {
+        markdown: `❌ ${bounded(errorMessage(error), 700)}\n\n请重新发送，或用 \`/workspace\` 取消并重新选择。`,
+      }, message)
+    }
+  }
+
+  private async bindWorkspace(
+    message: NormalizedMessage,
+    origin: ActionableOrigin,
+    workspace: Workspace,
+    suppliedFlow?: PendingWorkspaceFlow,
+  ): Promise<void> {
+    if (await workspace.status() !== 'ok') throw new Error('该 Workspace 的目录当前不存在。')
+    const flow = suppliedFlow ?? this.pendingWorkspaces.get(origin.key)
+    const active = this.sessions.get(origin.key)
+    if (active !== undefined && active.workspaceId !== String(workspace.id)) {
+      await this.switchActiveWorkspace(active, workspace)
+    } else {
+      await this.state.setWorkspace(origin.key, String(workspace.id))
+    }
+    if (flow !== undefined) this.settleWorkspaceFlow(flow)
+    const pathLine = message.chatType === 'p2p' ? `\n\n\`${workspace.path}\`` : ''
+    const confirmation = this.safeSend(message.chatId, {
+      markdown: `✅ 已绑定 Workspace：**${this.workspaceLabel(workspace, message.chatType)}**${pathLine}`,
+    }, message)
+    if (flow?.initialMessage !== undefined) {
+      // The binding is already committed. A transient confirmation-delivery
+      // failure must not discard the held task the user was promised to replay.
+      await confirmation.catch(error => {
+        this.ctx.logger?.warn?.('dsh-feishu-remote: Workspace 绑定确认发送失败（继续执行已保留任务）：%s', errorMessage(error))
+      })
+      await this.handleMessage(flow.initialMessage, flow.origin)
+    } else {
+      await confirmation
+    }
+  }
+
+  /** Workspace changes create a fresh Session; history never crosses cwd. */
+  private async switchActiveWorkspace(entry: BridgeSession, workspace: Workspace): Promise<void> {
+    this.assertSwitchable(entry, '切换 Workspace')
+    const presets = this.ctx.get('agentPresets')
+    const presetId = presets === undefined
+      ? undefined
+      : (await presets.resolve(this.config.agentPreset ?? undefined)).id
+    const lease = this.acquireReservation(true)
+    const previousWorkspaceId = entry.workspaceId
+    const previousPendingNew = this.state.isPendingNew(entry.key)
+    let freshHandle: AgentHandle | undefined
+    let committed = false
+    let bindingChanged = false
+    try {
+      freshHandle = await this.createFreshAgent(entry.prefix, workspace, this.modelSelection(), presetId, entry.group)
+      this.provisionalHandles.add(freshHandle)
+      await this.state.setWorkspace(entry.key, String(workspace.id), { pendingNew: false })
+      bindingChanged = true
+      let oldHandle: AgentHandle | undefined
+      const probe = freshHandle
+      await this.awaitQuiescent(entry, '切换 Workspace', () => {
+        this.settleSessionApprovals(entry.sessionId)
+        this.agents.delete(entry.sessionId)
+        if (entry.progressTimer !== undefined) clearTimeout(entry.progressTimer)
+        oldHandle = entry.handle
+        entry.handle = probe
+        entry.workspaceId = String(workspace.id)
+        entry.sessionId = String(probe.agent.id)
+        entry.progress = undefined
+        entry.pendingPrompt = '飞书任务'
+        entry.lastSeq = -1
+        entry.activeTurnOrigin = undefined
+        entry.activeReply = undefined
+        entry.pendingClaims.clear()
+        entry.turnOrigin.clear()
+        entry.turnReply.clear()
+        entry.turnContext.clear()
+        entry.contextWatermark = undefined
+        entry.pendingFinalize = undefined
+        this.agents.set(entry.sessionId, entry)
+        this.provisionalHandles.delete(probe)
+        committed = true
+        lease.release()
+      })
+      try {
+        oldHandle!.agent.cancel({ kind: 'user' }, { keepInbox: true })
+        this.retireHandle(oldHandle!)
+      } catch (error) {
+        this.ctx.logger?.warn?.('dsh-feishu-remote: Workspace 切换后清理旧会话失败（新绑定保持有效）：%s', errorMessage(error))
+      }
+    } catch (error) {
+      lease.release()
+      if (!committed && freshHandle !== undefined && this.provisionalHandles.delete(freshHandle)) {
+        await this.unassignSessionGroup(freshHandle.agent.id)
+        await workspace.detachSession(freshHandle.agent.id).catch(() => undefined)
+        await freshHandle.dispose().catch(() => undefined)
+      }
+      if (bindingChanged && !committed) {
+        await this.state.setWorkspace(entry.key, previousWorkspaceId, { pendingNew: previousPendingNew }).catch(rollbackError => {
+          this.ctx.logger?.error?.('dsh-feishu-remote: Workspace 绑定回滚失败：%s', errorMessage(rollbackError))
+        })
+      }
+      throw error
+    }
+  }
+
   // ---------------------------------------------------------------- commands
 
   private async handleCommand(message: NormalizedMessage, line: string, origin: ActionableOrigin): Promise<void> {
@@ -1063,6 +1495,10 @@ export class FeishuRemoteBridge {
       case '/help':
         await this.safeSend(message.chatId, { markdown: HELP_TEXT }, message)
         return
+      case '/workspace': {
+        await this.handleWorkspaceCommand(message, origin, argument)
+        return
+      }
       case '/new': {
         await this.state.setPendingNew(origin.key, true)
         await this.safeSend(message.chatId, {
@@ -1106,7 +1542,9 @@ export class FeishuRemoteBridge {
         return
       }
       case '/status': {
-        const entry = await this.ensureSession(message, origin)
+        const workspace = await this.resolveWorkspaceForOrigin(message, origin, false)
+        if (workspace === undefined) return
+        const entry = await this.ensureSession(message, origin, workspace)
         await this.sendStatus(entry, message)
         return
       }
@@ -1115,7 +1553,9 @@ export class FeishuRemoteBridge {
           await this.safeSend(message.chatId, { markdown: '用法：`/steer <补充或纠正内容>`' }, message)
           return
         }
-        const entry = await this.ensureSession(message, origin)
+        const workspace = await this.resolveWorkspaceForOrigin(message, origin, false)
+        if (workspace === undefined) return
+        const entry = await this.ensureSession(message, origin, workspace)
         // Steer joins the CURRENT step; only when the agent is idle does steer
         // open a new turn — that turn is ours, so register it for the ledger.
         const steerMessage = createUserMessage({
@@ -1134,9 +1574,13 @@ export class FeishuRemoteBridge {
         return
       }
       case '/sessions': {
+        const workspace = await this.resolveWorkspaceForOrigin(message, origin, false)
+        if (workspace === undefined) return
         const prefix = sessionPrefix(origin.key)
         const headers = await this.freshHeaders()
-        const rows = activeSessionsForPrefix(headers, prefix, this.archivedIds()).slice(0, 8)
+        const rows = activeSessionsForPrefix(headers, prefix, this.archivedIds())
+          .filter(header => header.cwd !== undefined && this.cwdMatches(header.cwd, workspace.path))
+          .slice(0, 8)
         const body = rows.length === 0
           ? '还没有持久化的历史会话。'
           : rows.map(header => `- \`${header.id}\` · ${new Date(header.createdAt).toLocaleString('zh-CN')}`).join('\n')
@@ -1169,7 +1613,9 @@ export class FeishuRemoteBridge {
           }, message)
           return
         }
-        const entry = await this.ensureSession(message, origin)
+        const workspace = await this.resolveWorkspaceForOrigin(message, origin, false)
+        if (workspace === undefined) return
+        const entry = await this.ensureSession(message, origin, workspace)
         const commands = this.ctx.get('commands')
         const execution = commands === undefined
           ? undefined
@@ -1196,7 +1642,9 @@ export class FeishuRemoteBridge {
       return
     }
     try {
-      const entry = await this.ensureSession(message, origin)
+      const workspace = await this.resolveWorkspaceForOrigin(message, origin, false)
+      if (workspace === undefined) return
+      const entry = await this.ensureSession(message, origin, workspace)
       const headers = await this.freshHeaders()
       const archived = this.archivedIds()
       const target = headers.find(header => String(header.id) === argument)
@@ -1212,7 +1660,7 @@ export class FeishuRemoteBridge {
         await this.safeSend(message.chatId, { markdown: `当前已在会话 \`${entry.sessionId}\` 中。` }, message)
         return
       }
-      if (target.cwd !== undefined && !this.cwdMatches(target.cwd)) {
+      if (target.cwd === undefined || !this.cwdMatches(target.cwd, workspace.path)) {
         await this.safeSend(message.chatId, {
           markdown: `目标会话的工作目录与当前配置不一致，已拒绝恢复（cwd 漂移防护）。`,
         }, message)
@@ -1224,7 +1672,7 @@ export class FeishuRemoteBridge {
         }, message)
         return
       }
-      await this.swapToSession(entry, target)
+      await this.swapToSession(entry, target, workspace)
       await this.safeSend(message.chatId, { markdown: `✅ 已恢复会话：\`${entry.sessionId}\`` }, message)
     } catch (error) {
       this.ctx.logger?.error?.('dsh-feishu-remote: /resume 失败（保留旧会话）：%s', errorMessage(error))
@@ -1233,7 +1681,7 @@ export class FeishuRemoteBridge {
   }
 
   /** Atomic /resume: probe-create the target handle FIRST, then swap, then dispose the old one. */
-  private async swapToSession(entry: BridgeSession, target: SessionHeader): Promise<void> {
+  private async swapToSession(entry: BridgeSession, target: SessionHeader, workspace: Workspace): Promise<void> {
     this.assertSwitchable(entry, '恢复会话')
     const presets = this.ctx.get('agentPresets')
     const persistence = this.ctx.get('sessionPersistence')
@@ -1253,6 +1701,7 @@ export class FeishuRemoteBridge {
         setup: agentCtx => this.setupAgent(agentCtx, loggedPreset),
       })
       this.provisionalHandles.add(freshHandle)
+      await workspace.attachSession(target.id)
       if (this.stopped) throw new Error('插件已停止，恢复被取消')
       // Revalidate RIGHT BEFORE the synchronous swap: work may have arrived
       // during the probe awaits (review #3 finding 1), and any in-flight
@@ -1299,7 +1748,7 @@ export class FeishuRemoteBridge {
    * persist marker consumption, THEN commit the in-memory swap, and dispose
    * the old one as post-commit cleanup (Codex P1-2 + review #2 finding 3).
    */
-  private async rotateToFresh(origin: ActionableOrigin): Promise<BridgeSession> {
+  private async rotateToFresh(origin: ActionableOrigin, workspace: Workspace): Promise<BridgeSession> {
     const key = origin.key
     const entry = this.sessions.get(key)
     if (entry === undefined) throw new Error('rotateToFresh requires a live session')
@@ -1313,7 +1762,7 @@ export class FeishuRemoteBridge {
     let freshHandle: AgentHandle | undefined
     let committed = false
     try {
-      freshHandle = await this.createFreshAgent(entry.prefix, this.modelSelection(), presetId, entry.group)
+      freshHandle = await this.createFreshAgent(entry.prefix, workspace, this.modelSelection(), presetId, entry.group)
       this.provisionalHandles.add(freshHandle)
       if (this.stopped) throw new Error('插件已停止，创建新会话被取消')
       // Persist the marker consumption while the OLD mapping is still intact:
@@ -1328,6 +1777,7 @@ export class FeishuRemoteBridge {
         if (entry.progressTimer !== undefined) clearTimeout(entry.progressTimer)
         oldHandle = entry.handle
         entry.handle = probe
+        entry.workspaceId = String(workspace.id)
         entry.sessionId = String(probe.agent.id)
         entry.progress = undefined
         entry.pendingPrompt = '飞书任务'
@@ -1352,6 +1802,7 @@ export class FeishuRemoteBridge {
       lease.release()
       if (!committed && freshHandle !== undefined && this.provisionalHandles.delete(freshHandle)) {
         await this.unassignSessionGroup(freshHandle.agent.id)
+        await workspace.detachSession(freshHandle.agent.id).catch(() => undefined)
         await freshHandle.dispose().catch(() => undefined)
       }
       // Guard/stop messages already read well — pass them through unwrapped.
@@ -1364,16 +1815,23 @@ export class FeishuRemoteBridge {
 
   // ---------------------------------------------------------------- sessions
 
-  private async ensureSession(message: NormalizedMessage, origin: ActionableOrigin): Promise<BridgeSession> {
+  private async ensureSession(
+    message: NormalizedMessage,
+    origin: ActionableOrigin,
+    workspace: Workspace,
+  ): Promise<BridgeSession> {
     const key = origin.key
     const existing = this.sessions.get(key)
     if (existing !== undefined) {
+      if (existing.workspaceId !== String(workspace.id)) {
+        throw new Error('当前飞书会话的活动 Session 与 Workspace 绑定不一致，请重新执行 /workspace。')
+      }
       await this.refreshSessionGroup(existing, message, origin)
       return existing
     }
     const pending = this.creating.get(key)
     if (pending !== undefined) return pending
-    const creating = this.createSession(message, origin)
+    const creating = this.createSession(message, origin, workspace)
     this.creating.set(key, creating)
     try {
       return await creating
@@ -1382,7 +1840,11 @@ export class FeishuRemoteBridge {
     }
   }
 
-  private async createSession(message: NormalizedMessage, origin: ActionableOrigin): Promise<BridgeSession> {
+  private async createSession(
+    message: NormalizedMessage,
+    origin: ActionableOrigin,
+    workspace: Workspace,
+  ): Promise<BridgeSession> {
     const key = origin.key
     const prefix = sessionPrefix(key)
     const headers = await this.freshHeaders()
@@ -1413,11 +1875,12 @@ export class FeishuRemoteBridge {
     let committed = false
     try {
       if (!wantFresh) {
-        const target = latestSession(activeSessionsForPrefix(headers, prefix, archived), prefix)
+        const target = latestSession(
+          activeSessionsForPrefix(headers, prefix, archived)
+            .filter(header => header.cwd !== undefined && this.cwdMatches(header.cwd, workspace.path)),
+          prefix,
+        )
         if (target !== undefined) {
-          if (target.cwd !== undefined && !this.cwdMatches(target.cwd)) {
-            throw new Error(`既有会话的工作目录与配置不一致（cwd 漂移防护）：${target.cwd}`)
-          }
           let loggedPreset: string | undefined
           if (presets !== undefined) {
             const persistence = this.ctx.get('sessionPersistence')
@@ -1426,6 +1889,7 @@ export class FeishuRemoteBridge {
               loggedPreset = resolveSessionPreset({ header: inspection.meta, events: inspection.events })
             }
           }
+          await workspace.attachSession(target.id)
           await this.assignSessionGroup(target.id, group)
           handle = await this.ctx.agents.resume({
             resumeSessionId: target.id,
@@ -1434,14 +1898,14 @@ export class FeishuRemoteBridge {
           })
           this.provisionalHandles.add(handle)
         } else {
-          handle = await this.createFreshAgent(prefix, selection, presetId, group)
+          handle = await this.createFreshAgent(prefix, workspace, selection, presetId, group)
           createdFresh = true
           this.provisionalHandles.add(handle)
         }
       } else {
         // /new without a live session: probe-create FIRST, then consume the
         // marker, and dispose the probe if the marker write fails (review #2 F3).
-        handle = await this.createFreshAgent(prefix, selection, presetId, group)
+        handle = await this.createFreshAgent(prefix, workspace, selection, presetId, group)
         createdFresh = true
         // Register ownership IMMEDIATELY: a never-settling marker write must
         // not strand the probe outside teardown's reach (review #9 finding 1).
@@ -1455,6 +1919,7 @@ export class FeishuRemoteBridge {
       const entry: BridgeSession = {
         key,
         prefix,
+        workspaceId: String(workspace.id),
         ...(group === undefined ? {} : { group }),
         route,
         handle,
@@ -1480,7 +1945,10 @@ export class FeishuRemoteBridge {
     } catch (error) {
       lease.release()
       if (!committed && handle !== undefined && this.provisionalHandles.delete(handle)) {
-        if (createdFresh) await this.unassignSessionGroup(handle.agent.id)
+        if (createdFresh) {
+          await this.unassignSessionGroup(handle.agent.id)
+          await workspace.detachSession(handle.agent.id).catch(() => undefined)
+        }
         await handle.dispose().catch(() => undefined)
       }
       throw error
@@ -1488,13 +1956,14 @@ export class FeishuRemoteBridge {
   }
 
   /** cwd drift guard: compare canonical paths when both exist (Codex P1-8). */
-  private cwdMatches(targetCwd: string): boolean {
-    if (targetCwd === this.config.cwd) return true
-    return canonicalPath(targetCwd) === canonicalPath(this.config.cwd)
+  private cwdMatches(targetCwd: string, workspacePath: string): boolean {
+    if (targetCwd === workspacePath) return true
+    return canonicalPath(targetCwd) === canonicalPath(workspacePath)
   }
 
   private async createFreshAgent(
     prefix: string,
+    workspace: Workspace,
     selection: AgentOptions,
     presetId?: string,
     group?: SessionGroupDescriptor,
@@ -1502,15 +1971,22 @@ export class FeishuRemoteBridge {
     const sessionId = await this.nextSessionId(prefix)
     const assigned = await this.assignSessionGroup(sessionId, group)
     try {
-      return await this.ctx.agents.create({
+      const handle = await this.ctx.agents.create({
         sessionId,
         meta: {
-          cwd: this.config.cwd,
+          cwd: workspace.path,
           ...(presetId === undefined ? {} : { agentPreset: presetId }),
         },
         agentOptions: selection,
         setup: agentCtx => this.setupAgent(agentCtx, presetId),
       })
+      try {
+        await workspace.attachSession(sessionId)
+      } catch (error) {
+        await handle.dispose().catch(() => undefined)
+        throw error
+      }
+      return handle
     } catch (error) {
       if (assigned) await this.unassignSessionGroup(sessionId)
       throw error
@@ -1672,7 +2148,12 @@ export class FeishuRemoteBridge {
 
   private async nextSessionId(prefix: string): Promise<SessionId> {
     const headers = await this.freshHeaders()
-    const known = new Set(headers.map(header => String(header.id)))
+    const known = new Set([
+      ...headers.map(header => String(header.id)),
+      ...this.agents.keys(),
+      ...[...this.sessions.values()].map(entry => entry.sessionId),
+      ...[...this.provisionalHandles].map(handle => String(handle.agent.id)),
+    ])
     let now = Date.now()
     let id = freshSessionId(prefix, now)
     while (known.has(String(id))) id = freshSessionId(prefix, ++now)
@@ -1855,8 +2336,13 @@ export class FeishuRemoteBridge {
   /** Oversized replies: full text → workspace file (Mac side) + file to Feishu (phone side). */
   private async archiveOversizedText(entry: BridgeSession, text: string): Promise<void> {
     try {
-      const path = await saveOversizedText(this.config.workspaceRoot, entry.sessionId, text)
-      const notice = `全文已保存到工作区文件：\`${path}\`（会话 \`${entry.sessionId}\`）`
+      const workspaceRoot = entry.handle.agent.session.header.cwd
+      if (workspaceRoot === undefined) throw new Error('当前 Session 没有 Workspace cwd')
+      const path = await saveOversizedText(workspaceRoot, entry.sessionId, text)
+      const location = entry.route.chatType === 'p2p'
+        ? path
+        : `.dsh-feishu-remote/${basename(path)}`
+      const notice = `全文已保存到工作区文件：\`${location}\`（会话 \`${entry.sessionId}\`）`
       const payload = boundedUtf8Buffer(text, this.config.maxOutboundFileBytes)
       const result = await this.enqueueSend(entry, {
         file: { source: payload, fileName: `deepseek-harness-${entry.sessionId}.md` },
@@ -2075,10 +2561,16 @@ export class FeishuRemoteBridge {
 
   private async sendStatus(entry: BridgeSession, message?: NormalizedMessage): Promise<void> {
     const selection = this.modelSelection()
+    const workspace = this.workspaceRegistry().get(WorkspaceId(entry.workspaceId))
+    const workspaceTitle = workspace === undefined
+      ? '已绑定 Workspace'
+      : this.workspaceLabel(workspace, message?.chatType ?? entry.route.chatType)
     const card = buildStatusCard({
       sessionId: entry.sessionId,
       status: entry.handle.agent.status,
-      cwd: entry.handle.agent.session.header.cwd ?? this.config.cwd,
+      cwd: entry.handle.agent.session.header.cwd ?? '<未绑定>',
+      workspaceTitle,
+      showPath: (message?.chatType ?? entry.route.chatType) === 'p2p',
       provider: selection.provider ?? '',
       model: selection.model ?? '',
       connected: this.connected && !this.terminalFailure,
@@ -2163,6 +2655,23 @@ export class FeishuRemoteBridge {
   private async onCardAction(event: CardActionEvent): Promise<void> {
     const action = parseBridgeAction(event.action.value)
     if (action === undefined) return
+    if (action.action === 'workspace-select'
+      || action.action === 'workspace-new'
+      || action.action === 'workspace-path'
+      || action.action === 'workspace-parent') {
+      const flow = [...this.pendingWorkspaces.values()].find(item => item.token === action.token)
+      if (flow === undefined) {
+        this.ctx.logger?.warn?.('dsh-feishu-remote: Workspace 卡片 token 无效或已过期')
+        return
+      }
+      if (event.operator.openId !== flow.expectedOpenId || event.chatId !== flow.chatId
+        || !this.isGloballyAllowed(event.operator.openId)) {
+        this.ctx.logger?.warn?.('dsh-feishu-remote: 拒绝越权 Workspace 卡片操作：operator=%s chat=%s', event.operator.openId, event.chatId)
+        return
+      }
+      this.enqueueOrigin(flow.origin.key, () => this.handleWorkspaceCardAction(flow, action))
+      return
+    }
     if (action.action === 'approval') {
       const pending = this.pendingApprovals.get(action.token)
       if (pending === undefined) {
@@ -2188,7 +2697,58 @@ export class FeishuRemoteBridge {
     this.enqueueOrigin(entry.key, () => this.handleCardCommand(entry, action))
   }
 
-  private async handleCardCommand(entry: BridgeSession, action: Exclude<BridgeAction, { action: 'approval' }>): Promise<void> {
+  private async handleWorkspaceCardAction(
+    flow: PendingWorkspaceFlow,
+    action: Extract<BridgeAction, { action: 'workspace-select' | 'workspace-new' | 'workspace-path' | 'workspace-parent' }>,
+  ): Promise<void> {
+    if (this.pendingWorkspaces.get(flow.origin.key)?.token !== flow.token) return
+    try {
+      if (action.action === 'workspace-select') {
+        const workspace = this.workspaceRegistry().get(WorkspaceId(action.workspaceId))
+        if (workspace === undefined) throw new Error('该 Workspace 已不存在，请重新选择。')
+        await this.bindWorkspace(flow.requestMessage, flow.origin, workspace, flow)
+        return
+      }
+      if (action.action === 'workspace-new') {
+        const parents = await listWorkspaceParentSuggestions()
+        flow.parents = parents
+        await this.safeSend(flow.chatId, {
+          card: buildWorkspaceCreateCard(flow.token, parents, flow.requestMessage.chatType === 'p2p'),
+        }, flow.requestMessage)
+        return
+      }
+      if (action.action === 'workspace-path') {
+        flow.mode = 'await-path'
+        await this.safeSend(flow.chatId, {
+          markdown: [
+            '请在下一条消息中发送 Mac 上的完整文件夹路径。',
+            '',
+            '- 已存在的文件夹会直接登记为 Workspace。',
+            '- 文件夹不存在但父目录存在时，会创建它。',
+            '- 支持 `/Users/...` 和 `~/...`。',
+          ].join('\n'),
+        }, flow.requestMessage)
+        return
+      }
+      const parents = flow.parents ?? await listWorkspaceParentSuggestions()
+      const parent = parents.find(item => item.id === action.parentId)
+      if (parent === undefined) throw new Error('这个建议目录当前不可用，请重新选择。')
+      flow.parents = parents
+      flow.selectedParent = parent.path
+      flow.mode = 'await-name'
+      const location = flow.requestMessage.chatType === 'p2p' ? `（${parent.path}）` : ''
+      await this.safeSend(flow.chatId, {
+        markdown: `将在 **${parent.title}**${location} 下新建项目。请在下一条消息中发送项目名称。`,
+      }, flow.requestMessage)
+    } catch (error) {
+      await this.safeSend(flow.chatId, { markdown: `❌ ${bounded(errorMessage(error), 700)}` }, flow.requestMessage)
+    }
+  }
+
+  private async handleCardCommand(
+    entry: BridgeSession,
+    action: Extract<BridgeAction, { action: 'stop' | 'new' | 'status' | 'view' }>,
+  ): Promise<void> {
     if (action.action === 'stop') {
       entry.handle.agent.cancel({ kind: 'user' }, { keepInbox: true })
       await this.safeSend(entry.route.chatId, { markdown: '⏹️ 已发送停止请求（只取消当前回合）。' }, undefined, this.replyFor(entry))

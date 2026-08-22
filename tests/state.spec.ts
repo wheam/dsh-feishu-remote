@@ -18,6 +18,22 @@ async function stateStore(): Promise<{ root: string; path: string; store: Bridge
 }
 
 describe('BridgeStateStore (lightweight metadata)', () => {
+  it('persists and clears Workspace bindings without consuming /new unless requested atomically', async () => {
+    const { path, store } = await stateStore()
+    await store.setPendingNew('p2p:oc_1', true)
+    await store.setWorkspace('p2p:oc_1', 'workspace-1')
+    expect(store.workspaceFor('p2p:oc_1')).toBe('workspace-1')
+    expect(store.isPendingNew('p2p:oc_1')).toBe(true)
+    await store.setWorkspace('p2p:oc_1', 'workspace-1', { pendingNew: false })
+    expect(store.isPendingNew('p2p:oc_1')).toBe(false)
+
+    const reloaded = new BridgeStateStore(path)
+    await reloaded.refresh()
+    expect(reloaded.workspaceFor('p2p:oc_1')).toBe('workspace-1')
+    await reloaded.setWorkspace('p2p:oc_1', undefined)
+    expect(reloaded.workspaceFor('p2p:oc_1')).toBeUndefined()
+  })
+
   it('persists the /new pending marker atomically', async () => {
     const { path, store } = await stateStore()
     await store.setPendingNew('p2p:oc_1', true)

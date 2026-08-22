@@ -1,7 +1,7 @@
 /**
- * Owner-only atomic metadata state. Keeps ONLY lightweight metadata
- * (`/new` pending markers, activated Feishu topics, card view preferences,
- * callback verification):
+ * Owner-only atomic metadata state. Keeps the user's Workspace selection and
+ * lightweight metadata (`/new` pending markers, activated Feishu topics,
+ * card view preferences, callback verification):
  * session identity lives in session persistence (single source of truth).
  * Corrupt or mis-permissioned files are isolated to `.corrupt-<ts>` with a
  * warning and rebuilt from an empty state — never silently overwritten.
@@ -32,6 +32,8 @@ const DELIVERY_DISPOSITIONS = new Set(['permanent'])
 
 export interface BridgeState {
   version: 1
+  /** Feishu originKey → durable DSH Workspace id. */
+  workspaceBindings: Record<string, string>
   /** originKey → true while a `/new` is pending (consumed by the next plain message). */
   pendingNew: Record<string, true>
   /** Thread originKey → first authorized @mention time; survives restarts. */
@@ -52,7 +54,15 @@ export interface CorruptStateEvent {
 }
 
 function emptyState(): BridgeState {
-  return { version: 1, pendingNew: {}, activatedThreads: {}, cardViewPrefs: {}, deliveryFailures: [], contextWatermarks: {} }
+  return {
+    version: 1,
+    workspaceBindings: {},
+    pendingNew: {},
+    activatedThreads: {},
+    cardViewPrefs: {},
+    deliveryFailures: [],
+    contextWatermarks: {},
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -89,6 +99,11 @@ function parseState(text: string): BridgeState {
     if (key.trim() === '' || value !== true) throw new Error('dsh-feishu-remote: invalid pendingNew entry in state file')
     pendingNew[key] = true
   }
+  const workspaceBindings = stringRecord(
+    raw.workspaceBindings ?? {},
+    'workspaceBindings',
+    value => value.length <= 200,
+  )
   const activatedThreads: Record<string, number> = {}
   if (raw.activatedThreads !== undefined) {
     if (!isRecord(raw.activatedThreads)) throw new Error('dsh-feishu-remote: invalid activatedThreads in state file')
@@ -151,6 +166,7 @@ function parseState(text: string): BridgeState {
   }
   return {
     version: 1,
+    workspaceBindings,
     pendingNew,
     activatedThreads,
     cardViewPrefs,
@@ -245,6 +261,32 @@ export class BridgeStateStore {
 
   isPendingNew(key: string): boolean {
     return this.state.pendingNew[key] === true
+  }
+
+  workspaceFor(key: string): string | undefined {
+    return this.state.workspaceBindings[key]
+  }
+
+  /** Bind or unbind one Feishu origin; optionally set `/new` in the same atomic write. */
+  async setWorkspace(
+    key: string,
+    workspaceId: string | undefined,
+    options: { pendingNew?: boolean } = {},
+  ): Promise<void> {
+    await this.mutate(current => {
+      const workspaceBindings = { ...current.workspaceBindings }
+      const pendingNew = { ...current.pendingNew }
+      if (workspaceId === undefined) delete workspaceBindings[key]
+      else {
+        if (workspaceId.trim() === '' || workspaceId.length > 200) {
+          throw new Error('dsh-feishu-remote: invalid workspace id')
+        }
+        workspaceBindings[key] = workspaceId
+      }
+      if (options.pendingNew === true) pendingNew[key] = true
+      else if (options.pendingNew === false) delete pendingNew[key]
+      return { next: { ...current, workspaceBindings, pendingNew }, result: undefined }
+    })
   }
 
   /** Persist the first authorized @mention that activates one group topic. */

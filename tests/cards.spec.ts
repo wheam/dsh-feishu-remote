@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { buildApprovalCard, buildOversizeCard, buildStatusCard, buildTurnCard, parseBridgeAction } from '../src/cards.js'
+import {
+  buildApprovalCard,
+  buildOversizeCard,
+  buildStatusCard,
+  buildTurnCard,
+  buildWorkspaceChooserCard,
+  buildWorkspaceCreateCard,
+  parseBridgeAction,
+} from '../src/cards.js'
 import type { TurnProgress } from '../src/types.js'
 
 function progress(partial: Partial<TurnProgress> = {}): TurnProgress {
@@ -121,6 +129,8 @@ describe('card templates', () => {
       sessionId: 'feishu-abc-1',
       status: 'idle',
       cwd: '/tmp/work',
+      workspaceTitle: 'Work',
+      showPath: true,
       provider: 'deepseek',
       model: 'v4-pro',
       connected: true,
@@ -158,6 +168,8 @@ describe('card templates', () => {
       sessionId: 'feishu-abc-1',
       status: 'idle',
       cwd: '/tmp/work',
+      workspaceTitle: 'Work',
+      showPath: true,
       provider: 'deepseek',
       model: 'v4-pro',
       connected: false,
@@ -168,11 +180,69 @@ describe('card templates', () => {
     expect(JSON.stringify(card.body)).toContain('2')
   })
 
+  it('shows only the Workspace title when a group status card hides local paths', () => {
+    const card = buildStatusCard({
+      sessionId: 'feishu-abc-1',
+      status: 'idle',
+      cwd: '/Volumes/Secret/client-x',
+      workspaceTitle: 'Client X',
+      showPath: false,
+      provider: 'deepseek',
+      model: 'v4-pro',
+      connected: true,
+      pendingApprovals: 0,
+      failedDeliveries: 0,
+    }) as { body: { elements: object[] } }
+    const body = JSON.stringify(card.body)
+    expect(body).toContain('Client X')
+    expect(body).not.toContain('/Volumes/Secret')
+  })
+
+  it('builds a Workspace chooser that can hide local paths in groups', () => {
+    const group = buildWorkspaceChooserCard({
+      token: 'token-1',
+      workspaces: [{ id: 'ws-1', title: 'Curio', path: '/Users/me/Secret/Curio' }],
+      showPaths: false,
+      hasPendingPrompt: true,
+    })
+    const groupJson = JSON.stringify(group)
+    expect(groupJson).toContain('Curio')
+    expect(groupJson).toContain('workspace-select')
+    expect(groupJson).toContain('自动继续')
+    expect(groupJson).not.toContain('/Users/me/Secret')
+
+    const direct = JSON.stringify(buildWorkspaceChooserCard({
+      token: 'token-2',
+      workspaces: [{ id: 'ws-1', title: 'Curio', path: '/Users/me/Secret/Curio' }],
+      showPaths: true,
+      hasPendingPrompt: false,
+    }))
+    expect(direct).toContain('/Users/me/Secret/Curio')
+  })
+
+  it('builds the new-Workspace parent picker', () => {
+    const card = buildWorkspaceCreateCard('token-1', [{
+      id: 'documents',
+      title: '文稿 / Documents',
+      path: '/Users/me/Documents',
+      recommended: true,
+    }], false)
+    const json = JSON.stringify(card)
+    expect(json).toContain('workspace-parent')
+    expect(json).toContain('推荐')
+    expect(json).toContain('workspace-path')
+    expect(json).not.toContain('/Users/me/Documents')
+  })
+
   it('parses and validates bridge actions', () => {
     expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'stop', sessionId: 's1' }))
       .toMatchObject({ action: 'stop', sessionId: 's1' })
     expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'approval', token: 't', decision: 'allow' }))
       .toMatchObject({ action: 'approval', decision: 'allow' })
+    expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'workspace-select', token: 't', workspaceId: 'ws-1' }))
+      .toMatchObject({ action: 'workspace-select', workspaceId: 'ws-1' })
+    expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'workspace-parent', token: 't', parentId: 'documents' }))
+      .toMatchObject({ action: 'workspace-parent', parentId: 'documents' })
     expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'approval', token: 't', decision: 'maybe' })).toBeUndefined()
     expect(parseBridgeAction({ bridge: 'other-bridge', action: 'stop' })).toBeUndefined()
     expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'steer' })).toBeUndefined()

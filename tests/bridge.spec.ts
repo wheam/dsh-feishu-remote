@@ -5,7 +5,7 @@
  * API shapes were verified against the installed dsh 0.1.0-rc.6 sources
  * (see docs/05 and docs/08).
  */
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -181,6 +181,52 @@ class FakeSessionGroups {
   }
 }
 
+class FakeWorkspace {
+  readonly createdAt = new Date().toISOString()
+  readonly updatedAt = this.createdAt
+  readonly sessionIds: SessionId[] = []
+  missing = false
+
+  constructor(
+    readonly id: string,
+    readonly path: string,
+    public title: string,
+  ) {}
+
+  async setTitle(title: string): Promise<void> { this.title = title }
+  async attachSession(id: SessionId): Promise<void> {
+    if (!this.sessionIds.some(item => String(item) === String(id))) this.sessionIds.unshift(id)
+  }
+  async detachSession(id: SessionId): Promise<void> {
+    const index = this.sessionIds.findIndex(item => String(item) === String(id))
+    if (index >= 0) this.sessionIds.splice(index, 1)
+  }
+  async insertSessionBefore(): Promise<void> {}
+  async status(): Promise<'ok' | 'missing-dir'> { return this.missing ? 'missing-dir' : 'ok' }
+}
+
+class FakeWorkspaceRegistry {
+  readonly archivedSessionIds: SessionId[] = []
+  readonly items: FakeWorkspace[] = []
+
+  constructor(path: string) {
+    this.items.push(new FakeWorkspace('ws_default', path, 'default'))
+  }
+
+  list(): FakeWorkspace[] { return [...this.items] }
+  get(id: string): FakeWorkspace | undefined { return this.items.find(item => item.id === String(id)) }
+  async resolveByPath(path: string): Promise<FakeWorkspace | undefined> {
+    return this.items.find(item => item.path === path)
+  }
+  async create(path: string, title?: string): Promise<FakeWorkspace> {
+    const existing = await this.resolveByPath(path)
+    if (existing !== undefined) return existing
+    const workspace = new FakeWorkspace(`ws_${this.items.length + 1}`, path, title ?? path.split('/').at(-1) ?? path)
+    this.items.unshift(workspace)
+    return workspace
+  }
+}
+
 class FakeChannel implements LarkChannelLike {
   readonly handlers = new Map<string, Array<(payload: never) => void | Promise<void>>>()
   readonly sent: Array<{ to: string; input: Record<string, unknown>; options?: unknown; messageId: string }> = []
@@ -322,7 +368,7 @@ afterEach(async () => {
 })
 
 async function tempWorkspace(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-feishu-ws-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-feishu-ws-')))
   workspaces.push(root)
   return root
 }
@@ -380,6 +426,7 @@ interface Harness {
   persistence: FakePersistence
   channel: FakeChannel
   scheduler: OutboundScheduler
+  workspaceRegistry: FakeWorkspaceRegistry
   config: ReturnType<typeof resolveConfig>
   workspace: string
   statePath: string
@@ -423,7 +470,8 @@ async function makeHarness(
   ctx.services.set('agents', agents)
   const persistence = new FakePersistence()
   ctx.services.set('sessionPersistence', persistence)
-  ctx.services.set('workspaceRegistry', { archivedSessionIds: [] })
+  const workspaceRegistry = new FakeWorkspaceRegistry(workspace)
+  ctx.services.set('workspaceRegistry', workspaceRegistry)
   const { sessionGroups, ...runtimeBridgeOptions } = bridgeOptions
   if (sessionGroups !== undefined) ctx.services.set('sessionGroups', sessionGroups)
   const mountOrder: string[] = []
@@ -469,7 +517,7 @@ async function makeHarness(
   }
 
   return {
-    bridge, ctx, agents, persistence, channel, scheduler, config, workspace, statePath,
+    bridge, ctx, agents, persistence, channel, scheduler, workspaceRegistry, config, workspace, statePath,
     emitSessionEvent, emitClaim, emitMessage, emitCardAction,
   }
 }
@@ -522,6 +570,35 @@ function approvalTokenFromChannel(h: Harness): string | undefined {
         }
       }
     }
+  }
+  return undefined
+}
+
+function cardActionFromChannel(
+  h: Harness,
+  actionName: string,
+  predicate: (value: Record<string, unknown>) => boolean = () => true,
+): Record<string, unknown> | undefined {
+  const visit = (value: unknown): Record<string, unknown> | undefined => {
+    if (typeof value !== 'object' || value === null) return undefined
+    const record = value as Record<string, unknown>
+    if (record.action === actionName && predicate(record)) return record
+    for (const child of Object.values(record)) {
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          const found = visit(item)
+          if (found !== undefined) return found
+        }
+      } else {
+        const found = visit(child)
+        if (found !== undefined) return found
+      }
+    }
+    return undefined
+  }
+  for (const sent of h.channel.sent) {
+    const found = visit(sent.input.card)
+    if (found !== undefined) return found
   }
   return undefined
 }
@@ -1020,6 +1097,233 @@ describe('session-group metadata refresh', () => {
 })
 
 describe('session creation and mapping', () => {
+  it('pauses the first prompt when multiple Workspaces exist, then replays it after card selection', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+
+    await h.emitMessage('please inspect this project')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other') !== undefined)
+    expect(h.agents.created).toHaveLength(0)
+
+    const action = cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other')!
+    await h.emitCardAction(action, 'ou_intruder')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(h.agents.created).toHaveLength(0)
+    await h.emitCardAction(action)
+    await waitFor(() => h.agents.created.length === 1)
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: otherPath })
+    const agent = h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!
+    await waitFor(() => agent.followups.length === 1)
+    expect(JSON.stringify(agent.followups[0])).toContain('please inspect this project')
+    expect(JSON.parse(await readFile(h.statePath, 'utf8')).workspaceBindings).toEqual({ 'p2p:oc_p2p': 'ws_other' })
+  })
+
+  it('keeps the first held prompt while waiting and still allows control commands', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+
+    await h.emitMessage('first held task')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other') !== undefined)
+    await h.emitMessage('second message must not replace it')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('最先那条任务已经保留')))
+    await h.emitMessage('/help')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('DeepSeek Harness Feishu Remote')))
+
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other')!)
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!
+    await waitFor(() => agent.followups.length === 1)
+    expect(JSON.stringify(agent.followups[0])).toContain('first held task')
+    expect(JSON.stringify(agent.followups[0])).not.toContain('second message must not replace it')
+  })
+
+  it('tells other authorized group members that the initiating user owns the open Workspace flow', async () => {
+    const h = await makeHarness({ allowedOpenIds: ['ou_1', 'ou_2'] })
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    h.channel.chatModes.set('oc_grp', 'group')
+
+    await h.emitMessage('held group task', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => cardActionFromChannel(h, 'workspace-path') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-path')!, 'ou_1', 'oc_grp')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('完整文件夹路径')))
+    await h.emitMessage('second member task', {
+      chatId: 'oc_grp', chatType: 'group', senderId: 'ou_2', mentionedBot: true,
+    })
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('另一位成员正在')))
+    expect(h.agents.created).toHaveLength(0)
+  })
+
+  it('reports when a held first prompt expires without executing it', async () => {
+    const h = await makeHarness({ interactiveTimeoutMs: 30 })
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    await h.emitMessage('held until timeout')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-select') !== undefined)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('选择已超时')))
+    expect(h.agents.created).toHaveLength(0)
+  })
+
+  it('keeps local Workspace paths out of group-chat chooser cards', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    h.channel.chatModes.set('oc_grp', 'group')
+
+    await h.emitMessage('group task', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    const json = JSON.stringify(h.channel.sent.find(item => item.input.card !== undefined)!.input.card)
+    expect(json).toContain('Other Project')
+    expect(json).not.toContain(otherPath)
+    expect(json).not.toContain(h.workspace)
+    expect(h.agents.created).toHaveLength(0)
+  })
+
+  it('accepts a custom path from the chooser, creates it, and continues the held prompt', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    const target = join(h.workspace, 'Fresh Project')
+
+    await h.emitMessage('held task')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-path') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-path')!)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('完整文件夹路径')))
+    await h.emitMessage(target)
+    await waitFor(() => h.agents.created.length === 1)
+
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: target })
+    await expect(stat(target).then(info => info.isDirectory())).resolves.toBe(true)
+    expect(JSON.stringify(h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!.followups[0])).toContain('held task')
+  })
+
+  it('creates a named Workspace under a selected suggested parent and replays the held prompt', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    const target = join(h.workspace, 'Named Project')
+
+    await h.emitMessage('held named task')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-new') !== undefined)
+    const sentBeforeCreateCard = h.channel.sent.length
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-new')!)
+    await waitFor(() => h.channel.sent.length > sentBeforeCreateCard)
+    const flows = Reflect.get(h.bridge, 'pendingWorkspaces') as Map<string, {
+      token: string
+      parents?: Array<{ id: string; title: string; path: string; recommended: boolean }>
+    }>
+    const flow = flows.get('p2p:oc_p2p')!
+    flow.parents = [{ id: 'documents', title: '文稿 / Documents', path: h.workspace, recommended: true }]
+    await h.emitCardAction({
+      bridge: 'dsh-feishu-remote', action: 'workspace-parent', token: flow.token, parentId: 'documents',
+    })
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('发送项目名称')))
+    await h.emitMessage('Named Project')
+    await waitFor(() => h.agents.created.length === 1)
+
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: target })
+    await expect(stat(target).then(info => info.isDirectory())).resolves.toBe(true)
+    expect(JSON.stringify(h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!.followups[0])).toContain('held named task')
+  })
+
+  it('switches Workspace by creating a fresh Session and persists the new binding', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('first task')
+    await waitFor(() => h.agents.created.length === 1)
+    const old = h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!
+    const claimed = old.followups[0] as { id: unknown }
+    await h.emitClaim(old.id, claimed.id, 1)
+    old.status = 'idle'
+
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    await h.emitMessage(`/workspace use ${otherPath}`)
+    await waitFor(() => h.agents.created.length === 2)
+
+    expect(h.agents.created[1]!.options.meta).toMatchObject({ cwd: otherPath })
+    await waitFor(() => old.disposed)
+    expect(JSON.parse(await readFile(h.statePath, 'utf8')).workspaceBindings).toEqual({ 'p2p:oc_p2p': 'ws_other' })
+  })
+
+  it('rolls back a Workspace binding and disposes the probe when the pre-commit switch fails', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('first task')
+    await waitFor(() => h.agents.created.length === 1)
+    const oldId = String(h.agents.created[0]!.options.sessionId)
+    const old = h.agents.live.get(oldId)!
+    await h.emitClaim(oldId, (old.followups[0] as { id: unknown }).id, 1)
+    old.status = 'idle'
+
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    const internals = h.bridge as unknown as {
+      awaitQuiescent: (...args: unknown[]) => Promise<never>
+      sessions: Map<string, { sessionId: string }>
+    }
+    internals.awaitQuiescent = vi.fn(async () => { throw new Error('pre-commit failure') })
+    await h.emitMessage(`/workspace use ${otherPath}`)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('pre-commit failure')))
+
+    expect(h.agents.created).toHaveLength(2)
+    expect(h.agents.live.has(String(h.agents.created[1]!.options.sessionId))).toBe(false)
+    expect(old.disposed).toBe(false)
+    expect(internals.sessions.get('p2p:oc_p2p')?.sessionId).toBe(oldId)
+    expect(JSON.parse(await readFile(h.statePath, 'utf8')).workspaceBindings).toEqual({ 'p2p:oc_p2p': 'ws_default' })
+  })
+
+  it('keeps a temporarily unavailable bound Workspace instead of migrating or auto-binding elsewhere', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    const selected = new FakeWorkspace('ws_other', otherPath, 'Other Project')
+    h.workspaceRegistry.items.unshift(selected)
+    await h.emitMessage('held task')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-select', value => value.workspaceId === 'ws_other')!)
+    await waitFor(() => h.agents.created.length === 1)
+
+    selected.missing = true
+    const prefix = sessionPrefix('p2p:oc_p2p')
+    h.persistence.headers = [{
+      version: 0, id: SessionId(`${prefix}-old-default`), createdAt: 1, cwd: h.workspace,
+    }]
+    await h.emitMessage('must not run elsewhere')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('当前不可用')))
+
+    expect(h.agents.created).toHaveLength(1)
+    expect(h.agents.resumed).toHaveLength(0)
+    expect(JSON.parse(await readFile(h.statePath, 'utf8')).workspaceBindings).toEqual({ 'p2p:oc_p2p': 'ws_other' })
+  })
+
+  it('migrates an old same-origin Session by its persisted cwd even when multiple Workspaces exist', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    const prefix = sessionPrefix('p2p:oc_p2p')
+    h.persistence.headers = [{
+      version: 0,
+      id: SessionId(`${prefix}-legacy`),
+      createdAt: Date.now(),
+      cwd: h.workspace,
+    }]
+    h.persistence.remember(`${prefix}-legacy`)
+
+    await h.emitMessage('continue legacy')
+    await waitFor(() => h.agents.resumed.length === 1)
+    expect(String(h.agents.resumed[0]!.options.resumeSessionId)).toBe(`${prefix}-legacy`)
+    expect(cardActionFromChannel(h, 'workspace-select')).toBeUndefined()
+    expect(JSON.parse(await readFile(h.statePath, 'utf8')).workspaceBindings).toEqual({ 'p2p:oc_p2p': 'ws_default' })
+  })
+
+  it('does not treat an ordinary “用 /path 做事” task as a Workspace shortcut', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('用 /tmp/a.sh 分析代码')
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!
+    expect(JSON.stringify(agent.followups[0])).toContain('用 /tmp/a.sh 分析代码')
+  })
+
   it('creates a feishu-prefixed session with preset meta and cwd, and follows up as a user message', async () => {
     const h = await makeHarness()
     await h.emitMessage('hello world')
@@ -1157,14 +1461,14 @@ describe('session creation and mapping', () => {
     expect(String(h2.agents.resumed[0]!.options.resumeSessionId)).toBe(`${prefix}-a`)
   })
 
-  it('refuses to resume a session whose cwd drifted from the configuration', async () => {
+  it('does not resume a same-origin Session from a different Workspace', async () => {
     const h = await makeHarness()
     const prefix = sessionPrefix('p2p:oc_p2p')
     h.persistence.headers = [{ version: 0, id: SessionId(`${prefix}-a`), createdAt: 1, cwd: '/somewhere/else' }]
     h.persistence.remember(`${prefix}-a`)
     await h.emitMessage('hi')
-    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('cwd 漂移防护')))
-    expect(h.agents.created).toHaveLength(0)
+    await waitFor(() => h.agents.created.length === 1)
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: h.workspace })
     expect(h.agents.resumed).toHaveLength(0)
   })
 })
@@ -1186,6 +1490,23 @@ describe('/new pending protocol (no live session)', () => {
     await h.emitMessage('more')
     await waitFor(() => (h.agents.live.values().next().value as FakeAgent | undefined)?.followups.length === 2)
     expect(h.agents.created).toHaveLength(1)
+  })
+
+  it('preserves /new across a same-Workspace binding when there is no live Session', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+    await h.emitMessage('/new')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('下一条普通消息')))
+    await h.emitMessage(`/workspace use ${h.workspace}`)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('已绑定 Workspace')))
+    const prefix = sessionPrefix('p2p:oc_p2p')
+    h.persistence.headers = [{ version: 0, id: SessionId(`${prefix}-old`), createdAt: 1, cwd: h.workspace }]
+    h.persistence.remember(`${prefix}-old`)
+
+    await h.emitMessage('after explicit new')
+    await waitFor(() => h.agents.created.length === 1)
+    expect(h.agents.resumed).toHaveLength(0)
   })
 })
 
@@ -1211,6 +1532,7 @@ describe('/resume atomic switch', () => {
     await h.emitMessage(`/resume ${String(target.id)}`)
     await waitFor(() => h.agents.resumed.length === 1)
     expect(h.agents.live.get(String(target.id))).toBeDefined()
+    expect(h.workspaceRegistry.get('ws_default')!.sessionIds.map(String)).toContain(String(target.id))
     expect(oldAgent.disposed).toBe(true)
 
     // Failure path: resume probe fails → old session retained.
@@ -1232,6 +1554,24 @@ describe('/resume atomic switch', () => {
     await waitFor(() => h.agents.created.length === 1)
     await h.emitMessage('/resume other-prefix-1')
     await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('找不到属于当前飞书会话范围')))
+  })
+
+  it('rejects a same-prefix Session whose persisted header has no cwd', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('hello')
+    await waitFor(() => h.agents.created.length === 1)
+    const oldId = String(h.agents.created[0]!.options.sessionId)
+    const old = h.agents.live.get(oldId)!
+    await h.emitClaim(oldId, (old.followups[0] as { id: unknown }).id, 1)
+    old.status = 'idle'
+    const target = `${oldId}-no-cwd`
+    h.persistence.headers = [{ version: 0, id: SessionId(target), createdAt: 9 }]
+    h.persistence.remember(target)
+
+    await h.emitMessage(`/resume ${target}`)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('cwd 漂移防护')))
+    expect(h.agents.resumed).toHaveLength(0)
+    expect(old.disposed).toBe(false)
   })
 })
 
@@ -1725,6 +2065,33 @@ describe('commands', () => {
     await waitFor(() => h.agents.created.length === 1)
     await waitFor(() => h.channel.sent.some(item => (item.input as { card?: unknown }).card !== undefined))
   })
+
+  it('hides the local path in a group /status card', async () => {
+    const h = await makeHarness()
+    h.channel.chatModes.set('oc_grp', 'group')
+    await h.emitMessage('/status', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => h.agents.created.length === 1)
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    const card = h.channel.sent.find(item => item.input.card !== undefined)!.input.card
+    expect(JSON.stringify(card)).toContain('Workspace')
+    expect(JSON.stringify(card)).not.toContain(h.workspace)
+  })
+
+  it('lists and resumes Sessions only inside the bound Workspace', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('bind current Workspace')
+    await waitFor(() => h.agents.created.length === 1)
+    const prefix = sessionPrefix('p2p:oc_p2p')
+    h.persistence.headers = [
+      { version: 0, id: SessionId(`${prefix}-current`), createdAt: 2, cwd: h.workspace },
+      { version: 0, id: SessionId(`${prefix}-other`), createdAt: 3, cwd: '/different/workspace' },
+    ]
+    await h.emitMessage('/sessions')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('历史 Session')))
+    const listing = String(h.channel.sent.findLast(item => String(item.input.markdown).includes('历史 Session'))!.input.markdown)
+    expect(listing).toContain(`${prefix}-current`)
+    expect(listing).not.toContain(`${prefix}-other`)
+  })
 })
 
 describe('volume budget and oversized output', () => {
@@ -1745,6 +2112,25 @@ describe('volume budget and oversized output', () => {
     await waitFor(async () => (await readdir(archiveDir)).length > 0, 'archive file')
     const files = await readdir(archiveDir)
     expect(files.some(name => name.includes(sessionId))).toBe(true)
+  })
+
+  it('does not reveal an absolute archive path in a group notice', async () => {
+    const h = await makeHarness()
+    h.channel.chatModes.set('oc_grp', 'group')
+    await h.emitMessage('big group task', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = String(h.agents.created[0]!.options.sessionId)
+    const big = 'x'.repeat(h.config.cardBodyMaxChars + 100)
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1, step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: big }] },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('全文已保存')))
+    const notice = String(h.channel.sent.find(item => String(item.input.markdown).includes('全文已保存'))!.input.markdown)
+    expect(notice).toContain('.dsh-feishu-remote/')
+    expect(notice).not.toContain(h.workspace)
   })
 })
 

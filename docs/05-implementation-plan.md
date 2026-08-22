@@ -10,6 +10,8 @@
 > `streaming_config`，节流默认 600ms，终态显式关闭流式模式，见 §2.5）；
 > 2026-08-22：极简卡改为「最新进展 → 最终总结」，正文会缩短，因此普通任务卡停用
 > append-oriented `streaming_mode`，继续用约 600ms 的整卡 patch。
+> 2026-08-23：工作目录改为 DSH Workspace Registry 驱动；新增首次选择/新建、
+> `originKey → workspaceId` 持久绑定、旧会话 cwd 自动迁移和 `/workspace` 切换。
 > Round 12 修复后相关契约测试全绿；当前总数以 `pnpm run test` 输出为准。
 > 本文档是本仓库的"当前方案"单一事实源；
 > 若与 01-04 冲突，以本文为准。已通过三轮独立 review——第一轮 Codex
@@ -31,10 +33,10 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 | 文件 | 处置 | 说明 |
 | --- | --- | --- |
 | `src/security.ts` | **借**（几乎原样） | redactSecrets / bounded / isInside / 文件限幅 |
-| `src/state.ts` | **借 + 砍** | 保留原子写+0600+串行变更队列骨架；删 pairing/token 逻辑。注意：**不做** threadKey→sessionId 显式映射表（见 §2.6，事实源=确定性前缀+session persistence） |
+| `src/state.ts` | **借 + 砍** | 保留原子写+0600+串行变更队列骨架；删 pairing/token 逻辑。不保存 threadKey→sessionId；只保存用户明确选择的 originKey→workspaceId（见 §2.6），session 事实源仍是 persistence。 |
 | `src/cards.ts` | **借 + 改** | 卡片模板全套保留；删 project 字段显示，精简为单会话语境 |
-| `src/bridge.ts` | **借 + 砍** | 保留：消息路由、answerer、流式节流、会话生命周期、命令集。砍：projects 多项目、claim/bind/unbind、群绑定、`lark_deliver`（P2 文件能力再议）。**改**：userQuestions 不直接注册单例 provider，飞书会话 setup 内 restrict 屏蔽 ask-user 类工具（§2.4）、SDK 批处理关闭（§1.3）、命令透传改 allowlist（§2.7） |
-| `src/config.ts` | **改** | 单项目化：projects 降为固定 default；保留 credentialRef/env/ctx.credentials 三级凭据解析；白名单 fail-closed（§2.9）；**workspaceRoot/cwd 必填** |
+| `src/bridge.ts` | **借 + 砍** | 保留：消息路由、answerer、流式节流、会话生命周期、命令集。砍：上游 project ACL、claim/bind/unbind、群绑定、`lark_deliver`（P2 文件能力再议）。**改**：接入 DSH Workspace Registry；userQuestions 不直接注册单例 provider，飞书会话 setup 内 restrict 屏蔽 ask-user 类工具（§2.4）、SDK 批处理关闭（§1.3）、命令透传改 allowlist（§2.7） |
+| `src/config.ts` | **改** | Workspace 由 DSH Registry 选择；旧 `workspaceRoot/cwd` 仅成对保留为升级兼容项。保留 credentialRef/env/ctx.credentials 三级凭据解析；白名单 fail-closed（§2.9）。 |
 | `src/index.ts` | **改** | inject 核对 web profile 服务；去掉独立 profile 假设 |
 | `src/cli.ts` | **砍** | CLI 向导/配对全部删除，配置走 cordis.patch.yml + Web GUI 设置卡片 |
 | `src/identity.ts` | **借 + 砍** | session 前缀/`/sessions` 枚举保留；删 project 维度 |
@@ -173,14 +175,22 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    markdown 模式 = cardkit 实体 + `cardElement.content`，100ms/50 字符节流 +
    sequence/uuid 幂等 + 收尾 summary），token 级打字机更细腻，但会绕过本插件
    出站调度器（无限流退避/合并/终态优先），需评估后再引入。
-6. **私聊/普通群/话题↔session 映射（三方 review 修订 + 2026-08-22 普通群扩展）**：
-   **不建显式映射表**，持久化本身即事实源。群模式先通过官方 `getChatMode(chatId)` 读取
+6. **私聊/普通群/话题↔Workspace↔session 映射（三方 review 修订 + 2026-08-23 Workspace 扩展）**：
+   不建 originKey→sessionId 显式映射表，session persistence 仍是会话身份事实源；状态只保存
+   用户选择的 originKey→workspaceId，Workspace 本身以 DSH Workspace Registry 为事实源。
+   群模式先通过官方 `getChatMode(chatId)` 读取
    `chat_mode` 并按 bridge 生命周期缓存，避免把普通群的 reply/root 字段误判为话题。
    `originKey`：p2p → `p2p:<chatId>`；普通群 → `group:<chatId>:chat`；群话题 →
    `group:<chatId>:thread:<thread_id>`（thread_id 优先，缺失回退 root_id）；话题群中不属于任何
    thread 的消息仅在明确 @时提示"请在话题内 @我"。普通群的未 @消息静默，不创建/恢复
    session、不执行命令；白名单用户每次 @后才进入该群唯一 session。
-   SHA-256 前 24 位 hex 为 session 前缀。`sessionPersistence.list()` 按前缀找最新会话
+   首次未绑定来源：Registry 为空或有多个 Workspace 时发选择卡，只有一个时自动绑定；选择卡可
+   选 Registry 现有项、在常用 Mac 父目录下新建一个末级目录，或由用户提供绝对/`~/` 路径。
+   新建目录严格限于一个末级目录，拒绝文件系统根、用户 Home 和系统目录等过宽范围；群卡不显示
+   本机绝对路径。首次原消息在内存中等待，绑定成功后自动重放。旧部署若已存在同来源 Session，
+   则按 header.cwd 反查 Registry 并写入绑定。`/workspace` 可查询、选择、创建或切换；切换开启
+   全新 Session，失败时保留原 Workspace/Session；`/new` 仅新建当前 Workspace 内的 Session。
+   SHA-256 前 24 位 hex 为 session 前缀。`sessionPersistence.list()` 按前缀和当前 Workspace cwd 找最新会话
    （OpenClaw/cc-connect 等 30+ 仓库同款结论）。
    **fresh list()**：`/sessions`、自动恢复、`/resume` 每次都现查 list()（不搬参考项目的
    启动缓存），并过滤 `workspaceRegistry.archivedSessionIds`（GUI 归档的会话不得自动续上）。
@@ -189,14 +199,16 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    只有 `root_id` 的歧义场景回退为更安全的普通群“每轮必须 @”策略。
    **`/new` pending 协议**：状态文件写 originKey→pending-new 标记，下一条普通消息才创建
    （sessionPersistence lazy materialization：从未 append 的 session 不在 list()）；
-   重启丢标记=安全回落旧 session，避免"创建成功、映射写入前崩溃"的双事实源漂移。
-   **`/resume` 原子切换**：只接受同前缀 session；先验证并创建/恢复目标 handle，成功后再
+   标记跨重启保留，且只在 fresh Session 探测成功后原子消费；普通 Workspace 绑定不会误消费，
+   Workspace 切换已经创建 fresh Session 时则与新绑定在同一次状态写入中消费。
+   **`/resume` 原子切换**：只接受同前缀且 cwd 属于当前 Workspace 的 session；先验证并创建/恢复目标 handle，成功后再
    原子替换 route/map、最后 dispose 旧 handle，失败保留旧 session（参考实现的先拆后建
-   不具备回滚）；绑定仅进程内有效，重启回落前缀最新（文档明示）。预检借鉴 feishu-bridge
-   sentinel probe；cwd 恢复校验借鉴 zarazhangrui policyFingerprint（cwd+access+attachments
-   摘要，防运行期漂移）。状态文件仅存轻量元数据（pending-new 标记，以及为旧版本兼容保留的卡片视图值），
+   不具备回滚）。Workspace 绑定跨重启持久化；Session resume 绑定仍仅进程内有效，重启时在
+   当前 Workspace 中回落前缀最新。预检借鉴 feishu-bridge sentinel probe；cwd 恢复校验借鉴
+   zarazhangrui policyFingerprint（cwd+access+attachments 摘要，防运行期漂移）。状态文件仅存
+   Workspace 绑定与轻量元数据（pending-new 标记，以及为旧版本兼容保留的卡片视图值），
    损坏时隔离为 `.corrupt-<ts>`、告警、从空状态重建，禁止静默覆盖。
-7. **命令集**：`/new` `/status` `/stop`（`agent.cancel({kind:'user'}, { keepInbox: true })`
+7. **命令集**：`/workspace` `/new` `/status` `/stop`（`agent.cancel({kind:'user'}, { keepInbox: true })`
    ——默认会清空排队消息，必须 keepInbox；语义=只取消当前 turn，后续消息照常进入下一回合）
    `/sessions` `/resume <id>`（仅同前缀）`/approve` `/reject` `/steer` `/help`。
    **原生命令透传改 allowlist（Codex R8）**：未知命令默认拒绝，仅放行显式审计
@@ -266,8 +278,9 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 3. **群聊范围**：私聊 + 普通群 + 群聊话题；默认允许机器人加入的任意群，非空 `allowedChatIds`
    才限制到指定群；每个话题首次需 @，激活后同话题免 @并跨重启保留；普通群每轮必须 @，
    未 @消息仅作为下一轮有界上下文。
-4. **工作目录**：`workspaceRoot/cwd` 配置必填；创建时持久化、恢复时校验一致、
-   `/status` 展示。
+4. **工作目录（2026-08-23 更新）**：不把 bridge 进程 cwd 或插件仓库当默认目录；使用
+   DSH Workspace Registry。首次选择/新建，按飞书来源持久绑定；Registry 仅一项时自动绑定；
+   `/workspace` 可切换，`/status` 展示。旧 `workspaceRoot/cwd` 只作成对可选的升级兼容配置。
 5. **代码基形态**：新仓选择性移植（默认，非 fork；如无异议按此执行），CI/测试
    一并搬来做回归基线。
 6. **状态文件路径**：`~/.dsh/feishu-remote/<appId>.json`（避免与上游 lark-bridge

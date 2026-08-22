@@ -12,7 +12,7 @@ import type {
 
 export type LarkBrand = 'feishu' | 'lark' | 'larkoffice'
 
-/** Runtime configuration after environment fallbacks and path normalization (single project). */
+/** Runtime configuration after environment fallbacks and legacy-path normalization. */
 export interface ResolvedConfig {
   appId: string
   appSecret: string
@@ -25,7 +25,9 @@ export interface ResolvedConfig {
   requireMention: boolean
   provider?: string
   model?: string
+  /** Deprecated fixed-workspace pair; never selected for a new Feishu origin. */
   cwd: string
+  /** Retained only as the SDK's legacy outbound file-path allow root. */
   workspaceRoot: string
   inboundDir: string
   progressCards: boolean
@@ -96,6 +98,10 @@ export interface TurnProgress {
 export type BridgeAction =
   | { bridge: 'dsh-feishu-remote'; action: 'stop' | 'new' | 'status' | 'view'; sessionId: string }
   | { bridge: 'dsh-feishu-remote'; action: 'approval'; token: string; decision: 'allow' | 'reject' }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-select'; token: string; workspaceId: string }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-new'; token: string }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-path'; token: string }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-parent'; token: string; parentId: string }
 
 export type ChannelFactory = (config: ResolvedConfig) => LarkChannelLike
 

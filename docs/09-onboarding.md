@@ -49,11 +49,12 @@
     allowedOpenIds: ['ou_xxxx']   # 白名单外消息会在宿主日志回显 open_id 供自举
     allowedChatIds: []            # 空 = 任意已加入群可用；填写 oc_xxxx 可选地限制群范围
     requireMention: true          # 话题首次需 @；普通群始终每轮必须 @
-    cwd: '/Users/you/work'
-    workspaceRoot: '/Users/you/work'
 ```
 
 - 凭据：环境变量 `DSH_FEISHU_APP_SECRET`，或 `~/.dsh` 的 `.credentials.yaml`。
+- 不必配置固定 cwd。首次从一个飞书来源发任务时用 Workspace 卡片选择或新建目录；如果
+  DSH Registry 里只有一个 Workspace，机器人会自动绑定并继续。旧部署可暂时保留成对的
+  `cwd` / `workspaceRoot`，它们只作为兼容配置，不再决定新飞书来源的默认目录。
 - 重启 web 进程；私聊机器人发 `help` 验证回显；发一条需要审批的任务验证卡片按钮；
   按钮不可用时用 `/approve` `/reject` 文字兜底（SDK 会去重重复点击）。
 

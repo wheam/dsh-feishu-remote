@@ -21,7 +21,7 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 
 - **内嵌 web profile**：`apply()` 只做同步注册、**永不 reject**；飞书长连接放后台 effect，断网重连 / 通道终态失效（SDK 停止重连）→ 结算全部待审批为 `unavailable`、`/status` 标红、退避重建 channel。
 - **飞书长连接**：官方 `@larksuiteoapi/node-sdk` websocket transport，`safety.chatQueue` 关闭（修复同群两话题合并串线缺陷），SDK 版本锁死 `1.73.0`。
-- **私聊/普通群/话题 ↔ session**：官方 `chat_mode` 区分普通群与话题群；p2p 按聊天、普通群按 chatId、话题群按 threadId 建立确定性 originKey。session persistence 为唯一事实源；`/new` pending 标记协议、`/resume` 原子切换（先探测后交换）、cwd 漂移防护、GUI 归档过滤。
+- **飞书来源 ↔ Workspace ↔ session**：官方 `chat_mode` 区分普通群与话题群；p2p 按聊天、普通群按 chatId、话题群按 threadId 建立确定性 originKey。首次使用可从 DSH Workspace Registry 选择，或在 Documents/Desktop/Downloads/Developer/Projects 等常用父目录中新建；也可直接指定绝对路径。绑定跨重启持久化，旧会话按其已落盘 cwd 自动迁移。每个来源在选定 Workspace 内维持自己的 session，`/new` 不换 Workspace，`/workspace` 切换时开启全新 session。
 - **可选 Session 分组**：安装通用 `dsh-session-groups` 插件后，本 provider 通过 `ctx.sessionGroups.assign()` 发布分组；私聊显示为“与某人的私聊”，普通群和话题群均按群名称归组。该依赖为 optional，未安装或元数据查询失败都不影响飞书会话主链路。
 - **审批闭环**：answerer 以 `{ prepend: true }` 注册 + **回合归属账本**（飞书回合才认领、GUI 回合放行）；六条结算路径（按钮 / 文字 / abort / 超时 / 停机 / 通道终态失效）均有测试；终态显式 `updateCard`；卡片 pending 绑定操作者/会话/截止时间。
 - **即时反馈**：飞书回合认领时给触发消息加「敲键盘」reaction、`turn/end` 移除（装饰性、失败静默，同参考实现的 working reaction；`workingReaction: false` 可关，需 `im:message.reactions:write_only` 权限）。
@@ -29,9 +29,35 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 - **极简进度卡片**：运行中只显示「正在处理」与最新一段 assistant 进展，约 600ms 普通 patch 同一张无标题栏卡片；turn 结束后，同一张卡清掉过程，只保留最后一个非空、未请求工具的 assistant 总结。因为正文会由长变短，普通任务卡不启用飞书 append-oriented `streaming_mode`，避免打字机拼接残影。普通回合卡不再显示目录、模型、session、工具轨迹、token、上下文统计或操作按钮；私聊也不再带原消息引用横幅，群话题仍保持原位回复。完整过程继续保存在 DSH 会话历史/Web GUI；审批卡保留批准/拒绝按钮作为安全边界。完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；终态优先与失败兜底不变。
 - **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230001/230002/230025/230031/230010/230011/230110/230013/230027/232009/404/99991400）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
 - **安全、普通群触发与话题激活**：发送者白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围默认开放，非空 `allowedChatIds` 可选收窄。普通群的所有成员消息可进入历史窗口，但每一轮都必须由白名单用户明确 @机器人；未 @时不创建 Session、不执行命令、不调用 Agent。话题群中每个话题首次需 @激活，首次 @ 回填前文，之后同话题可免 @；其他话题保持静默。白名单外消息不能激活或驱动 Agent。
-- **命令集**：`/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/help` `/commands`；旧 `/view` 与旧卡片动作仅返回停用提示。Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
+- **命令集**：`/workspace` `/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/help` `/commands`；旧 `/view` 与旧卡片动作仅返回停用提示。Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
 - **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
 - **飞书上下文回填（docs/13 v1.3）**：触发普通消息时注入上下文——普通群/话题读取最近 150 条/100,000 字符，长期私聊另受更紧的 80 条/50,000 字符上限约束（均可配置）。普通群未 @消息不会单独触发读取或 Agent，但下次 @时会通过全群 chat history 进入增量窗口。官方 `lark-cli` 主路径（`@larksuite/cli@1.0.88` optional 依赖 + postinstall 自动装二进制，`pnpm-workspace.yaml allowBuilds` 放行；CLI 缺失自动降级已 bundle 的 SDK 直连，`contextBackend: auto|cli|sdk`）；增量水位窗口 + 因果 cutoff + JSON 帧防注入 + system prompt 不可信边界规则；全局并发 2 + 熔断；控制命令零拉取。群历史需 `im:message.group_msg` 权限（docs/09 §3）。
+
+## Workspace 工作区
+
+插件不会再把自己的安装目录当作新飞书会话的默认工作目录。每个飞书来源（私聊、普通群或
+话题）会单独绑定一个 DSH Workspace，绑定关系跨重启保留：
+
+1. 第一次发任务时，如果 DSH 里有多个 Workspace，机器人会先发送选择卡片，并暂存这条任务；
+2. 可以选择已有 Workspace，也可以从 Documents、Desktop、Downloads、Developer、Projects
+   等 Mac 常用目录开始新建，或直接发送 `~/Projects/my-project` 这样的自定义路径；
+3. 绑定完成后，第一条任务自动继续执行。若 Registry 里只有一个可用 Workspace，则直接绑定；
+4. 已有飞书会话升级后，会按照原 Session 已记录的工作目录迁移，不会突然切到其他项目。
+
+常用命令：
+
+```text
+/workspace                         查看或选择 Workspace
+/workspace current                 查看当前绑定
+/workspace use ~/Projects/demo     绑定已有目录并开启新 Session
+/workspace create ~/Projects/demo  创建末级目录、绑定并开启新 Session
+/new                               在当前 Workspace 内开启新 Session
+/sessions                          只列出当前 Workspace 的 Session
+/resume <session-id>               只恢复当前 Workspace 的 Session
+```
+
+`/workspace create` 只创建一个末级目录，父目录必须已经存在；为避免误操作，用户主目录、磁盘根目录
+等过宽路径不能直接绑定。普通群仍需由获准用户明确 @机器人后才会执行任务。
 
 ## 安装
 
@@ -57,8 +83,7 @@ dsh plugin --profile web add link:/path/to/dsh-session-groups/packages/dsh-sessi
 #     allowedOpenIds: ['ou_...']  # 你的 open_id（fail-closed，必填）
 #     allowedChatIds: []          # 可选群限制；空 = 机器人加入的任意群都可用
 #     requireMention: true        # 话题首次需 @；普通群无论此项为何值都每轮必须 @
-#     cwd: '/Users/you/work'      # 必填
-#     workspaceRoot: '/Users/you/work'  # 必填
+#     # cwd/workspaceRoot 仅为旧版固定工作区部署的可选兼容项；新部署请省略。
 
 # 3. 凭据：DSH_FEISHU_APP_SECRET 环境变量，或写入 ~/.dsh 的 .credentials.yaml
 #    （GUI 设置卡片只存 credential ref，凭据唯一来源是 .credentials.yaml）

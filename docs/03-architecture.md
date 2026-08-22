@@ -17,15 +17,17 @@
   (b) 关键路径 try/catch + 每聊天串行队列兜底。残余风险：未捕获异步异常仍可能带崩进程，
   须在验收中覆盖崩溃恢复路径。
 
-- **D2 会话映射 → 私聊/普通群/话题 ↔ session（确定性前缀 + persistence 事实源）。**
+- **D2 路由映射 → 私聊/普通群/话题 ↔ Workspace ↔ session。**
   私聊各一个 session；普通群按 chatId 共用一个 session；话题群内每个话题 = 一个独立 session；`/new` 显式开新；`/resume <id>` 恢复。
   群类型由官方 `chat_mode`（`group` / `topic`）判定。`originKey`：p2p → `p2p:<chatId>`；
   普通群 → `group:<chatId>:chat`；群话题 → `group:<chatId>:thread:<thread_id>`；话题群中不属于
   任何话题的消息仍提示进话题。SHA-256 前 24 位 hex 为 session 前缀
-  （`feishu-<24hex>-<base36 ts>`）；`sessionPersistence` 为唯一事实源
-  （不建显式映射表，避免双事实源漂移），每次操作 fresh `list()` 并过滤 GUI 归档；
-  `/resume` 绑定仅进程内有效、重启回落前缀最新；状态文件仅存轻量元数据
-  （含 `/new` pending 标记），owner-only + 原子写。
+  （`feishu-<24hex>-<base36 ts>`）。Workspace 来自 DSH Workspace Registry；状态文件只持久化
+  `originKey → workspaceId` 这一层用户选择以及轻量元数据，Session 身份仍以
+  `sessionPersistence` 为唯一事实源。首次未绑定时弹出选择/新建卡片，Registry 仅一个 Workspace
+  时自动绑定；旧飞书会话按持久化 header.cwd 自动迁移。`/new` 保留 Workspace，`/workspace`
+  切换 Workspace 时开启全新 Session；`/resume` 只接受当前 Workspace 内、同来源前缀的 Session。
+  状态文件 owner-only + 原子写。
 
 - **D3 审批 → 进程内 `approval/request` 服务。**
   answerer 以 `{ prepend: true }` 注册（cordis.patch.yml 无排序能力），按**回合归属**认领：
@@ -59,7 +61,7 @@
 | 来源 | 借走 | 丢弃 |
 | --- | --- | --- |
 | dsh-im-hub | web profile 插件形态、Web GUI 设置卡片（dsh-settings + client 注入）、mock 适配器、手写 protobuf 帧层（备选通道方案） | 无审批、无话题级会话的简陋功能集 |
-| dsh-lark-bridge | 审批卡片闭环、话题↔session 映射、消息节流与脱敏、安全模型、命令集、官方 SDK 通道包装（LarkChannelLike） | 独立 profile 架构、多项目绑定、多人配对体系、CLI 向导 |
+| dsh-lark-bridge | 审批卡片闭环、话题↔session 映射、消息节流与脱敏、安全模型、命令集、官方 SDK 通道包装（LarkChannelLike） | 独立 profile 架构、上游项目/配对体系、CLI 向导 |
 
 ## 风险
 

@@ -21,7 +21,7 @@
 3. **白名单**：仅允许本人 open_id 驱动 agent；**fail-closed**——空配置 = 拒绝一切，仅显式 `allowAllUsers: true` 才全开放（mock/echo 环境除外）。群范围默认不限：机器人加入任意群后，白名单内用户均可 @它；非空 `allowedChatIds` 可选地将部署收窄到指定群。白名单外消息在日志回显发送者 open_id 供自举。
 4. **普通群与话题群**：用飞书官方 `chat_mode` 区分两类群。话题群中，飞书话题/线程 ↔ dsh session 一一映射，多话题并行互不干扰；每个话题首次由白名单用户 @机器人后激活，首次 @ 回填此前完整有界话题历史，后续同话题消息免 @自动进入同一 session，未激活的其他话题静默，激活跨重启持久化。普通群按 chatId 共用一个 session；机器人接收全群消息供历史回填，但**每一轮都必须由白名单用户明确 @才执行**，未 @消息只作为下次触发时的有界上下文、绝不创建会话/执行命令；输出直接发回群内。`/new` 显式开新会话。
 5. **审批闭环**：agent 请求审批 → 飞书卡片（批准/拒绝按钮）→ 回调 respond；文字兜底 `/approve` `/reject`（按钮重复点击被 SDK 去重，文字兜底是必需路径）。结构化提问移 P1（飞书会话屏蔽 ask-user 类工具，避免问题打进浏览器导致远端挂起）。
-6. **基本会话操作**：`/status` `/stop` `/resume` `/sessions` `/new` `/approve` `/reject` `/steer` `/help`。
+6. **基本会话操作**：`/workspace` `/status` `/stop` `/resume` `/sessions` `/new` `/approve` `/reject` `/steer` `/help`。首次使用从 DSH Workspace Registry 选择或新建 Workspace；每个飞书来源持久绑定一个 Workspace，切换时创建新 Session。
 7. **流式节流**：agent 输出按约 1 秒批量更新卡片（遵守飞书限流），绝不逐 token 发消息。
 
 ### P1（体验层）
@@ -42,7 +42,7 @@
 ## 非目标（明确不做）
 
 - 团队多用户 / 权限体系（配对码、多人绑定；`allowedChatIds` 只是可选的部署范围限制）
-- 多项目（目录）绑定
+- 团队共享项目权限/项目 ACL（个人用户的多 Workspace 选择与绑定属于本产品范围）
 - 企业微信 / Telegram（首版不做）
 - 独立移动端 UI（已另议，不混入本项目）
 

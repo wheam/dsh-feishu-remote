@@ -1,7 +1,8 @@
 /**
- * Configuration — single-project schema. `cwd` and `workspaceRoot` are
- * REQUIRED (docs/05 §5.4): a remote executor must never operate on an
- * accidental process cwd. Credentials resolve through the Harness credential
+ * Configuration. Workspace selection is owned by DSH's Workspace Registry;
+ * legacy `cwd` / `workspaceRoot` values are accepted only for upgrade
+ * compatibility and outbound-path policy, never as a new Feishu origin's
+ * implicit project. Credentials resolve through the Harness credential
  * provider (`.credentials.yaml` is the single secret source); the sender
  * allowlist is fail-closed: empty `allowedOpenIds` rejects everyone unless
  * `allowAllUsers: true` is explicit. Group scope is open by default; a
@@ -100,8 +101,8 @@ function unique(values: string[]): string[] {
 
 /**
  * Resolve schema-normalized config with environment-only secrets and
- * allowlists. Throws on a missing app credential pair, on missing
- * cwd/workspaceRoot, and on paths escaping the workspace root.
+ * allowlists. The legacy cwd/workspaceRoot pair may be absent; when supplied,
+ * both must be present and retain the old containment invariant.
  */
 export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.env): ResolvedConfig {
   const appId = (config.appId || env.DSH_FEISHU_APP_ID || '').trim()
@@ -115,23 +116,19 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
   const dshHome = resolve(env.DSH_HOME?.trim() || join(homedir(), '.dsh'))
   const statePath = resolve(config.statePath || join(dshHome, 'feishu-remote', `${appId}.json`))
 
-  if ((config.cwd ?? '').trim() === '') {
-    throw new Error('dsh-feishu-remote: cwd is required (absolute path the agent works in)')
+  const rawCwd = (config.cwd ?? '').trim()
+  const rawWorkspaceRoot = (config.workspaceRoot ?? '').trim()
+  if ((rawCwd === '') !== (rawWorkspaceRoot === '')) {
+    throw new Error('dsh-feishu-remote: legacy cwd and workspaceRoot must be configured together')
   }
-  if ((config.workspaceRoot ?? '').trim() === '') {
-    throw new Error('dsh-feishu-remote: workspaceRoot is required (absolute path that bounds file access)')
-  }
-  // Canonicalize (symlink-resolved) so containment checks cannot be fooled by
-  // a symlinked component (Codex P1-8).
-  const cwd = canonicalPath(resolve(config.cwd!))
-  const workspaceRoot = canonicalPath(resolve(config.workspaceRoot!))
-  const inboundDir = resolve(cwd, config.inboundDir || '.dsh-feishu-remote/inbox')
-  if (!isInside(workspaceRoot, cwd)) {
+  // Canonicalize (symlink-resolved) so the retained legacy outbound boundary
+  // cannot be fooled by a symlinked component.
+  const cwd = rawCwd === '' ? '' : canonicalPath(resolve(rawCwd))
+  const workspaceRoot = rawWorkspaceRoot === '' ? '' : canonicalPath(resolve(rawWorkspaceRoot))
+  if (workspaceRoot !== '' && !isInside(workspaceRoot, cwd)) {
     throw new Error('dsh-feishu-remote: cwd must be inside workspaceRoot')
   }
-  if (!isInside(workspaceRoot, inboundDir)) {
-    throw new Error('dsh-feishu-remote: inboundDir must be inside workspaceRoot')
-  }
+  const inboundDir = resolve(config.inboundDir || join(dshHome, 'feishu-remote', 'inbox'))
   const provider = config.provider?.trim()
   const model = config.model?.trim()
   const agentPreset = config.agentPreset?.trim()

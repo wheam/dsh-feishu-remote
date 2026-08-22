@@ -8,7 +8,7 @@ const BASE = {
   workspaceRoot: '/tmp/workspace',
 }
 
-describe('resolveConfig (single project, fail-closed sender access)', () => {
+describe('resolveConfig (Workspace Registry routing, fail-closed sender access)', () => {
   it('resolves required fields with defaults', () => {
     const config = resolveConfig(BASE)
     expect(config.appId).toBe('cli_test')
@@ -33,9 +33,10 @@ describe('resolveConfig (single project, fail-closed sender access)', () => {
       .toThrow('missing app secret')
   })
 
-  it('requires cwd and workspaceRoot explicitly', () => {
-    expect(() => resolveConfig({ ...BASE, cwd: undefined, workspaceRoot: '/x' })).toThrow('cwd is required')
-    expect(() => resolveConfig({ ...BASE, cwd: '/x', workspaceRoot: undefined })).toThrow('workspaceRoot is required')
+  it('allows no legacy cwd pair but rejects a half-configured pair', () => {
+    expect(resolveConfig({ ...BASE, cwd: undefined, workspaceRoot: undefined })).toMatchObject({ cwd: '', workspaceRoot: '' })
+    expect(() => resolveConfig({ ...BASE, cwd: undefined, workspaceRoot: '/x' })).toThrow('configured together')
+    expect(() => resolveConfig({ ...BASE, cwd: '/x', workspaceRoot: undefined })).toThrow('configured together')
   })
 
   it('rejects a cwd escaping the workspace root', () => {
