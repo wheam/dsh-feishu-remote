@@ -299,7 +299,7 @@ export function buildWorkspaceChooserCard(input: WorkspaceChooserCardInput): obj
     ? '这条消息尚未执行。先选择工作区，绑定完成后会自动继续。'
     : '选择这个飞书会话要使用的 DSH Workspace。'
   const empty = input.workspaces.length === 0
-    ? [markdown('还没有已登记的 Workspace。你可以新建项目文件夹，或提供一个已有文件夹。')]
+    ? [markdown('还没有已登记的 Workspace。你可以直接使用一个已有文件夹，或新建独立的项目文件夹。')]
     : []
   return card('选择 Workspace', 'blue', [
     markdown(intro),
@@ -307,17 +307,46 @@ export function buildWorkspaceChooserCard(input: WorkspaceChooserCardInput): obj
     ...rows,
     ...buttonRows([
       {
-        label: '新建 Workspace',
+        label: '新建独立项目文件夹',
         type: 'primary',
         value: { bridge: 'dsh-feishu-remote', action: 'workspace-new', token: input.token },
       },
       {
-        label: '使用路径…',
-        value: { bridge: 'dsh-feishu-remote', action: 'workspace-path', token: input.token },
+        label: '直接使用已有文件夹',
+        value: { bridge: 'dsh-feishu-remote', action: 'workspace-use', token: input.token },
       },
     ], 'workspace_create'),
     markdown('_也可以发送 `/workspace use ~/路径` 或 `/workspace create ~/路径`。_'),
   ], '选择或新建工作区')
+}
+
+export function buildWorkspaceUseCard(
+  token: string,
+  folders: WorkspaceParentSuggestion[],
+  showPaths: boolean,
+): object {
+  const buttons: ButtonSpec[] = folders.map(folder => ({
+    label: `${folder.recommended ? '推荐 · ' : ''}直接使用 ${folder.title}`,
+    type: folder.recommended ? 'primary' : 'default',
+    value: {
+      bridge: 'dsh-feishu-remote',
+      action: 'workspace-use-parent',
+      token,
+      parentId: folder.id,
+    },
+  }))
+  const details = showPaths && folders.length > 0
+    ? folders.map(folder => `- ${folder.title}：${compactPath(folder.path)}`).join('\n')
+    : ''
+  return card('直接使用已有文件夹', 'blue', [
+    markdown('选择后，**该文件夹本身**会成为 Workspace，不会新建子文件夹；Agent 可以访问其中的全部内容。'),
+    ...(details === '' ? [] : [markdown(details)]),
+    ...buttonRows(buttons, 'workspace_use_parent'),
+    buttonRow([{
+      label: '输入其他已有文件夹路径…',
+      value: { bridge: 'dsh-feishu-remote', action: 'workspace-use-path', token },
+    }], 'workspace_use_custom_path'),
+  ], '直接使用已有 Workspace 文件夹')
 }
 
 export function buildWorkspaceCreateCard(
@@ -326,7 +355,7 @@ export function buildWorkspaceCreateCard(
   showPaths: boolean,
 ): object {
   const buttons: ButtonSpec[] = parents.map(parent => ({
-    label: `${parent.recommended ? '推荐 · ' : ''}${parent.title}`,
+    label: `${parent.recommended ? '推荐 · ' : ''}在 ${parent.title} 下新建`,
     type: parent.recommended ? 'primary' : 'default',
     value: {
       bridge: 'dsh-feishu-remote',
@@ -338,13 +367,13 @@ export function buildWorkspaceCreateCard(
   const details = showPaths && parents.length > 0
     ? parents.map(parent => `- ${parent.title}：${compactPath(parent.path)}`).join('\n')
     : ''
-  return card('新建 Workspace', 'blue', [
-    markdown('先选择新项目文件夹放在哪里；下一步只需发送项目名称。'),
+  return card('新建独立项目文件夹', 'blue', [
+    markdown('这里选择的是**父目录**。选择后还需要发送项目名称；最终 Workspace 是“父目录/项目名”，不会把父目录本身作为 Workspace。'),
     ...(details === '' ? [] : [markdown(details)]),
     ...buttonRows(buttons, 'workspace_parent'),
     buttonRow([{
-      label: '自定义完整路径…',
-      value: { bridge: 'dsh-feishu-remote', action: 'workspace-path', token },
+      label: '输入项目完整路径（可新建）…',
+      value: { bridge: 'dsh-feishu-remote', action: 'workspace-create-path', token },
     }], 'workspace_custom_path'),
   ], '选择新 Workspace 的位置')
 }
@@ -368,8 +397,12 @@ export function parseBridgeAction(value: unknown): BridgeAction | undefined {
         ? action as BridgeAction
         : undefined
     case 'workspace-new':
+    case 'workspace-use':
+    case 'workspace-use-path':
+    case 'workspace-create-path':
     case 'workspace-path':
       return typeof action.token === 'string' ? action as BridgeAction : undefined
+    case 'workspace-use-parent':
     case 'workspace-parent':
       return typeof action.token === 'string' && typeof action.parentId === 'string'
         ? action as BridgeAction

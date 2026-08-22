@@ -6,6 +6,7 @@ import {
   buildTurnCard,
   buildWorkspaceChooserCard,
   buildWorkspaceCreateCard,
+  buildWorkspaceUseCard,
   parseBridgeAction,
 } from '../src/cards.js'
 import type { TurnProgress } from '../src/types.js'
@@ -208,6 +209,9 @@ describe('card templates', () => {
     const groupJson = JSON.stringify(group)
     expect(groupJson).toContain('Curio')
     expect(groupJson).toContain('workspace-select')
+    expect(groupJson).toContain('workspace-use')
+    expect(groupJson).toContain('直接使用已有文件夹')
+    expect(groupJson).toContain('新建独立项目文件夹')
     expect(groupJson).toContain('自动继续')
     expect(groupJson).not.toContain('/Users/me/Secret')
 
@@ -230,8 +234,25 @@ describe('card templates', () => {
     const json = JSON.stringify(card)
     expect(json).toContain('workspace-parent')
     expect(json).toContain('推荐')
-    expect(json).toContain('workspace-path')
+    expect(json).toContain('在 文稿 / Documents 下新建')
+    expect(json).toContain('项目完整路径（可新建）')
+    expect(json).toContain('workspace-create-path')
     expect(json).not.toContain('/Users/me/Documents')
+  })
+
+  it('builds an existing-folder picker with one-click common folders', () => {
+    const card = buildWorkspaceUseCard('token-1', [{
+      id: 'downloads',
+      title: '下载 / Downloads',
+      path: '/Users/me/Downloads',
+      recommended: false,
+    }], false)
+    const json = JSON.stringify(card)
+    expect(json).toContain('直接使用 下载 / Downloads')
+    expect(json).toContain('workspace-use-parent')
+    expect(json).toContain('workspace-use-path')
+    expect(json).toContain('不会新建子文件夹')
+    expect(json).not.toContain('/Users/me/Downloads')
   })
 
   it('parses and validates bridge actions', () => {
@@ -243,6 +264,14 @@ describe('card templates', () => {
       .toMatchObject({ action: 'workspace-select', workspaceId: 'ws-1' })
     expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'workspace-parent', token: 't', parentId: 'documents' }))
       .toMatchObject({ action: 'workspace-parent', parentId: 'documents' })
+    expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'workspace-use', token: 't' }))
+      .toMatchObject({ action: 'workspace-use' })
+    expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'workspace-use-parent', token: 't', parentId: 'downloads' }))
+      .toMatchObject({ action: 'workspace-use-parent', parentId: 'downloads' })
+    expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'workspace-use-path', token: 't' }))
+      .toMatchObject({ action: 'workspace-use-path' })
+    expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'workspace-create-path', token: 't' }))
+      .toMatchObject({ action: 'workspace-create-path' })
     expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'approval', token: 't', decision: 'maybe' })).toBeUndefined()
     expect(parseBridgeAction({ bridge: 'other-bridge', action: 'stop' })).toBeUndefined()
     expect(parseBridgeAction({ bridge: 'dsh-feishu-remote', action: 'steer' })).toBeUndefined()

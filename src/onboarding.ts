@@ -70,6 +70,8 @@ export type OnboardingPhase =
   | 'cancelled'
   | 'expired'
 
+export type OnboardingMode = 'create' | 'select' | 'update'
+
 export type CapabilityState = 'ok' | 'missing' | 'unknown'
 
 export interface OnboardingCapabilities {
@@ -90,7 +92,7 @@ export interface BridgeHealth {
 export interface OnboardingStatus {
   revision: number
   phase: OnboardingPhase
-  mode?: 'create' | 'update'
+  mode?: OnboardingMode
   configured: boolean
   connected: boolean
   /** A created-but-uncommitted app can be re-authorized instead of orphaned. */
@@ -141,7 +143,7 @@ type RegisterResult = Awaited<ReturnType<typeof registerApp>>
 
 interface RegistrationSession {
   id: string
-  mode: 'create' | 'update'
+  mode: OnboardingMode
   targetAppId?: string
   previousSettings?: FlatSettings
   controller: AbortController
@@ -430,7 +432,7 @@ export class PersonalAgentOnboardingService {
     if (!this.isCurrent(session)) throw new OnboardingError('abort', '本次扫码已取消。')
   }
 
-  async start(mode: 'create' | 'update' = 'create'): Promise<OnboardingStatus> {
+  async start(mode: OnboardingMode = 'create'): Promise<OnboardingStatus> {
     if (this.disposed) throw new OnboardingError('disposed', '插件正在停止，暂时不能开始扫码。', false)
     if (this.ctx.settings.writable === false) {
       throw new OnboardingError('read_only', '当前部署的设置存储为只读，无法保存扫码结果。', false)
@@ -448,7 +450,7 @@ export class PersonalAgentOnboardingService {
       throw new OnboardingError('missing_app', '当前还没有可补充权限的 App ID。', false)
     }
     if (this.active !== undefined) this.active.controller.abort()
-    if (mode === 'create') this.pendingApp = undefined
+    if (mode !== 'update') this.pendingApp = undefined
 
     const session: RegistrationSession = {
       id: randomUUID(),
@@ -559,8 +561,8 @@ export class PersonalAgentOnboardingService {
             ? payload as Record<string, unknown>
             : {}
           const mode = body.mode ?? 'create'
-          if (mode !== 'create' && mode !== 'update') {
-            throw new OnboardingError('bad_request', 'mode 必须是 create 或 update。', false)
+          if (mode !== 'create' && mode !== 'select' && mode !== 'update') {
+            throw new OnboardingError('bad_request', 'mode 必须是 create、select 或 update。', false)
           }
           return { ok: true, value: await this.start(mode) }
         }
@@ -610,7 +612,11 @@ export class PersonalAgentOnboardingService {
       result = await this.deps.registerApp({
         source: 'dsh-feishu-remote',
         signal: session.controller.signal,
-        ...(session.mode === 'create' ? { createOnly: true } : { appId: session.targetAppId! }),
+        ...(session.mode === 'create'
+          ? { createOnly: true }
+          : session.mode === 'update'
+            ? { appId: session.targetAppId! }
+            : {}),
         appPreset: {
           name: 'DSH Remote · {user}',
           desc: '用飞书远程操控本机 DeepSeek Harness',

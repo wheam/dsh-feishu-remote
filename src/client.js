@@ -19,8 +19,8 @@ window.__ModuleLoader__.load({
 		// ---------------------------------------------------------------- css
 		const css = ".fr_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:8px;list-style:none;overflow:hidden}.fr_cardOpen{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}.fr_header{cursor:pointer;text-align:left;width:100%;font:inherit;background:0 0;border:0;align-items:center;gap:8px;padding:10px 14px;display:flex}.fr_header:hover{background:var(--dsw-alias-interactive-bg-hover)}.fr_headText{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.fr_name{color:var(--dsw-alias-label-primary);font-weight:600}.fr_description{color:var(--dsw-alias-label-tertiary);font-size:12px}.fr_pending{color:var(--dsw-alias-state-warn-primary);font-size:12px}.fr_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .12s}.fr_chevronOpen{transform:rotate(180deg)}.fr_body{flex-direction:column;gap:14px;padding:0 14px 14px;display:flex}.fr_readOnly{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px}.fr_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.fr_failed{color:var(--dsw-alias-state-error-primary);margin:0 auto 0 0;font-size:12px}.fr_discard,.fr_save{font:inherit;cursor:pointer;border-radius:6px;padding:5px 12px;font-size:13px}.fr_discard{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}.fr_discard:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}.fr_save{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_save:hover:not(:disabled){border-color:var(--dsw-alias-button-info-hover);background:var(--dsw-alias-button-info-hover)}.fr_discard:active:not(:disabled),.fr_save:active:not(:disabled){transform:translateY(1px)}.fr_discard:focus-visible:not(:disabled),.fr_save:focus-visible:not(:disabled){outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.fr_discard:disabled,.fr_save:disabled{opacity:.5;cursor:default}.fr_field{flex-direction:column;gap:4px;display:flex}.fr_head{align-items:center;gap:8px;display:flex}.fr_label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500}.fr_badges{align-items:center;gap:6px;display:flex}.fr_badge{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_badgeMuted{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-tertiary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_reset{color:var(--dsw-alias-state-business-primary);cursor:pointer;background:0 0;border:0;padding:0;font-size:11px}.fr_reset:hover:not(:disabled){text-decoration:underline}.fr_input,.fr_select{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major);border-radius:6px;padding:6px 8px;font-size:13px}.fr_inputInvalid{border:1px solid var(--dsw-alias-state-error-primary);font:inherit;color:var(--dsw-alias-label-primary);border-radius:6px;padding:6px 8px;font-size:13px}.fr_input:disabled,.fr_select:disabled{opacity:.6}.fr_hint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px}.fr_invalid{color:var(--dsw-alias-state-error-primary);margin:0;font-size:12px}.fr_groupTitle{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 -4px}.fr_sep{height:1px;background:var(--dsw-alias-border-l2);margin:2px 0 0}";
 		const pageCss = ".fr_page{flex-direction:column;gap:16px;display:flex;max-width:760px}.fr_pageHead{flex-direction:column;gap:4px;display:flex}.fr_pageTitle{margin:0;font-size:16px;font-weight:600;color:var(--dsw-alias-label-primary)}.fr_pageDesc{margin:0;font-size:12px;color:var(--dsw-alias-label-tertiary)}.fr_pageGroup{margin:0 0 2px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);text-transform:uppercase;letter-spacing:.04em}";
-		const readabilityCss = ".fr_field{gap:6px}.fr_label{display:block!important;color:#f2f6ff!important;line-height:1.4;opacity:1!important;visibility:visible!important}.fr_hint{display:block!important;color:#b8c6dd!important;line-height:1.45;opacity:1!important;visibility:visible!important}.fr_input::placeholder{color:#aebed8!important;opacity:1!important}.fr_input,.fr_select{min-height:34px}.fr_head{min-height:19px}";
-		const onboardingCss = ".fr_onboarding{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.fr_onboardingHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.fr_onboardingTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600}.fr_onboardingDesc,.fr_onboardingMeta,.fr_onboardingError{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.fr_onboardingError{color:var(--dsw-alias-state-error-primary)}.fr_status{border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_statusReady{color:var(--dsw-alias-state-success-primary)}.fr_statusBusy{color:var(--dsw-alias-state-warn-primary)}.fr_statusFailed{color:var(--dsw-alias-state-error-primary)}.fr_qrWrap{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.fr_qr{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:8px;padding:8px}.fr_qrHelp{display:flex;flex-direction:column;gap:6px;max-width:300px}.fr_qrLink{font-size:12px;color:var(--dsw-alias-state-business-primary)}.fr_actions{display:flex;flex-wrap:wrap;gap:8px}.fr_primary,.fr_secondary{font:inherit;cursor:pointer;border-radius:6px;padding:6px 11px;font-size:12px}.fr_primary{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_secondary{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.fr_primary:disabled,.fr_secondary:disabled{opacity:.5;cursor:default}.fr_capabilities{display:flex;flex-wrap:wrap;gap:6px}.fr_capability{border-radius:999px;padding:2px 7px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botList{display:flex;flex-direction:column;gap:10px}.fr_botCard{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);padding:0 12px 12px}.fr_botSummary{cursor:pointer;padding:10px 0;color:var(--dsw-alias-label-primary);font-weight:600}.fr_botGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.fr_botWide{grid-column:1/-1}.fr_botStatus{font-size:12px;color:var(--dsw-alias-label-secondary);margin:0 0 10px}.fr_botStatusError{color:var(--dsw-alias-state-error-primary)}.fr_botToolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.fr_checkbox{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:13px}@media(max-width:640px){.fr_botGrid{grid-template-columns:1fr}.fr_botWide{grid-column:auto}}";
+		const readabilityCss = ".fr_field{gap:6px}.fr_label{display:block!important;color:var(--dsw-alias-label-primary)!important;line-height:1.4;opacity:1!important;visibility:visible!important}.fr_hint{display:block!important;color:var(--dsw-alias-label-secondary)!important;line-height:1.45;opacity:1!important;visibility:visible!important}.fr_input::placeholder{color:var(--dsw-alias-label-tertiary)!important;opacity:1!important}.fr_input,.fr_select{min-height:34px}.fr_head{min-height:19px}";
+		const onboardingCss = ".fr_onboarding{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.fr_onboardingHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.fr_onboardingTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600}.fr_onboardingDesc,.fr_onboardingMeta,.fr_onboardingError{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.fr_onboardingError{color:var(--dsw-alias-state-error-primary)}.fr_status{border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_statusReady{color:var(--dsw-alias-state-success-primary)}.fr_statusBusy{color:var(--dsw-alias-state-warn-primary)}.fr_statusFailed{color:var(--dsw-alias-state-error-primary)}.fr_qrWrap{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.fr_qr{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:8px;padding:8px}.fr_qrHelp{display:flex;flex-direction:column;gap:6px;max-width:300px}.fr_qrLink{font-size:12px;color:var(--dsw-alias-state-business-primary)}.fr_actions{display:flex;flex-wrap:wrap;gap:8px}.fr_primary,.fr_secondary{font:inherit;cursor:pointer;border-radius:6px;padding:6px 11px;font-size:12px}.fr_primary{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_secondary{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.fr_primary:disabled,.fr_secondary:disabled{opacity:.5;cursor:default}.fr_capabilities{display:flex;flex-wrap:wrap;gap:6px}.fr_capability{border-radius:999px;padding:2px 7px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botList{display:flex;flex-direction:column;gap:12px}.fr_botIntro{display:flex;flex-direction:column;gap:3px;min-width:0}.fr_botCard{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);padding:0 14px 14px}.fr_botSummary{cursor:pointer;padding:13px 0;color:var(--dsw-alias-label-primary);display:flex;align-items:center;gap:10px;list-style:none}.fr_botSummary::-webkit-details-marker{display:none}.fr_botSummaryText{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.fr_botSummaryName{font-size:14px;font-weight:600}.fr_botSummaryMeta{font-size:11px;font-weight:400;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fr_botSummaryAside{display:flex;align-items:center;gap:8px}.fr_botSummaryChevron{color:var(--dsw-alias-label-tertiary);font-size:14px;transition:transform .12s}.fr_botCard[open]>.fr_botSummary .fr_botSummaryChevron{transform:rotate(180deg)}.fr_botStatusBadge{border-radius:999px;padding:2px 8px;font-size:11px;font-weight:500;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botStatusBadgeOk{color:var(--dsw-alias-state-success-primary)}.fr_botStatusBadgeError{color:var(--dsw-alias-state-error-primary)}.fr_botSection{border-top:1px solid var(--dsw-alias-border-l2);padding:12px 0 2px;display:flex;flex-direction:column;gap:10px}.fr_botSectionTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}.fr_botSectionDesc{margin:-6px 0 0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.45}.fr_botGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.fr_botWide{grid-column:1/-1}.fr_botStatus{font-size:12px;color:var(--dsw-alias-label-secondary);margin:0 0 10px}.fr_botStatusError{color:var(--dsw-alias-state-error-primary)}.fr_botToolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.fr_botAdvanced{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:0 12px 12px;background:var(--dsw-alias-bg-layer-2)}.fr_botAdvancedSummary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;padding:10px 0}.fr_botLimit{max-width:360px}.fr_checkbox{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:13px}.fr_botDanger{align-self:flex-start;margin-top:2px}@media(max-width:640px){.fr_botGrid{grid-template-columns:1fr}.fr_botWide{grid-column:auto}.fr_botToolbar{align-items:stretch}.fr_botLimit{max-width:none;width:100%}.fr_botSummaryMeta{max-width:180px}}";
 		const tagId = "dsh-feishu-remote/settings-card.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
@@ -50,7 +50,7 @@ window.__ModuleLoader__.load({
 			"qrHelp": "fr_qrHelp", "qrLink": "fr_qrLink", "actions": "fr_actions",
 			"primary": "fr_primary", "secondary": "fr_secondary", "capabilities": "fr_capabilities",
 			"capability": "fr_capability"
-			,"botList":"fr_botList","botCard":"fr_botCard","botSummary":"fr_botSummary","botGrid":"fr_botGrid","botWide":"fr_botWide","botStatus":"fr_botStatus","botStatusError":"fr_botStatusError","botToolbar":"fr_botToolbar","checkbox":"fr_checkbox"
+			,"botList":"fr_botList","botIntro":"fr_botIntro","botCard":"fr_botCard","botSummary":"fr_botSummary","botSummaryText":"fr_botSummaryText","botSummaryName":"fr_botSummaryName","botSummaryMeta":"fr_botSummaryMeta","botSummaryAside":"fr_botSummaryAside","botSummaryChevron":"fr_botSummaryChevron","botStatusBadge":"fr_botStatusBadge","botStatusBadgeOk":"fr_botStatusBadgeOk","botStatusBadgeError":"fr_botStatusBadgeError","botSection":"fr_botSection","botSectionTitle":"fr_botSectionTitle","botSectionDesc":"fr_botSectionDesc","botGrid":"fr_botGrid","botWide":"fr_botWide","botStatus":"fr_botStatus","botStatusError":"fr_botStatusError","botToolbar":"fr_botToolbar","botAdvanced":"fr_botAdvanced","botAdvancedSummary":"fr_botAdvancedSummary","botLimit":"fr_botLimit","checkbox":"fr_checkbox","botDanger":"fr_botDanger"
 		};
 
 		// ------------------------------------------------------------ chrome
@@ -416,14 +416,33 @@ window.__ModuleLoader__.load({
 			return ["starting", "qr_ready", "committing", "connecting"].includes(status?.phase);
 		}
 
-		const BOT_TEXT_FIELDS = [
-			["id", "Bot ID"], ["appId", "App ID"], ["appSecretRef", "App Secret 凭据引用"],
-			["allowedOpenIds", "允许的 open_id（逗号分隔）", "list"],
-			["allowedChatIds", "限定群聊 ID（逗号分隔）", "list"],
-			["defaultWorkspace", "默认 Workspace ID 或绝对路径"], ["profileFile", "Profile Markdown 路径"],
-			["agentPreset", "Agent preset"], ["provider", "Provider"], ["model", "模型"],
-			["maxLiveAgents", "本机器人 live agent 上限", "number"]
-		];
+		const BOT_TEXT_FIELD_GROUPS = {
+			connection: [
+				["appId", "飞书 App ID（必填）"],
+				["appSecretRef", "App Secret 凭据引用（必填）"],
+			],
+			access: [
+				["allowedOpenIds", "允许使用机器人的用户 open_id（逗号分隔）", "list"],
+				["allowedChatIds", "限定可用的群聊 ID（可留空）", "list"],
+			],
+			workspace: [
+				["defaultWorkspace", "默认 Workspace ID 或绝对路径"],
+				["profileFile", "机器人 Profile Markdown 路径"],
+			],
+			agent: [
+				["agentPreset", "Agent 预设"], ["provider", "模型提供方"], ["model", "模型"],
+			],
+			advanced: [
+				["id", "机器人内部标识"],
+				["maxLiveAgents", "这个机器人同时运行的任务上限", "number"],
+			],
+		};
+		const BOT_SELECT_FIELDS = {
+			brand: ["brand", "平台", [["feishu", "飞书"], ["lark", "Lark"], ["larkoffice", "Lark Office"]]],
+			workspacePolicy: ["workspacePolicy", "Workspace 使用方式", [["default", "优先使用默认 Workspace"], ["locked", "固定使用该 Workspace"]]],
+			contextMode: ["contextMode", "读取飞书聊天上下文", [["auto", "自动"], ["off", "关闭"]]],
+			contextBackend: ["contextBackend", "上下文连接方式", [["auto", "自动"], ["sdk", "飞书 SDK"]]],
+		};
 		const BOT_EDITABLE_KEYS = [
 			"id", "enabled", "appId", "appSecretRef", "brand", "allowedOpenIds", "allowedChatIds",
 			"allowAllUsers", "requireMention", "defaultWorkspace", "workspacePolicy", "agentPreset",
@@ -436,6 +455,20 @@ window.__ModuleLoader__.load({
 					? raw.split(/[\s,]+/).filter(Boolean) : raw;
 				return [key, value];
 			}));
+		}
+
+		function botPresentation(bot, index, status) {
+			const appId = typeof bot.appId === "string" ? bot.appId.trim() : "";
+			const name = appId === "" ? "新机器人" : bot.sessionNamespace === "legacy" ? "主机器人" : `机器人 ${index + 1}`;
+			const appLabel = appId === "" ? "尚未填写 App ID" : appId.length <= 12 ? `App ID：${appId}` : `App ID：${appId.slice(0, 4)}…${appId.slice(-6)}`;
+			if (bot.enabled === false) return { name, appLabel, statusLabel: "已停用", statusTone: "muted", detail: "这个机器人当前已停用。" };
+			if (appId === "" || typeof bot.appSecretRef !== "string" || bot.appSecretRef.trim() === "") return { name, appLabel, statusLabel: "待完成", statusTone: "error", detail: "请填写 App ID 和 App Secret 凭据引用，然后保存。" };
+			if (status === void 0) return { name, appLabel, statusLabel: "读取中", statusTone: "muted", detail: "正在读取机器人连接状态…" };
+			if (status.error) return { name, appLabel, statusLabel: "需要处理", statusTone: "error", detail: status.error };
+			const live = Number.isFinite(status.liveAgents) ? status.liveAgents : 0;
+			if (status.connected) return { name, appLabel, statusLabel: "已连接", statusTone: "ok", detail: `连接正常 · 当前运行 ${live} 个任务` };
+			if (status.status === "starting") return { name, appLabel, statusLabel: "连接中", statusTone: "muted", detail: "机器人正在建立连接…" };
+			return { name, appLabel, statusLabel: "未连接", statusTone: "error", detail: "机器人当前未连接，请展开检查配置。" };
 		}
 
 		function BotField(props) {
@@ -455,32 +488,91 @@ window.__ModuleLoader__.load({
 			] });
 		}
 
+		function BotSelectField(props) {
+			const [field, label, options] = props.spec;
+			return react_jsx_runtime.jsxs("label", { className: cssDefault.field, children: [
+				react_jsx_runtime.jsx("span", { className: cssDefault.label, children: label }),
+				react_jsx_runtime.jsx("select", {
+					className: cssDefault.select,
+					value: props.bot[field] ?? options[0][0],
+					disabled: props.disabled,
+					onChange: (event) => props.onEdit(field, event.target.value),
+					children: options.map(([value, text]) => react_jsx_runtime.jsx("option", { value, children: text }, value))
+				})
+			] });
+		}
+
+		function BotTextFields(props) {
+			return props.fields.map(([field, label, kind]) => react_jsx_runtime.jsx(BotField, {
+				bot: props.bot, field, label, kind, disabled: props.disabled,
+				wide: field === "defaultWorkspace" || field === "profileFile" || field === "allowedOpenIds" || field === "allowedChatIds",
+				onEdit: props.onEdit,
+			}, field));
+		}
+
+		function BotSection(props) {
+			return react_jsx_runtime.jsxs("section", { className: cssDefault.botSection, children: [
+				react_jsx_runtime.jsx("h4", { className: cssDefault.botSectionTitle, children: props.title }),
+				props.description ? react_jsx_runtime.jsx("p", { className: cssDefault.botSectionDesc, children: props.description }) : null,
+				react_jsx_runtime.jsx("div", { className: cssDefault.botGrid, children: props.children })
+			] });
+		}
+
 		function BotEditor(props) {
-			const status = props.status;
-			const statusText = status === void 0 ? "等待运行状态" : [status.status, status.connected ? "connected" : "offline", `${status.liveAgents} live`].join(" · ");
-			return react_jsx_runtime.jsxs("details", { className: cssDefault.botCard, children: [
-				react_jsx_runtime.jsx("summary", { className: cssDefault.botSummary, children: `${props.bot.id || "未命名机器人"} · ${props.bot.appId || "未填写 App ID"}` }),
-				react_jsx_runtime.jsx("p", { className: status?.error ? cssDefault.botStatus + " " + cssDefault.botStatusError : cssDefault.botStatus, children: status?.error ?? statusText }),
-				react_jsx_runtime.jsxs("div", { className: cssDefault.botGrid, children: [
-					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
-						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.enabled !== false, disabled: props.disabled, onChange: (event) => props.onEdit("enabled", event.target.checked) }),
-						"启用此机器人"
+			const [open, setOpen] = react.useState(!props.bot.appId);
+			const presentation = botPresentation(props.bot, props.index, props.status);
+			const badgeClass = presentation.statusTone === "ok"
+				? cssDefault.botStatusBadge + " " + cssDefault.botStatusBadgeOk
+				: presentation.statusTone === "error"
+					? cssDefault.botStatusBadge + " " + cssDefault.botStatusBadgeError
+					: cssDefault.botStatusBadge;
+			return react_jsx_runtime.jsxs("details", { className: cssDefault.botCard, open, onToggle: event => setOpen(event.currentTarget.open), children: [
+				react_jsx_runtime.jsxs("summary", { className: cssDefault.botSummary, children: [
+					react_jsx_runtime.jsxs("span", { className: cssDefault.botSummaryText, children: [
+						react_jsx_runtime.jsx("span", { className: cssDefault.botSummaryName, children: presentation.name }),
+						react_jsx_runtime.jsx("span", { className: cssDefault.botSummaryMeta, children: presentation.appLabel })
 					] }),
-					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
-						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.allowAllUsers === true, disabled: props.disabled, onChange: (event) => props.onEdit("allowAllUsers", event.target.checked) }),
-						"允许所有用户（危险）"
-					] }),
-					...BOT_TEXT_FIELDS.map(([field, label, kind]) => react_jsx_runtime.jsx(BotField, { bot: props.bot, field, label, kind, disabled: props.disabled, wide: field === "defaultWorkspace" || field === "profileFile", onEdit: props.onEdit }, field)),
-					...[ ["brand", "品牌", ["feishu", "lark", "larkoffice"]], ["workspacePolicy", "Workspace 策略", ["default", "locked"]], ["contextMode", "上下文", ["auto", "off"]], ["contextBackend", "上下文后端", ["auto", "sdk"]] ].map(([field, label, options]) => react_jsx_runtime.jsxs("label", { className: cssDefault.field, children: [
-						react_jsx_runtime.jsx("span", { className: cssDefault.label, children: label }),
-						react_jsx_runtime.jsx("select", { className: cssDefault.select, value: props.bot[field] ?? options[0], disabled: props.disabled, onChange: (event) => props.onEdit(field, event.target.value), children: options.map(option => react_jsx_runtime.jsx("option", { value: option, children: option }, option)) })
-					] }, field)),
-					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
-						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.requireMention !== false, disabled: props.disabled, onChange: (event) => props.onEdit("requireMention", event.target.checked) }),
-						"话题首次要求 @"
+					react_jsx_runtime.jsxs("span", { className: cssDefault.botSummaryAside, children: [
+						react_jsx_runtime.jsx("span", { className: badgeClass, children: presentation.statusLabel }),
+						react_jsx_runtime.jsx("span", { className: cssDefault.botSummaryChevron, "aria-hidden": true, children: "⌄" })
 					] })
 				] }),
-				react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: props.disabled, onClick: props.onDelete, children: "删除机器人（保留 Session 与状态文件）" })
+				react_jsx_runtime.jsx("p", { className: presentation.statusTone === "error" ? cssDefault.botStatus + " " + cssDefault.botStatusError : cssDefault.botStatus, children: presentation.detail }),
+				react_jsx_runtime.jsx(BotSection, { title: "连接", description: "填写飞书应用信息；凭据引用指向 Host 安全保存的 App Secret。", children: [
+					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
+						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.enabled !== false, disabled: props.disabled, onChange: event => props.onEdit("enabled", event.target.checked) }),
+						"启用此机器人"
+					] }),
+					react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.brand, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.connection, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+				] }),
+				react_jsx_runtime.jsx(BotSection, { title: "使用权限", description: "默认只允许指定用户；开放给所有人会带来远程执行风险。", children: [
+					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
+						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.allowAllUsers === true, disabled: props.disabled, onChange: event => props.onEdit("allowAllUsers", event.target.checked) }),
+						"允许任何人使用（不建议）"
+					] }),
+					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
+						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.requireMention !== false, disabled: props.disabled, onChange: event => props.onEdit("requireMention", event.target.checked) }),
+						"话题中第一次使用时必须 @机器人"
+					] }),
+					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.access, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+				] }),
+				react_jsx_runtime.jsx(BotSection, { title: "Workspace", description: "为这个机器人指定默认工作区和专属行为说明。", children: [
+					react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.workspacePolicy, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.workspace, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+				] }),
+				react_jsx_runtime.jsx(BotSection, { title: "Agent 与上下文", description: "留空时使用 DSH 的默认 Agent 和模型。", children: [
+					react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.contextMode, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.agent, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+				] }),
+				react_jsx_runtime.jsxs("details", { className: cssDefault.botAdvanced, children: [
+					react_jsx_runtime.jsx("summary", { className: cssDefault.botAdvancedSummary, children: "机器人高级设置" }),
+					react_jsx_runtime.jsxs("div", { className: cssDefault.botGrid, children: [
+						react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.contextBackend, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+						...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.advanced, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+					] })
+				] }),
+				react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary + " " + cssDefault.botDanger, disabled: props.disabled, onClick: props.onDelete, children: "从列表中移除此机器人" })
 			] });
 		}
 
@@ -509,17 +601,26 @@ window.__ModuleLoader__.load({
 			const statuses = new Map((state.statuses ?? []).map(item => [item.id, item]));
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.botList, children: [
 				react_jsx_runtime.jsxs("div", { className: cssDefault.botToolbar, children: [
-					react_jsx_runtime.jsxs("label", { className: cssDefault.field, children: [
-						react_jsx_runtime.jsx("span", { className: cssDefault.label, children: "全部飞书机器人 live agent 上限" }),
-						react_jsx_runtime.jsx("input", { className: cssDefault.input, inputMode: "numeric", value: String(state.maxTotalLiveAgents ?? 0), disabled: state.saving || !state.writable, onChange: event => props.editMax(Number(event.target.value || 0)) })
+					react_jsx_runtime.jsxs("div", { className: cssDefault.botIntro, children: [
+						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人管理" }),
+						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: `已配置 ${state.bots.length} 个机器人。点击卡片可以展开并修改设置。` })
 					] }),
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving || !state.writable, onClick: props.addBot, children: "新增机器人" })
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || !state.writable, onClick: props.addBot, children: "添加机器人" })
 				] }),
-				...(state.bots ?? []).map((bot, index) => react_jsx_runtime.jsx(BotEditor, { bot, index, status: statuses.get(bot.id), disabled: state.saving || !state.writable, onEdit: (field, value) => props.editBot(index, field, value), onDelete: () => props.deleteBot(index) }, index)),
+				...(state.bots ?? []).map((bot, index) => react_jsx_runtime.jsx(BotEditor, { bot, index, status: statuses.get(bot.id), disabled: state.saving || !state.writable, onEdit: (field, value) => props.editBot(index, field, value), onDelete: () => props.deleteBot(index) }, bot.id || bot.appId || `bot-${index}`)),
+				react_jsx_runtime.jsxs("details", { className: cssDefault.botAdvanced, children: [
+					react_jsx_runtime.jsx("summary", { className: cssDefault.botAdvancedSummary, children: "全局高级设置" }),
+					react_jsx_runtime.jsxs("label", { className: cssDefault.field + " " + cssDefault.botLimit, children: [
+						react_jsx_runtime.jsx("span", { className: cssDefault.label, children: "所有机器人同时运行的任务上限" }),
+						react_jsx_runtime.jsx("input", { className: cssDefault.input, inputMode: "numeric", value: String(state.maxTotalLiveAgents ?? 0), disabled: state.saving || !state.writable, onChange: event => props.editMax(Number(event.target.value || 0)) }),
+						react_jsx_runtime.jsx("span", { className: cssDefault.hint, children: "填写 0 表示不限制；一般保持 0 即可。" })
+					] })
+				] }),
+				state.dirty && state.invalid ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, role: "alert", children: "还有必填项未完成，或某个数字/Workspace 设置无效；请展开标记为“待完成”的机器人检查。" }) : null,
 				state.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error }) : null,
 				react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, disabled: !state.dirty || state.saving, onClick: props.discardBots, children: "放弃机器人修改" }),
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, disabled: !state.dirty || state.invalid || state.saving || !state.writable, onClick: props.saveBots, children: state.saving ? "保存中…" : "保存机器人配置" })
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, disabled: !state.dirty || state.saving, onClick: props.discardBots, children: "取消修改" }),
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, disabled: !state.dirty || state.invalid || state.saving || !state.writable, onClick: props.saveBots, children: state.saving ? "保存中…" : "保存更改" })
 				] })
 			] });
 		}
@@ -553,6 +654,8 @@ window.__ModuleLoader__.load({
 			const secondsLeft = status?.expiresAt === void 0
 				? void 0
 				: Math.max(0, Math.ceil((status.expiresAt - Date.now()) / 1000));
+			const scanHintKey = status?.mode === "select" ? "onboarding.scanHintSelect"
+				: status?.mode === "update" ? "onboarding.scanHintUpdate" : "onboarding.scanHintCreate";
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
 				react_jsx_runtime.jsxs("div", { className: cssDefault.onboardingHead, children: [
 					react_jsx_runtime.jsxs("div", { children: [
@@ -566,7 +669,7 @@ window.__ModuleLoader__.load({
 						? react_jsx_runtime.jsx("img", { className: cssDefault.qr, src: status.qrImageDataUrl, alt: props.t("onboarding.qrAlt") })
 						: react_jsx_runtime.jsx("div", { className: cssDefault.qr, "aria-label": props.t("onboarding.qrRendering") }),
 					react_jsx_runtime.jsxs("div", { className: cssDefault.qrHelp, children: [
-						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: props.t("onboarding.scanHint") }),
+						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: props.t(scanHintKey) }),
 						secondsLeft === void 0 ? null : react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: `${props.t("onboarding.expiresIn")} ${secondsLeft}s` }),
 						react_jsx_runtime.jsx("a", { className: cssDefault.qrLink, href: status.qrUrl, target: "_blank", rel: "noreferrer", children: props.t("onboarding.openLink") })
 					] })
@@ -587,8 +690,14 @@ window.__ModuleLoader__.load({
 					react_jsx_runtime.jsx("button", {
 						type: "button", className: cssDefault.primary,
 						disabled: blocked,
+						onClick: () => props.onboardingStart("select"),
+						children: props.t(configured ? "onboarding.selectOther" : "onboarding.select")
+					}),
+					react_jsx_runtime.jsx("button", {
+						type: "button", className: cssDefault.secondary,
+						disabled: blocked,
 						onClick: () => props.onboardingStart("create"),
-						children: props.t(configured ? "onboarding.rebind" : "onboarding.create")
+						children: props.t(configured ? "onboarding.createAnother" : "onboarding.create")
 					}),
 					canUpdate ? react_jsx_runtime.jsx("button", {
 						type: "button", className: cssDefault.secondary,
@@ -914,13 +1023,17 @@ window.__ModuleLoader__.load({
 			"settings.readOnly": "This deployment is read-only: settings cannot be changed from the GUI.",
 			"settings.overridden": "Override", "settings.reset": "Reset", "settings.invalidNumber": "Enter a valid number",
 			"settings.discard": "Discard", "settings.save": "Save", "settings.saving": "Saving…", "settings.saveFailed": "Save failed",
-			"onboarding.title": "Create and bind your Feishu bot",
-			"onboarding.description": "One Feishu/Lark scan creates a PersonalAgent owned by you, saves its secret on this Host, and connects it. No developer-console setup or chat pairing code.",
-			"onboarding.create": "Create and bind bot", "onboarding.rebind": "Create a new bot", "onboarding.grant": "Grant missing permissions",
+			"onboarding.title": "Connect a Feishu bot",
+			"onboarding.description": "Choose an existing PersonalAgent you own, or create a new one. A Feishu/Lark scan securely saves its credentials on this Host and connects it without developer-console setup.",
+			"onboarding.select": "Select an existing bot", "onboarding.selectOther": "Switch to an existing bot",
+			"onboarding.create": "Create a new bot", "onboarding.createAnother": "Create another new bot", "onboarding.grant": "Grant missing permissions",
 			"onboarding.retry": "Retry connection", "onboarding.cancel": "Cancel", "onboarding.qrAlt": "Feishu PersonalAgent authorization QR code",
-			"onboarding.qrRendering": "Rendering QR code", "onboarding.scanHint": "Scan with the Feishu/Lark mobile app, review the permission list, then confirm.",
+			"onboarding.qrRendering": "Rendering QR code",
+			"onboarding.scanHintCreate": "Scan with Feishu/Lark, review the permissions, then confirm creation of a new bot.",
+			"onboarding.scanHintSelect": "Scan with Feishu/Lark, choose a PersonalAgent you already own, review the permissions, then confirm binding.",
+			"onboarding.scanHintUpdate": "Scan with Feishu/Lark, review the permission changes for this bot, then confirm.",
 			"onboarding.expiresIn": "Expires in", "onboarding.openLink": "Open the authorization link on this device",
-			"onboarding.manualHint": "Advanced fields below remain available for an existing manually-created app.",
+			"onboarding.manualHint": "If the plugin is reinstalled and its saved settings are still present, it reconnects automatically. Otherwise choose the existing bot here; advanced fields below also support manually-created apps.",
 			"onboarding.loopbackOnly": "For security, bot creation is available only when this page is opened on the Host itself (localhost).",
 			"onboarding.updateConfirm": "Re-authorize App …{app} with the requested messaging, event, card, history, and reaction permissions? Feishu will show the final permission diff before applying it.",
 			"onboarding.capabilityUnavailable": "This tenant did not expose a complete permission projection; connection health is used as the final readiness check.",
@@ -974,13 +1087,17 @@ window.__ModuleLoader__.load({
 			"settings.readOnly": "当前部署为只读：GUI 无法修改设置。",
 			"settings.overridden": "已覆盖", "settings.reset": "重置", "settings.invalidNumber": "请输入有效数字",
 			"settings.discard": "放弃", "settings.save": "保存", "settings.saving": "保存中…", "settings.saveFailed": "保存失败",
-			"onboarding.title": "创建并绑定你的飞书机器人",
-			"onboarding.description": "用飞书/Lark 扫一次码，即可创建归你所有的 PersonalAgent、在本机安全保存凭据并连接；无需进入开发者后台，也没有第二次聊天配对。",
-			"onboarding.create": "创建并绑定机器人", "onboarding.rebind": "重新创建机器人", "onboarding.grant": "补开缺失权限",
+			"onboarding.title": "连接飞书机器人",
+			"onboarding.description": "可以选择你已经创建的 PersonalAgent，也可以新建一个。扫码后会在本机安全保存凭据并连接，无需进入开发者后台。",
+			"onboarding.select": "选择并绑定已有机器人", "onboarding.selectOther": "改用已有机器人",
+			"onboarding.create": "创建并绑定新机器人", "onboarding.createAnother": "再创建一个新机器人", "onboarding.grant": "补开缺失权限",
 			"onboarding.retry": "重试连接", "onboarding.cancel": "取消", "onboarding.qrAlt": "飞书 PersonalAgent 授权二维码",
-			"onboarding.qrRendering": "正在生成二维码", "onboarding.scanHint": "请用手机飞书/Lark 扫码，核对权限清单后确认创建。",
+			"onboarding.qrRendering": "正在生成二维码",
+			"onboarding.scanHintCreate": "请用手机飞书/Lark 扫码，核对权限清单后确认创建新机器人。",
+			"onboarding.scanHintSelect": "请用手机飞书/Lark 扫码，选择你已经创建的机器人，核对权限后确认绑定。",
+			"onboarding.scanHintUpdate": "请用手机飞书/Lark 扫码，核对这个机器人的权限变更后确认。",
 			"onboarding.expiresIn": "剩余", "onboarding.openLink": "在本机打开授权链接",
-			"onboarding.manualHint": "下方高级字段继续支持已有的手工自建应用。",
+			"onboarding.manualHint": "重新安装插件后，若原设置仍在会自动重连；若设置已丢失，可在这里重新选择已有机器人。下方高级字段也支持手工自建应用。",
 			"onboarding.loopbackOnly": "出于安全考虑，创建机器人只能在 Host 本机通过 localhost 打开的设置页中进行。",
 			"onboarding.updateConfirm": "确认给 App …{app} 补开本插件申请的消息、事件、卡片、历史与 reaction 权限吗？飞书会在应用前再次展示最终权限差异。",
 			"onboarding.capabilityUnavailable": "当前租户未返回完整权限投影；页面将以机器人长连接健康状态作为最终就绪依据。",
@@ -1211,6 +1328,7 @@ window.__ModuleLoader__.load({
 			}
 		}
 		exports.apply = apply;
+		exports.botPresentation = botPresentation;
 		exports.inject = inject;
 		exports.serializeBotDraft = serializeBotDraft;
 		exports.splitLegacyFeishuMessageText = splitLegacyFeishuMessageText;

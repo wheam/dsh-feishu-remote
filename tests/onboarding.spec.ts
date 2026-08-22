@@ -104,6 +104,44 @@ async function waitForPhase(service: PersonalAgentOnboardingService, phase: stri
 }
 
 describe('PersonalAgent onboarding', () => {
+  it('offers an existing-app selection flow without forcing creation or targeting one App ID', async () => {
+    const h = harness()
+    await h.service.start('select')
+    await vi.waitFor(() => expect(h.registerApp).toHaveBeenCalledOnce())
+    const request = h.registerAppMock.mock.calls[0]?.[0]
+    expect(request?.createOnly).toBeUndefined()
+    expect(request?.appId).toBeUndefined()
+    expect(h.service.status().mode).toBe('select')
+
+    h.resolveRegistration({
+      client_id: 'cli_existing',
+      client_secret: 'existing-secret',
+      user_info: { open_id: 'ou_existing_owner', tenant_brand: 'feishu' },
+    })
+    await waitForPhase(h.service, 'ready')
+    expect(h.updates[0]).toMatchObject({
+      appId: 'cli_existing',
+      allowedOpenIds: 'ou_existing_owner',
+      allowAllUsers: false,
+    })
+  })
+
+  it('keeps create mode create-only and update mode targeted to the current app', async () => {
+    const create = harness()
+    await create.service.start('create')
+    await vi.waitFor(() => expect(create.registerApp).toHaveBeenCalledOnce())
+    expect(create.registerAppMock.mock.calls[0]?.[0]).toMatchObject({ createOnly: true })
+    expect(create.registerAppMock.mock.calls[0]?.[0].appId).toBeUndefined()
+    create.service.cancel()
+
+    const update = harness({ initialSettings: { appId: 'cli_current' } })
+    await update.service.start('update')
+    await vi.waitFor(() => expect(update.registerApp).toHaveBeenCalledOnce())
+    expect(update.registerAppMock.mock.calls[0]?.[0]).toMatchObject({ appId: 'cli_current' })
+    expect(update.registerAppMock.mock.calls[0]?.[0].createOnly).toBeUndefined()
+    update.service.cancel()
+  })
+
   it('renders the QR locally, commits one atomic settings patch, and never exposes the secret', async () => {
     const h = harness()
     await h.service.start('create')

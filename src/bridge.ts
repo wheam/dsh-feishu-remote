@@ -32,7 +32,6 @@ import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-app
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { WorkspaceId, type Workspace } from '@deepseek-ai/dsh-workspace'
 import type { CardActionEvent, NormalizedMessage, ReactionEvent, SendOptions } from '@larksuiteoapi/node-sdk'
-import type { SessionGroupDescriptor, SessionGroupsService } from 'dsh-session-groups'
 import {
   buildApprovalCard,
   buildOversizeCard,
@@ -40,6 +39,7 @@ import {
   buildTurnCard,
   buildWorkspaceChooserCard,
   buildWorkspaceCreateCard,
+  buildWorkspaceUseCard,
   parseBridgeAction,
 } from './cards.js'
 import { DEFAULT_CHANNEL_FACTORY } from './channel.js'
@@ -70,7 +70,11 @@ import { OutboundScheduler, classifyOutboundError, type OutboundTask, type TaskR
 import { ProfileLoader, safeProfileError } from './profile.js'
 import { bounded, boundedUtf8Buffer, canonicalPath, redactSecrets, saveOversizedText } from './security.js'
 import { BridgeStateStore } from './state.js'
-import { resolveFeishuSessionGroup } from './session-groups.js'
+import {
+  resolveFeishuSessionGroup,
+  type SessionGroupDescriptor,
+  type SessionGroupsService,
+} from './session-groups.js'
 import {
   createWorkspacePath,
   listWorkspaceParentSuggestions,
@@ -198,7 +202,7 @@ interface PendingWorkspaceFlow {
   expectedOpenId: string
   chatId: string
   requestMessage: NormalizedMessage
-  mode: 'choose' | 'await-path' | 'await-name'
+  mode: 'choose' | 'await-path' | 'await-existing-path' | 'await-create-path' | 'await-name'
   /** The first ordinary user message waits here and is replayed after binding. */
   initialMessage?: NormalizedMessage
   parents?: WorkspaceParentSuggestion[]
@@ -1487,7 +1491,13 @@ export class FeishuRemoteBridge {
       if (flow.mode === 'await-name') {
         if (flow.selectedParent === undefined) throw new Error('新建位置已经失效，请重新执行 /workspace。')
         path = await createWorkspacePath(workspacePathForName(flow.selectedParent, text))
+      } else if (flow.mode === 'await-existing-path') {
+        path = await resolveExistingWorkspacePath(text)
+      } else if (flow.mode === 'await-create-path') {
+        path = await createWorkspacePath(text)
       } else {
+        // Backward compatibility for already-sent cards using the former
+        // combined "use existing or create missing" path prompt.
         const raw = text.replace(/^(?:工作区)?(?:用|使用)\s+/u, '').trim()
         try {
           path = await resolveExistingWorkspacePath(raw)
@@ -2860,6 +2870,10 @@ export class FeishuRemoteBridge {
     if (action === undefined) return
     if (action.action === 'workspace-select'
       || action.action === 'workspace-new'
+      || action.action === 'workspace-use'
+      || action.action === 'workspace-use-path'
+      || action.action === 'workspace-create-path'
+      || action.action === 'workspace-use-parent'
       || action.action === 'workspace-path'
       || action.action === 'workspace-parent') {
       const flow = [...this.pendingWorkspaces.values()].find(item => item.token === action.token)
@@ -2902,7 +2916,10 @@ export class FeishuRemoteBridge {
 
   private async handleWorkspaceCardAction(
     flow: PendingWorkspaceFlow,
-    action: Extract<BridgeAction, { action: 'workspace-select' | 'workspace-new' | 'workspace-path' | 'workspace-parent' }>,
+    action: Extract<BridgeAction, {
+      action: 'workspace-select' | 'workspace-new' | 'workspace-use' | 'workspace-use-path'
+        | 'workspace-create-path' | 'workspace-use-parent' | 'workspace-path' | 'workspace-parent'
+    }>,
   ): Promise<void> {
     if (this.pendingWorkspaces.get(flow.origin.key)?.token !== flow.token) return
     try {
@@ -2917,6 +2934,41 @@ export class FeishuRemoteBridge {
         flow.parents = parents
         await this.safeSend(flow.chatId, {
           card: buildWorkspaceCreateCard(flow.token, parents, flow.requestMessage.chatType === 'p2p'),
+        }, flow.requestMessage)
+        return
+      }
+      if (action.action === 'workspace-use') {
+        const folders = await listWorkspaceParentSuggestions()
+        flow.parents = folders
+        await this.safeSend(flow.chatId, {
+          card: buildWorkspaceUseCard(flow.token, folders, flow.requestMessage.chatType === 'p2p'),
+        }, flow.requestMessage)
+        return
+      }
+      if (action.action === 'workspace-use-path') {
+        flow.mode = 'await-existing-path'
+        await this.safeSend(flow.chatId, {
+          markdown: [
+            '请在下一条消息中发送 Mac 上**已经存在**的文件夹路径。',
+            '',
+            '- 这个文件夹本身会成为 Workspace，不会新建子文件夹。',
+            '- Agent 可以访问其中的全部内容。',
+            '- 支持 `/Users/...` 和 `~/...`。',
+          ].join('\n'),
+        }, flow.requestMessage)
+        return
+      }
+      if (action.action === 'workspace-create-path') {
+        flow.mode = 'await-create-path'
+        await this.safeSend(flow.chatId, {
+          markdown: [
+            '请在下一条消息中发送**项目的完整路径**。',
+            '',
+            '- 路径已存在时会直接使用。',
+            '- 路径不存在但父目录存在时，会创建最后一级项目文件夹。',
+            '- 最后一级文件夹会成为 Workspace。',
+            '- 支持 `/Users/...` 和 `~/...`。',
+          ].join('\n'),
         }, flow.requestMessage)
         return
       }
@@ -2936,12 +2988,19 @@ export class FeishuRemoteBridge {
       const parents = flow.parents ?? await listWorkspaceParentSuggestions()
       const parent = parents.find(item => item.id === action.parentId)
       if (parent === undefined) throw new Error('这个建议目录当前不可用，请重新选择。')
+      if (action.action === 'workspace-use-parent') {
+        const path = await resolveExistingWorkspacePath(parent.path)
+        const registry = this.workspaceRegistry()
+        const workspace = await registry.resolveByPath(path) ?? await registry.create(path)
+        await this.bindWorkspace(flow.requestMessage, flow.origin, workspace, flow)
+        return
+      }
       flow.parents = parents
       flow.selectedParent = parent.path
       flow.mode = 'await-name'
       const location = flow.requestMessage.chatType === 'p2p' ? `（${parent.path}）` : ''
       await this.safeSend(flow.chatId, {
-        markdown: `将在 **${parent.title}**${location} 下新建项目。请在下一条消息中发送项目名称。`,
+        markdown: `你选择的是父目录 **${parent.title}**${location}。请在下一条消息中发送项目名称；机器人会创建“父目录/项目名”并把新文件夹设为 Workspace。`,
       }, flow.requestMessage)
     } catch (error) {
       await this.safeSend(flow.chatId, { markdown: `❌ ${bounded(errorMessage(error), 700)}` }, flow.requestMessage)

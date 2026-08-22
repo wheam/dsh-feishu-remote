@@ -35,8 +35,12 @@ Lark Coding Agent Bridge 已验证的 OAuth 2.0 Device Authorization Grant（RFC
 - `registerApp(options): Promise<{ client_id, client_secret, user_info? }>`；
 - `appPreset`：预填应用头像、名称、描述，名称/描述支持 `{user}`；
 - `addons`：增量声明应用/用户权限、事件订阅和卡片回调；
-- `createOnly`：首次开通时隐藏「选择已有应用」，避免误改用户现有应用；
-- `appId`：对已有 PersonalAgent 做增量授权，可用于未来「补开权限」。
+- `createOnly`：明确创建新应用时隐藏「选择已有应用」；省略时可在飞书确认页选择已有应用；
+- `appId`：对已绑定的 PersonalAgent 做增量授权，用于「补开权限」。
+
+设置页把三种意图分开：`select` 省略 `createOnly` 和 `appId`，让用户选择自己已有的
+PersonalAgent；`create` 使用 `createOnly: true`，保证新建；`update` 携带当前 `appId`，只给
+当前机器人补权。
 
 SDK 的 `addons` 仅接受五类公开配置：应用/用户身份权限、应用/用户身份事件、回调。
 事件订阅方式、回调 URL、`security.*` 和加密 key 不能放入二维码。PersonalAgent 模板负责
@@ -298,8 +302,8 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 - 二维码 URL 含短期 device/user code，按凭据处理：不进持久日志、不发遥测、不复制到第三方；
 - App Secret 仅在 Host 内存短暂停留并写入 credential provider；浏览器永远不可见；
 - owner 未确认前访问控制保持关闭，绝不采用 TOFU「首个消息发送者」；
-- `registerApp({ appId })` 会变更已有飞书应用权限，必须展示应用 ID 尾部与权限 diff，并由用户
-  明确确认；首次开通默认 `createOnly: true`；
+- 选择或更新已有飞书应用会变更其权限，必须由用户在飞书确认页核对应用与权限差异并明确确认；
+  只有明确点击「创建新机器人」时才传 `createOnly: true`；
 - 不自动删除/转移飞书应用，不自动开放群或其他用户；
 - 所有外部权限以扫码确认页和连接后实际探测为准，不能仅依赖本地期望清单。
 

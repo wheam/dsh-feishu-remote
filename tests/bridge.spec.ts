@@ -17,7 +17,7 @@ import { OutboundScheduler } from '../src/scheduler.js'
 import type { ProfileLoader } from '../src/profile.js'
 import type { LarkChannelLike, ProfileSnapshot, ResolvedConfig } from '../src/types.js'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
-import type { SessionGroupDescriptor } from 'dsh-session-groups'
+import type { SessionGroupDescriptor } from '../src/session-groups.js'
 
 // ---------------------------------------------------------------- fakes
 
@@ -1357,9 +1357,11 @@ describe('session creation and mapping', () => {
     h.channel.chatModes.set('oc_grp', 'group')
 
     await h.emitMessage('held group task', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
-    await waitFor(() => cardActionFromChannel(h, 'workspace-path') !== undefined)
-    await h.emitCardAction(cardActionFromChannel(h, 'workspace-path')!, 'ou_1', 'oc_grp')
-    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('完整文件夹路径')))
+    await waitFor(() => cardActionFromChannel(h, 'workspace-use') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-use')!, 'ou_1', 'oc_grp')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-use-path') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-use-path')!, 'ou_1', 'oc_grp')
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('已经存在')))
     await h.emitMessage('second member task', {
       chatId: 'oc_grp', chatType: 'group', senderId: 'ou_2', mentionedBot: true,
     })
@@ -1392,22 +1394,68 @@ describe('session creation and mapping', () => {
     expect(h.agents.created).toHaveLength(0)
   })
 
-  it('accepts a custom path from the chooser, creates it, and continues the held prompt', async () => {
+  it('uses an existing custom folder directly and continues the held prompt', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
+
+    await h.emitMessage('held task')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-use') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-use')!)
+    await waitFor(() => cardActionFromChannel(h, 'workspace-use-path') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-use-path')!)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('已经存在')))
+    await h.emitMessage(otherPath)
+    await waitFor(() => h.agents.created.length === 1)
+
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: otherPath })
+    expect(JSON.stringify(h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!.followups[0])).toContain('held task')
+  })
+
+  it('uses a common folder itself with one click instead of creating a child project', async () => {
+    const h = await makeHarness()
+    const otherPath = await tempWorkspace()
+    h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Downloads'))
+
+    await h.emitMessage('held common-folder task')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-use') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-use')!)
+    await waitFor(() => cardActionFromChannel(h, 'workspace-use-path') !== undefined)
+    const flows = Reflect.get(h.bridge, 'pendingWorkspaces') as Map<string, {
+      token: string
+      parents?: Array<{ id: string; title: string; path: string; recommended: boolean }>
+    }>
+    const flow = flows.get('p2p:oc_p2p')!
+    flow.parents = [{ id: 'downloads', title: '下载 / Downloads', path: otherPath, recommended: false }]
+    await h.emitCardAction({
+      bridge: 'dsh-feishu-remote', action: 'workspace-use-parent', token: flow.token, parentId: 'downloads',
+    })
+    await waitFor(() => h.agents.created.length === 1)
+
+    expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: otherPath })
+    expect(JSON.stringify(h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!.followups[0]))
+      .toContain('held common-folder task')
+  })
+
+  it('creates a custom full project path from the explicit new-project flow', async () => {
     const h = await makeHarness()
     const otherPath = await tempWorkspace()
     h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
     const target = join(h.workspace, 'Fresh Project')
 
-    await h.emitMessage('held task')
-    await waitFor(() => cardActionFromChannel(h, 'workspace-path') !== undefined)
-    await h.emitCardAction(cardActionFromChannel(h, 'workspace-path')!)
-    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('完整文件夹路径')))
+    await h.emitMessage('held create task')
+    await waitFor(() => cardActionFromChannel(h, 'workspace-new') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-new')!)
+    await waitFor(() => cardActionFromChannel(h, 'workspace-create-path') !== undefined)
+    await h.emitCardAction(cardActionFromChannel(h, 'workspace-create-path')!)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('项目的完整路径')))
     await h.emitMessage(target)
     await waitFor(() => h.agents.created.length === 1)
 
     expect(h.agents.created[0]!.options.meta).toMatchObject({ cwd: target })
     await expect(stat(target).then(info => info.isDirectory())).resolves.toBe(true)
-    expect(JSON.stringify(h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!.followups[0])).toContain('held task')
+    expect(JSON.stringify(h.agents.live.get(String(h.agents.created[0]!.options.sessionId))!.followups[0]))
+      .toContain('held create task')
   })
 
   it('creates a named Workspace under a selected suggested parent and replays the held prompt', async () => {

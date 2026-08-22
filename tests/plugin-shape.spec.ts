@@ -21,6 +21,7 @@ describe('dsh-feishu-remote loader contract', () => {
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string } }
       keywords?: string[]
       peerDependencies?: Record<string, string>
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>
       dependencies?: Record<string, string>
       devDependencies?: Record<string, string>
     }
@@ -32,6 +33,12 @@ describe('dsh-feishu-remote loader contract', () => {
     expect(manifest.peerDependencies?.['@deepseek-ai/dsh-user-approval']).toBe('0.1.1-rc.2')
     expect(manifest.devDependencies?.qrcode).toBe('1.5.4')
     expect(manifest.dependencies?.qrcode).toBeUndefined()
+    expect(manifest.peerDependencies?.['dsh-session-groups']).toBeUndefined()
+    expect(manifest.peerDependenciesMeta?.['dsh-session-groups']).toBeUndefined()
+    expect(manifest.devDependencies?.['dsh-session-groups']).toBeUndefined()
+    expect(manifest.dependencies?.['dsh-session-groups']).toBeUndefined()
+    const lockfile = readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8')
+    expect(lockfile).not.toContain('dsh-session-groups')
     const bundlePatch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
     expect(bundlePatch).toContain('name: dsh-feishu-remote')
     expect(bundlePatch).toContain('disabled: false')

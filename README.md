@@ -88,19 +88,14 @@ DSH 仍处于 RC 阶段，相邻 RC 版本可能包含破坏性变化。安装�
 - DeepSeek Harness `0.1.1-rc.2`；
 - Node.js 22 或更高版本；
 - pnpm `11.22.0`（`dsh plugin` 本身也会调用 pnpm）；
-- 能访问飞书/Lark 的网络；
-- 对本仓库及 [`dsh-session-groups`](https://github.com/wheam/dsh-session-groups) 的读取权限。
+- 能访问飞书/Lark 的网络。
 
-> 为什么还要克隆 `dsh-session-groups`？它在运行时是可选插件，但当前源码构建会从同级目录读取
-> 它的公开 TypeScript 类型。只想使用飞书遥控时仍需克隆它来完成构建，但不必把它安装进 DSH。
-
-建议把两个仓库放在同一父目录：
+克隆本仓库：
 
 ```bash
 mkdir -p ~/Developer/dsh-plugins
 cd ~/Developer/dsh-plugins
 
-git clone https://github.com/wheam/dsh-session-groups.git
 git clone https://github.com/wheam/dsh-feishu-remote.git
 cd dsh-feishu-remote
 ```
@@ -151,22 +146,26 @@ dsh plugin --profile web add "link:$DSH_FEISHU_PLUGIN_DIR"
 
 不要同时启动两个占用同一端口的 `dsh web` 进程。
 
-### 5. 创建并绑定飞书机器人
+### 5. 选择已有机器人或创建新机器人
 
 在 **Host 本机**打开 Web GUI：
 
 1. 进入设置中的「飞书遥控（dsh-feishu-remote）」；
-2. 点击「创建并绑定机器人」；
+2. 已经创建过 PersonalAgent 时，点击「选择并绑定已有机器人」；首次使用也可以点击「创建并绑定新机器人」；
 3. 用手机飞书或 Lark 扫码；
-4. 核对权限、事件和卡片回调后确认；
+4. 选择已有机器人或确认创建新机器人，并核对权限、事件和卡片回调；
 5. 等待页面显示「已连接」。
 
 扫码入口只允许从 Host 本机的 `localhost` 页面调用。通过 LAN 或 Tailscale 打开的设置页可以查看
 状态，但不能发起创建或补权，这是防止远端页面接触短期二维码和本机凭据写入能力的安全边界。
 
-扫码会创建归扫码者所有的 PersonalAgent，将 App Secret 写入 DSH 管理的
+选择已有机器人时不会重复创建应用；创建新机器人会生成归扫码者所有的 PersonalAgent。两种流程都会将 App Secret 写入 DSH 管理的
 `~/.dsh/.credentials.yaml`，并把扫码者的 `open_id` 设为初始白名单。Secret 不会返回浏览器，
 也不会写入 `cordis.patch.yml`。
+
+卸载插件不会删除飞书侧应用、`~/.dsh/.credentials.yaml` 中的凭据或插件状态。重新安装后，如果
+原设置仍在，插件会直接重连原机器人；如果设置已被清空，可再次扫码并选择原来的机器人，无需
+再创建一个。
 
 > PersonalAgent 扫码链路已完成自动化验证，但真实租户全矩阵仍在验收中。如果租户不支持所需
 > 能力、扫码失败，或你已经有企业自建应用，请使用下面的[手工配置](#手工配置已有飞书应用)。
@@ -409,7 +408,6 @@ API key、密码或不希望发送给模型的内容。
 
 ```bash
 git pull --ff-only
-git -C ../dsh-session-groups pull --ff-only
 pnpm install --frozen-lockfile
 pnpm run check
 ```
@@ -445,19 +443,6 @@ dsh --profile web --dump-config
 确认已经运行 `pnpm run check`、插件行未被禁用，并在浏览器 DevTools 控制台检查
 `Failed to load plugins` 或 slot/key 错误。RC 版本不一致时先停止操作，不要只改
 `peerDependencies` 绕过兼容闸。
-
-### 构建提示找不到 `dsh-session-groups`
-
-确认两个仓库是同级目录：
-
-```text
-dsh-plugins/
-├── dsh-feishu-remote/
-└── dsh-session-groups/
-    └── packages/dsh-session-groups/
-```
-
-然后重新运行 `pnpm install --frozen-lockfile && pnpm run check`。
 
 ### 机器人没有响应
 

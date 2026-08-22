@@ -1,8 +1,27 @@
-/** Feishu provider for the generic dsh-session-groups sidecar service. */
+/** Feishu provider for an optional, structurally-compatible Session grouping service. */
 import { createHash } from 'node:crypto'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk'
-import type { SessionGroupDescriptor, SessionGroupId } from 'dsh-session-groups'
 import type { LarkChannelLike } from './types.js'
+
+declare const SESSION_GROUP_ID_BRAND: unique symbol
+
+/** Stable provider-owned identity for one communication source/chat. */
+export type SessionGroupId = string & { readonly [SESSION_GROUP_ID_BRAND]: 'SessionGroupId' }
+
+/** Runtime JSON contract accepted by compatible Session grouping sidecars. */
+export interface SessionGroupDescriptor {
+  readonly id: SessionGroupId
+  readonly title: string
+  readonly source: string
+  readonly kind?: string
+}
+
+/** Minimal optional Host service used by this plugin; no sidecar package is required to build. */
+export interface SessionGroupsService {
+  assign(sessionId: SessionId, descriptor: SessionGroupDescriptor): Promise<void>
+  unassign(sessionId: SessionId): Promise<void>
+}
 
 type GroupLookupChannel = Pick<LarkChannelLike, 'getMessage' | 'getChatInfo'>
 const GROUP_METADATA_TIMEOUT_MS = 2_000

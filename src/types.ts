@@ -141,6 +141,11 @@ export type BridgeAction =
   | { bridge: 'dsh-feishu-remote'; action: 'approval'; token: string; decision: 'allow' | 'reject' }
   | { bridge: 'dsh-feishu-remote'; action: 'workspace-select'; token: string; workspaceId: string }
   | { bridge: 'dsh-feishu-remote'; action: 'workspace-new'; token: string }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-use'; token: string }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-use-path'; token: string }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-create-path'; token: string }
+  | { bridge: 'dsh-feishu-remote'; action: 'workspace-use-parent'; token: string; parentId: string }
+  /** Legacy combined existing-or-create path action kept for already-sent cards. */
   | { bridge: 'dsh-feishu-remote'; action: 'workspace-path'; token: string }
   | { bridge: 'dsh-feishu-remote'; action: 'workspace-parent'; token: string; parentId: string }
 

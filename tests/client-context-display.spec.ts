@@ -54,3 +54,50 @@ describe('multi-bot editor serialization', () => {
     })
   })
 })
+
+describe('multi-bot editor presentation', () => {
+  const present = loadClientExports().botPresentation as (
+    bot: Record<string, unknown>,
+    index: number,
+    status: Record<string, unknown> | undefined,
+  ) => Record<string, unknown>
+
+  it('uses a human name, masks the App ID, and translates runtime status', () => {
+    expect(present(
+      { id: 'cli-aa00a7baf7f8dbe8', appId: 'cli_aa00a7baf7f8dbe8', appSecretRef: 'REF', sessionNamespace: 'legacy' },
+      0,
+      { connected: true, liveAgents: 0, status: 'connected' },
+    )).toEqual({
+      name: '主机器人',
+      appLabel: 'App ID：cli_…f8dbe8',
+      statusLabel: '已连接',
+      statusTone: 'ok',
+      detail: '连接正常 · 当前运行 0 个任务',
+    })
+  })
+
+  it('explains disabled and disconnected bots without raw runtime jargon', () => {
+    expect(present({ enabled: false, appId: '' }, 1, undefined)).toMatchObject({
+      name: '新机器人', statusLabel: '已停用', detail: '这个机器人当前已停用。',
+    })
+    expect(present({ enabled: true, appId: 'cli_short', appSecretRef: 'REF' }, 1, { connected: false, status: 'disabled', liveAgents: 0 })).toMatchObject({
+      name: '机器人 2', appLabel: 'App ID：cli_short', statusLabel: '未连接',
+    })
+  })
+
+  it('uses theme tokens so labels remain readable in light and dark themes', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('color:var(--dsw-alias-label-primary)!important')
+    expect(source).not.toContain('color:#f2f6ff!important')
+  })
+})
+
+describe('PersonalAgent onboarding presentation', () => {
+  it('separates choosing an existing bot from creating a new bot', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('props.onboardingStart("select")')
+    expect(source).toContain('"onboarding.select": "选择并绑定已有机器人"')
+    expect(source).toContain('"onboarding.create": "创建并绑定新机器人"')
+    expect(source).toContain('选择你已经创建的机器人')
+  })
+})
