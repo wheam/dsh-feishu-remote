@@ -47,7 +47,7 @@
   config:
     appId: 'cli_xxxx'
     allowedOpenIds: ['ou_xxxx']   # 白名单外消息会在宿主日志回显 open_id 供自举
-    allowedChatIds: []            # 空 = 群聊全拒；把机器人拉进群后填 oc_xxxx 开启
+    allowedChatIds: []            # 空 = 任意已加入群可用；填写 oc_xxxx 可选地限制群范围
     cwd: '/Users/you/work'
     workspaceRoot: '/Users/you/work'
 ```
@@ -67,7 +67,8 @@
 
 1. 飞书完成一次需审批的真实任务，会话出现在 Web GUI 列表。
 2. 断网重连后长连接恢复；未结审批按状态机结算（六条路径均有单测，租户内抽查按钮/文字两条）。
-3. 白名单外 open_id 无法驱动任何操作；空配置拒绝一切；未授权群 @机器人被拒。
+3. 白名单外 open_id 无法驱动任何操作；空 `allowedOpenIds` 拒绝一切；默认可在机器人加入的
+   任意群 @使用；配置非空 `allowedChatIds` 时，列表外群被拒。
 4. 连续发消息观察卡片更新频率（约 600ms 一次，全局限速）；断网期间发消息 → 重连后终态送达。
 5. 飞书会话具备 preset 工具能力（让 agent 执行一个 bash/fs 任务验证）。
 6. Web GUI 打开飞书会话发言 → 其审批回 GUI；飞书回合审批只到飞书卡（双向隔离）。

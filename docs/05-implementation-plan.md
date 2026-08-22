@@ -207,9 +207,9 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    - 白名单 **fail-closed**：`allowedOpenIds` 为空时拒绝一切；仅显式
      `allowAllUsers: true` 且带启动警告时才开放（mock/echo 环境可开）。
    - P0 群聊范围：私聊 + 群聊话题，每条消息必须 @机器人（最小权限
-     `group_at_msg:readonly`）；**群范围 fail-closed：`allowedChatIds` 为空=群聊全拒、
-     仅私聊可用**——@ 是投递条件不是授权条件，owner 在机器人所在任意群执行会向该群
-     公开输出；话题内免 @ 留 P1（更高权限）。
+     `group_at_msg:readonly`）；群范围默认不限，机器人加入任意群后 owner 都可使用，
+     非空 `allowedChatIds` 可选地收窄范围。@ 是投递条件，`allowedOpenIds` 才是操作者
+     授权边界；输出会向所在群公开；话题内免 @ 留 P1（更高权限）。
    - 卡片 pending 记录绑定 appId/chatId/messageId/operatorOpenId/sessionId/callId/
      deadline，处理即原子删除；错误操作者/跨群/过期留审计日志（重复点击被 SDK 去重，
      到不了插件，由文字兜底覆盖）。
@@ -242,7 +242,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 | 步骤 | 内容 | 验收 |
 | --- | --- | --- |
 | 0 | 环境前置（Node ≥22 / pnpm）+ 仓库骨架 + `security/state/cards` 移植 + lark-bridge 测试搬来跑绿 | vitest 全绿 + 裁剪后契约测试（队列/provider/映射/权限语义已变，不能只跑上游测试） |
-| 1 | **echo spike**：空壳 cordis 插件 + SDK 通道（batch/chatQueue 关闭）+ fail-closed 白名单（含 `allowedChatIds`）→ 飞书发什么回什么 | 手机发消息，Mac 回显；断网重连可用；群话题/群非话题/p2p 三态行为正确；应用形态（个人应用 vs 企业自建）定案并文档固化 |
+| 1 | **echo spike**：空壳 cordis 插件 + SDK 通道（batch/chatQueue 关闭）+ fail-closed 发送者白名单（`allowedChatIds` 可选收窄群范围）→ 飞书发什么回什么 | 手机发消息，Mac 回显；断网重连可用；群话题/群非话题/p2p 三态行为正确；应用形态（个人应用 vs 企业自建）定案并文档固化 |
 | 2 | **共存 spike**：web profile 内创建带 preset 的飞书 session（有工具）；answerer `prepend` 生效且双向隔离（飞书回合审批只到飞书卡、GUI 回合审批只回 GUI）；飞书会话无通往浏览器的提问路径（ask-user 被拒） | 三项都有可复现证据 |
 | 3 | 单会话对话：create/resume + followup + whenIdle + 全文回复（暂不流式） | 飞书会话出现在 Web GUI 列表；GUI 对飞书会话发言=双写回合（输出按 session 流、审批回 GUI） |
 | 4 | **审批闭环**：answerer（prepend）+ 卡片 + 五条结算路径 + 断线/崩溃/通道终态失效状态机 + 终态 updateCard | 飞书完成一次需审批的真实任务；按钮重复点击被去重但文字兜底可用 |
@@ -256,8 +256,8 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 
 1. **会话范围**：飞书只管理自己创建的会话，与 GUI 同列表共享；不接管 GUI 已有会话。
 2. **白名单默认**：fail-closed；显式 `allowAllUsers: true` 才开放。
-3. **群聊范围**：P0 = 私聊 + 群聊话题，每条消息需 @机器人；群范围 fail-closed
-   （`allowedChatIds` 空=群聊全拒）；免 @ 留 P1。
+3. **群聊范围**：P0 = 私聊 + 群聊话题，每条消息需 @机器人；默认允许机器人加入的
+   任意群，非空 `allowedChatIds` 才限制到指定群；免 @ 留 P1。
 4. **工作目录**：`workspaceRoot/cwd` 配置必填；创建时持久化、恢复时校验一致、
    `/status` 展示。
 5. **代码基形态**：新仓选择性移植（默认，非 fork；如无异议按此执行），CI/测试
@@ -272,7 +272,8 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 1. 人在外面，用飞书指挥 Mac 完成一次**需要审批**的真实任务，会话同步出现在 Web GUI
    会话列表（架构文档里程碑不变）。
 2. 断网重连后长连接恢复；未结审批按 §2.3 状态机结算（六条路径各有测试，含通道终态失效）。
-3. 白名单外的 open_id 无法驱动任何操作；空配置=拒绝一切；owner 在未授权群 @机器人被拒。
+3. 白名单外的 open_id 无法驱动任何操作；空 `allowedOpenIds` = 拒绝一切；owner 在机器人
+   新加入的群可直接 @使用；配置非空 `allowedChatIds` 时，列表外群被拒。
 4. 全局出站速率受限（不随会话数线性放大）；429/限流码可恢复；目标仍可写时终态最终
    送达，否则有持久审计与显式失败状态；30KB/14 天边界有兜底。
 5. 飞书 agent 具备部署 preset 的工具能力（bash/fs/skill 等按 preset 挂载）；飞书会话上

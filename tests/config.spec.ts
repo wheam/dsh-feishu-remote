@@ -8,7 +8,7 @@ const BASE = {
   workspaceRoot: '/tmp/workspace',
 }
 
-describe('resolveConfig (single project, fail-closed)', () => {
+describe('resolveConfig (single project, fail-closed sender access)', () => {
   it('resolves required fields with defaults', () => {
     const config = resolveConfig(BASE)
     expect(config.appId).toBe('cli_test')

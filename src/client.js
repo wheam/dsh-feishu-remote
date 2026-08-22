@@ -488,7 +488,7 @@ window.__ModuleLoader__.load({
 
 		const en = {
 			"settings.title": "Feishu Remote (dsh-feishu-remote)",
-			"settings.description": "Control the running DeepSeek Harness from a Feishu bot — thread-per-session, approval cards, fail-closed allowlists.",
+			"settings.description": "Control the running DeepSeek Harness from a Feishu bot — thread-per-session, approval cards, fail-closed sender allowlist.",
 			"settings.expand": "Expand", "settings.collapse": "Collapse", "settings.unsaved": "Unsaved changes",
 			"settings.readOnly": "This deployment is read-only: settings cannot be changed from the GUI.",
 			"settings.overridden": "Override", "settings.reset": "Reset", "settings.invalidNumber": "Enter a valid number",
@@ -504,7 +504,7 @@ window.__ModuleLoader__.load({
 			"f.appId": "App id", "f.appIdHint": "App id of the Feishu/Lark custom app (cli_…).",
 			"f.appSecretRef": "App secret credential ref", "f.appSecretRefHint": "Name of the credential in .credentials.yaml (the single secret source; the value itself is never edited here).",
 			"f.allowedOpenIds": "Allowed open ids", "f.allowedOpenIdsHint": "Comma-separated ou_… ids. Empty = EVERYONE is rejected (fail-closed); only allowAllUsers opens it.",
-			"f.allowedChatIds": "Allowed group chat ids", "f.allowedChatIdsHint": "Comma-separated oc_… group ids. Empty = group chats refused (fail-closed); private chats still work.",
+			"f.allowedChatIds": "Restrict to group chat ids", "f.allowedChatIdsHint": "Optional comma-separated oc_… ids. Empty = every group the bot joins; non-empty = only those groups.",
 			"f.allowAllUsers": "Allow all users", "f.allowAllUsersHint": "DANGEROUS: opens the remote executor to every sender. Only for mock/test environments.",
 			"f.requireMention": "Require @mention in groups", "f.requireMentionHint": "P0 keeps the group_at_msg:readonly permission: every group message must @ the bot.",
 			"f.cwd": "Working directory", "f.cwdHint": "REQUIRED absolute cwd for agent sessions. Must live inside workspaceRoot.",
@@ -528,7 +528,7 @@ window.__ModuleLoader__.load({
 
 		const zh = {
 			"settings.title": "飞书遥控（dsh-feishu-remote）",
-			"settings.description": "用飞书机器人操控正在运行的 DeepSeek Harness：话题级会话、审批卡片、fail-closed 白名单。",
+			"settings.description": "用飞书机器人操控正在运行的 DeepSeek Harness：话题级会话、审批卡片、fail-closed 发送者白名单。",
 			"settings.expand": "展开", "settings.collapse": "收起", "settings.unsaved": "有未保存的修改",
 			"settings.readOnly": "当前部署为只读：GUI 无法修改设置。",
 			"settings.overridden": "已覆盖", "settings.reset": "重置", "settings.invalidNumber": "请输入有效数字",
@@ -544,7 +544,7 @@ window.__ModuleLoader__.load({
 			"f.appId": "App ID", "f.appIdHint": "飞书/Lark 自建应用的 App ID（cli_…）。",
 			"f.appSecretRef": "App Secret 凭据引用", "f.appSecretRefHint": ".credentials.yaml 中的凭据名（唯一凭据来源；值本身不在这里编辑）。",
 			"f.allowedOpenIds": "允许的 open_id", "f.allowedOpenIdsHint": "逗号分隔的 ou_…。留空 = 拒绝所有人（fail-closed）；只有 allowAllUsers 显式开启才全开放。",
-			"f.allowedChatIds": "允许的群聊 ID", "f.allowedChatIdsHint": "逗号分隔的 oc_…。留空 = 群聊全拒（fail-closed）；私聊不受影响。",
+			"f.allowedChatIds": "限定群聊 ID", "f.allowedChatIdsHint": "可选，逗号分隔的 oc_…。留空 = 机器人加入的任意群都可用；填写后仅限这些群。",
 			"f.allowAllUsers": "允许所有用户", "f.allowAllUsersHint": "危险：把远程执行入口开放给所有发送者。仅建议 mock/测试环境开启。",
 			"f.requireMention": "群聊必须 @机器人", "f.requireMentionHint": "P0 维持 group_at_msg:readonly 最小权限：每条群消息都必须 @机器人。",
 			"f.cwd": "工作目录", "f.cwdHint": "必填的绝对路径；必须在 workspaceRoot 之内。",

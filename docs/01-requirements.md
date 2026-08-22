@@ -18,7 +18,7 @@
 
 1. **内嵌当前服务**：插件运行在 `dsh web` profile 进程内；飞书创建的会话与 Web GUI 会话列表是同一批（共享存储）。
 2. **飞书长连接**：官方 WebSocket 长连接模式，无公网回调地址；国际版 Lark 通过品牌参数支持（后置）。
-3. **白名单**：仅允许本人 open_id 驱动 agent；**fail-closed**——空配置 = 拒绝一切，仅显式 `allowAllUsers: true` 才全开放（mock/echo 环境除外）。群聊另受 `allowedChatIds` fail-closed 约束（空 = 仅私聊可用）；白名单外消息在日志回显发送者 open_id 供自举。
+3. **白名单**：仅允许本人 open_id 驱动 agent；**fail-closed**——空配置 = 拒绝一切，仅显式 `allowAllUsers: true` 才全开放（mock/echo 环境除外）。群范围默认不限：机器人加入任意群后，白名单内用户均可在话题中 @它；非空 `allowedChatIds` 可选地将部署收窄到指定群。白名单外消息在日志回显发送者 open_id 供自举。
 4. **多会话**：飞书话题/线程 ↔ dsh session 一一映射；群内多话题并行互不干扰；`/new` 显式开新会话；群内非话题消息拒绝并提示"请在话题内 @我"。
 5. **审批闭环**：agent 请求审批 → 飞书卡片（批准/拒绝按钮）→ 回调 respond；文字兜底 `/approve` `/reject`（按钮重复点击被 SDK 去重，文字兜底是必需路径）。结构化提问移 P1（飞书会话屏蔽 ask-user 类工具，避免问题打进浏览器导致远端挂起）。
 6. **基本会话操作**：`/status` `/stop` `/resume` `/sessions` `/new` `/approve` `/reject` `/steer` `/help`。
@@ -42,7 +42,7 @@
 
 ## 非目标（明确不做）
 
-- 团队多用户 / 权限体系（配对码、多人绑定；`allowedChatIds` 群 allowlist 属单用户安全边界，不在其列）
+- 团队多用户 / 权限体系（配对码、多人绑定；`allowedChatIds` 只是可选的部署范围限制）
 - 多项目（目录）绑定
 - 企业微信 / Telegram（首版不做）
 - 独立移动端 UI（已另议，不混入本项目）

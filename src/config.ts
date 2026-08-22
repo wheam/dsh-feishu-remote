@@ -2,10 +2,10 @@
  * Configuration — single-project schema. `cwd` and `workspaceRoot` are
  * REQUIRED (docs/05 §5.4): a remote executor must never operate on an
  * accidental process cwd. Credentials resolve through the Harness credential
- * provider (`.credentials.yaml` is the single secret source); allowlists are
- * fail-closed: empty `allowedOpenIds` rejects everyone unless
- * `allowAllUsers: true` is explicit, and empty `allowedChatIds` refuses all
- * group chats.
+ * provider (`.credentials.yaml` is the single secret source); the sender
+ * allowlist is fail-closed: empty `allowedOpenIds` rejects everyone unless
+ * `allowAllUsers: true` is explicit. Group scope is open by default; a
+ * non-empty `allowedChatIds` optionally narrows the bot to selected groups.
  */
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -22,6 +22,7 @@ export interface Config {
   brand?: LarkBrand
   statePath?: string
   allowedOpenIds?: string[]
+  /** Optional group restriction. Empty means every group the bot joins. */
   allowedChatIds?: string[]
   allowAllUsers?: boolean
   requireMention?: boolean

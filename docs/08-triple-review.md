@@ -14,7 +14,7 @@
 | 2 | **userQuestions 死锁**：standard preset 自带 `tool-ask-user`、plan mode 的 `exit_plan_mode` 同走该服务；全局 provider 无超时 → 问题打进没人看的浏览器、远端无限挂起（降 P1 关不掉这条路） | P0：setup 内先 mount 再 `tools.restrict({deny:['ask_user_question','exit_plan_mode']})`；备选专用 feishu preset；P1 再做 multiplexer | 05 §2.4、01 P0.5/P1、03 D8、步骤 2 |
 | 3 | **GUI 反向接管未定义**：GUI 打开飞书会话默认可行（apiproxy 复用 live agent），其回合审批会被飞书 answerer 抢走 | 回合归属账本：本插件 followup 记录回合发起方；answerer 只认领飞书回合；GUI 回合输出按 session 流（同一人双端操作，文档化）；双向隔离验收 | 05 §2.1/§2.3/§6、01 目标、步骤 2/3 |
 | 4 | **originKey 公式错误**：`chatId + (thread_id ?? root_id)` 无 chatType 分支、无 messageId 兜底；非话题群消息行为未定义（session 塌缩或爆炸） | 三支路：p2p→`p2p:<chatId>`；群话题→`group:<chatId>:thread:<thread_id>`；群非话题→P0 拒绝并提示"请在话题内 @我" | 05 §2.6、03 D2、01 P0.4、步骤 1/5 |
-| 5 | **群范围 fail-open**：只有 open_id 白名单，owner 可在机器人所在任意群执行并向该群公开输出（@ 是投递条件不是授权条件） | `allowedChatIds` fail-closed（空=群聊全拒、仅私聊）；验收加"未授权群 @ 被拒" | 05 §2.9/§5.3/§6、01 P0.3、03 D5 |
+| 5 | **群范围 fail-open**：只有 open_id 白名单，owner 可在机器人所在任意群执行并向该群公开输出（@ 是投递条件不是授权条件） | 当时采纳 `allowedChatIds` fail-closed；**2026-08-22 产品决策覆盖此项**：群范围默认不限，仍由 open_id 白名单限制操作者，非空 `allowedChatIds` 可选收窄 | 05 §2.9/§5.3/§6、01 P0.3、03 D5 |
 | 6 | **apply() 拖崩 profile**：照抄参考实现 await connect，飞书连不上时 loader 将 apply 异常放大为整树回滚，web GUI 一起挂 | `apply()` 只做同步注册、永不 reject；channel 连接放 ctx.effect 后台任务自带重试 | 05 §3、03 D1 |
 
 ## 二、共识 P1（已修）

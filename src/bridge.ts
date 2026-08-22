@@ -12,7 +12,7 @@
  * - per-origin control queue; `/stop` = `cancel({kind:'user'}, {keepInbox:true})`
  * - mutable cards via `session/event` with ~1s throttled updates, step-level
  *   chunk/final replacement, seq watermark dedup, terminal outcome mapping (D4/§2.5)
- * - fail-closed allowlists; ask-user tools are restricted on Feishu sessions
+ * - fail-closed sender allowlist + optional group restriction; ask-user tools are restricted on Feishu sessions
  *   (no browser-routed questions; D5/D8/§2.4)
  * - every outbound API call flows through the application-level scheduler (D7)
  */
@@ -671,9 +671,13 @@ export class FeishuRemoteBridge {
       )
       return
     }
-    if (message.chatType === 'group' && !this.config.allowedChatIds.includes(message.chatId)) {
-      this.ctx.logger?.warn?.('dsh-feishu-remote: 已拒绝未授权群聊（fail-closed）：chat=%s sender=%s', message.chatId, message.senderId)
-      void this.safeSend(message.chatId, { markdown: '该群未被授权使用本机器人（allowedChatIds fail-closed）。' }, message)
+    if (
+      message.chatType === 'group'
+      && this.config.allowedChatIds.length > 0
+      && !this.config.allowedChatIds.includes(message.chatId)
+    ) {
+      this.ctx.logger?.warn?.('dsh-feishu-remote: 已拒绝群聊（不在显式 allowedChatIds 中）：chat=%s sender=%s', message.chatId, message.senderId)
+      void this.safeSend(message.chatId, { markdown: '该群不在本机器人的限定群列表中。' }, message)
       return
     }
     const origin = originOf(message)

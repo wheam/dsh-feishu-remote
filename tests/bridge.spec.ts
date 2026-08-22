@@ -492,7 +492,7 @@ describe('bridge lifecycle and answerer ordering', () => {
   })
 })
 
-describe('fail-closed allowlists', () => {
+describe('sender allowlist and optional group restriction', () => {
   it('rejects unauthorized open_ids without any session work', async () => {
     const h = await makeHarness()
     await h.emitMessage('hello', { senderId: 'ou_stranger' })
@@ -502,11 +502,18 @@ describe('fail-closed allowlists', () => {
     expect(h.ctx.logger.warn.mock.calls.some(call => String(call[1]).includes('ou_stranger'))).toBe(true)
   })
 
-  it('rejects group chats outside allowedChatIds even when the sender is allowed', async () => {
+  it('allows any group by default when allowedChatIds is empty', async () => {
+    const h = await makeHarness({ allowedChatIds: [] })
+    await h.emitMessage('hi', { chatId: 'oc_other_group', chatType: 'group', threadId: 'omt_1' })
+    await waitFor(() => h.agents.created.length === 1)
+    expect(h.channel.sent.some(item => String(item.input.markdown).includes('限定群列表'))).toBe(false)
+  })
+
+  it('rejects groups outside a non-empty allowedChatIds restriction', async () => {
     const h = await makeHarness()
     await h.emitMessage('hi', { chatId: 'oc_other_group', chatType: 'group', threadId: 'omt_1' })
     await waitFor(() => h.channel.sent.length > 0)
-    expect(String(h.channel.sent[0]!.input.markdown)).toContain('未被授权')
+    expect(String(h.channel.sent[0]!.input.markdown)).toContain('限定群列表')
     expect(h.agents.created).toHaveLength(0)
   })
 

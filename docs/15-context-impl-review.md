@@ -32,7 +32,7 @@
 
 - /tmp 副本 `pnpm run check`：typecheck + 11 spec + build 全绿；bundle 2,529,810 bytes，未含 CLI 包代码。
 - CLI 参数含 `--page-all --page-limit 4 --no-reactions --as bot --format json`；`contextMode:off`
-  与命令 guard 双短路；白名单/群 fail-closed 在拉取之前。
+  与命令 guard 双短路；发送者白名单及可选的群范围限制均在拉取之前。
 - semaphore 异常路径 finally 释放；F10 两条 claim 时序均可归属、GUI 回合不串。
 - `@larksuite/cli@1.0.88` optional 依赖 + pnpm 11 `allowBuilds` map 配置正确（官方发布说明一致）。
 - /tmp fresh install 实测 postinstall 产出 45MB 原生二进制、wrapper 输出版本号；npm pack tarball

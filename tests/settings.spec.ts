@@ -50,7 +50,7 @@ describe('settings namespace (flat ↔ nested)', () => {
     expect(config.contextP2pMaxChars).toBe(50000)
   })
 
-  it('parses empty list strings as empty arrays (fail-closed)', () => {
+  it('parses empty list strings as empty arrays', () => {
     const config = unflatten(flatten({}), {})
     expect(config.allowedOpenIds).toEqual([])
     expect(config.allowedChatIds).toEqual([])

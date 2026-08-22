@@ -9,7 +9,7 @@
 #       appId: 'cli_xxx'
 #       appSecretRef: 'DSH_FEISHU_APP_SECRET'
 #       allowedOpenIds: ['ou_...']
-#       allowedChatIds: []        # fail-closed: empty = group chats refused
+#       allowedChatIds: []        # optional restriction; empty = any joined group
 #       cwd: '/Users/you/work'
 #       workspaceRoot: '/Users/you/work'
 #

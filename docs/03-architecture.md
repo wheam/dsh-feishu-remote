@@ -37,10 +37,10 @@
   （去重）；卡片体积预算超限截断/折叠/新卡，全文落工作区文件并回显 session id
   （手机打不开 loopback Web UI）；输出脱敏。
 
-- **D5 安全 → 白名单 fail-closed + 不绕过护栏。**
-  IM 消息以普通用户输入注入会话（受部署审批策略约束）；空白名单拒绝一切；
-  群聊 P0 每条消息需 @机器人，且群范围 fail-closed（`allowedChatIds` 空 = 群聊全拒——
-  @ 是投递条件不是授权条件）；卡片 pending 记录绑定操作者/会话/截止时间；
+- **D5 安全 → 发送者白名单 fail-closed + 不绕过护栏。**
+  IM 消息以普通用户输入注入会话（受部署审批策略约束）；空 `allowedOpenIds` 拒绝一切；
+  群聊 P0 每条消息需 @机器人，群范围默认不限，非空 `allowedChatIds` 才收窄到指定群；
+  @ 是投递条件，open_id 白名单才是操作者授权边界；卡片 pending 记录绑定操作者/会话/截止时间；
   凭据写本地私密文件（唯一来源 `.credentials.yaml`）；入站附件净化。
 
 - **D6 配置 → 首版 cordis.patch.yml（仅做配置覆盖）；P1 加 Web GUI 设置卡片（借 im-hub 的 client 注入）。**
