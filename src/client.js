@@ -506,7 +506,7 @@ window.__ModuleLoader__.load({
 			"f.allowedOpenIds": "Allowed open ids", "f.allowedOpenIdsHint": "Comma-separated ou_… ids. Empty = EVERYONE is rejected (fail-closed); only allowAllUsers opens it.",
 			"f.allowedChatIds": "Restrict to group chat ids", "f.allowedChatIdsHint": "Optional comma-separated oc_… ids. Empty = every group the bot joins; non-empty = only those groups.",
 			"f.allowAllUsers": "Allow all users", "f.allowAllUsersHint": "DANGEROUS: opens the remote executor to every sender. Only for mock/test environments.",
-			"f.requireMention": "Require first @mention per topic", "f.requireMentionHint": "On: a topic is silent until its first @mention, then later replies flow without @. Off: every topic reply can trigger immediately.",
+			"f.requireMention": "Require first @mention per topic", "f.requireMentionHint": "Topic chats: on keeps each topic silent until its first @mention, then later replies flow without @. Ordinary groups always require @ on every task.",
 			"f.cwd": "Working directory", "f.cwdHint": "REQUIRED absolute cwd for agent sessions. Must live inside workspaceRoot.",
 			"f.workspaceRoot": "Workspace root", "f.workspaceRootHint": "REQUIRED absolute path bounding all file access.",
 			"f.provider": "Provider", "f.providerHint": "Override model provider; empty = deployment default.",
@@ -546,7 +546,7 @@ window.__ModuleLoader__.load({
 			"f.allowedOpenIds": "允许的 open_id", "f.allowedOpenIdsHint": "逗号分隔的 ou_…。留空 = 拒绝所有人（fail-closed）；只有 allowAllUsers 显式开启才全开放。",
 			"f.allowedChatIds": "限定群聊 ID", "f.allowedChatIdsHint": "可选，逗号分隔的 oc_…。留空 = 机器人加入的任意群都可用；填写后仅限这些群。",
 			"f.allowAllUsers": "允许所有用户", "f.allowAllUsersHint": "危险：把远程执行入口开放给所有发送者。仅建议 mock/测试环境开启。",
-			"f.requireMention": "每个话题首次必须 @机器人", "f.requireMentionHint": "开启：首次 @ 前只积累历史，首次 @ 时读取完整话题上下文，此后同话题免 @；关闭：未激活话题的消息也会立即触发。",
+			"f.requireMention": "每个话题首次必须 @机器人", "f.requireMentionHint": "话题群：开启后首次 @ 前只积累历史，此后同话题免 @；普通群不受此开关影响，每一轮任务都必须明确 @。",
 			"f.cwd": "工作目录", "f.cwdHint": "必填的绝对路径；必须在 workspaceRoot 之内。",
 			"f.workspaceRoot": "工作区根目录", "f.workspaceRootHint": "必填的绝对路径；约束所有文件访问的边界。",
 			"f.provider": "Provider", "f.providerHint": "覆盖模型 provider；留空 = 部署默认。",
@@ -609,7 +609,96 @@ window.__ModuleLoader__.load({
 			}
 		};
 
+		// ------------------------------------------------ legacy transcript display
+		const FEISHU_CONTEXT_PREFIX = '{"type":"feishu-context"';
+
+		/**
+		 * Return the user-visible suffix after one leading feishu-context JSON
+		 * object. This is deliberately a structural JSON scan rather than a regex:
+		 * quoted braces and escaped quotes inside chat history must not end the
+		 * frame early.
+		 */
+		function splitLegacyFeishuMessageText(text) {
+			if (typeof text !== "string" || !text.startsWith(FEISHU_CONTEXT_PREFIX)) return void 0;
+			let depth = 0;
+			let inString = false;
+			let escaped = false;
+			for (let index = 0; index < text.length; index += 1) {
+				const char = text[index];
+				if (inString) {
+					if (escaped) escaped = false;
+					else if (char === "\\") escaped = true;
+					else if (char === '"') inString = false;
+					continue;
+				}
+				if (char === '"') inString = true;
+				else if (char === "{") depth += 1;
+				else if (char === "}") {
+					depth -= 1;
+					if (depth !== 0) continue;
+					const rawFrame = text.slice(0, index + 1);
+					const visible = text.slice(index + 1);
+					if (visible === "") return void 0;
+					try {
+						const frame = JSON.parse(rawFrame);
+						return frame !== null && typeof frame === "object" && frame.type === "feishu-context"
+							? visible
+							: void 0;
+					} catch {
+						return void 0;
+					}
+				}
+			}
+			return void 0;
+		}
+
+		/**
+		 * Clean already-persisted pre-fix rows without rewriting session logs.
+		 * New turns are split on the Host before persistence, so this observer is
+		 * only a backward-compatibility projection for old user/message events.
+		 */
+		function installLegacyFeishuTranscriptProjection() {
+			if (typeof document === "undefined" || typeof MutationObserver === "undefined") return () => {};
+			let queued = false;
+			let stopped = false;
+			const scan = () => {
+				queued = false;
+				if (stopped) return;
+				for (const row of document.querySelectorAll('[data-chat-flow-kind="user"]')) {
+					let target;
+					let visible;
+					for (const element of [row, ...row.querySelectorAll("*")]) {
+						const candidate = splitLegacyFeishuMessageText(element.textContent ?? "");
+						if (candidate === void 0) continue;
+						target = element;
+						visible = candidate;
+					}
+					if (target !== void 0 && visible !== void 0) {
+						target.replaceChildren(document.createTextNode(visible));
+						target.setAttribute("data-feishu-context-projected", "true");
+					}
+				}
+			};
+			const schedule = () => {
+				if (queued || stopped) return;
+				queued = true;
+				queueMicrotask(scan);
+			};
+			const observer = new MutationObserver(schedule);
+			observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+			schedule();
+			return () => {
+				stopped = true;
+				observer.disconnect();
+			};
+		}
+
 		function apply(ctx) {
+			try {
+				ctx.effect(installLegacyFeishuTranscriptProjection, "dsh-feishu-remote: legacy transcript projection");
+			} catch (error) {
+				console.error("[dsh-feishu-remote] 旧会话显示兼容层加载失败（不影响宿主界面）：", error);
+			}
 			// 前端优雅降级（docs/11 事故教训）：无论未来 slot/API 契约如何变化，
 			// 本模块的任何注册失败只影响自己的设置卡（不显示 + 控制台报错），
 			// 绝不拖垮宿主界面。keyed-slot 契约已在 dsh 0.1.1-rc.2 复核。
@@ -643,6 +732,7 @@ window.__ModuleLoader__.load({
 		}
 		exports.apply = apply;
 		exports.inject = inject;
+		exports.splitLegacyFeishuMessageText = splitLegacyFeishuMessageText;
 		return module.exports;
 	}
 });

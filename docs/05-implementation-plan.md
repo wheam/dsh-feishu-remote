@@ -54,7 +54,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
   `rootId/threadId` → 同群两话题在合并窗口（默认 600ms/2000ms）内并发会串线。
   关 `chatQueue.enabled: false` 即同时禁用 batching（batch.text 变 inert），
   dedup/stale/policy 仍生效；代价是 cardAction 队列同被旁路 → 按钮处理自串行化。
-  入站 FIFO 由本插件按 §2.6 的三支路 `originKey` 自行实现（chatQueue 关闭后 handler
+  入站 FIFO 由本插件按 §2.6 的私聊/普通群/话题 `originKey` 自行实现（chatQueue 关闭后 handler
   内联执行，必须遵守 §1.3 的 3 秒回调预算）。
 - **限流不在 SDK 侧**（Codex F5 + SDK 1.73.0 核实）：普通发送仅有限重试、patchCard
   无重试、无全局 token bucket。需要本插件应用级出站调度器：全局并发上限 + 卡片更新
@@ -173,15 +173,20 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    markdown 模式 = cardkit 实体 + `cardElement.content`，100ms/50 字符节流 +
    sequence/uuid 幂等 + 收尾 summary），token 级打字机更细腻，但会绕过本插件
    出站调度器（无限流退避/合并/终态优先），需评估后再引入。
-6. **话题↔session 映射（三方 review 修订）**：**不建显式映射表**，持久化本身即事实源。
-   `originKey` 三支路：p2p → `p2p:<chatId>`；群话题 → `group:<chatId>:thread:<thread_id>`
-   （thread_id 优先，omt_ 前缀；缺失回退 root_id 需真实租户验证）；群非话题（两者皆缺）
-   → **P0 拒绝并提示"请在话题内 @我"**（避免非话题消息塌成同一 session 或各自成 session）。
+6. **私聊/普通群/话题↔session 映射（三方 review 修订 + 2026-08-22 普通群扩展）**：
+   **不建显式映射表**，持久化本身即事实源。群模式先通过官方 `getChatMode(chatId)` 读取
+   `chat_mode` 并按 bridge 生命周期缓存，避免把普通群的 reply/root 字段误判为话题。
+   `originKey`：p2p → `p2p:<chatId>`；普通群 → `group:<chatId>:chat`；群话题 →
+   `group:<chatId>:thread:<thread_id>`（thread_id 优先，缺失回退 root_id）；话题群中不属于任何
+   thread 的消息仅在明确 @时提示"请在话题内 @我"。普通群的未 @消息静默，不创建/恢复
+   session、不执行命令；白名单用户每次 @后才进入该群唯一 session。
    SHA-256 前 24 位 hex 为 session 前缀。`sessionPersistence.list()` 按前缀找最新会话
    （OpenClaw/cc-connect 等 30+ 仓库同款结论）。
    **fresh list()**：`/sessions`、自动恢复、`/resume` 每次都现查 list()（不搬参考项目的
    启动缓存），并过滤 `workspaceRegistry.archivedSessionIds`（GUI 归档的会话不得自动续上）。
-   入站去重 key=message_id（官方明示勿用 event_id）；话题群判定用 thread_id 缺失与否。
+   入站去重 key=message_id（官方明示勿用 event_id）；普通群/话题群判定以官方 `chat_mode` 为准，
+   `thread_id/root_id` 只用于话题内 origin 定位；API 失败时仅明确的 `thread_id` 保留话题判定，
+   只有 `root_id` 的歧义场景回退为更安全的普通群“每轮必须 @”策略。
    **`/new` pending 协议**：状态文件写 originKey→pending-new 标记，下一条普通消息才创建
    （sessionPersistence lazy materialization：从未 append 的 session 不在 list()）；
    重启丢标记=安全回落旧 session，避免"创建成功、映射写入前崩溃"的双事实源漂移。
@@ -201,15 +206,16 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    每个 turn 保存不可变 reply 上下文（不复用共享 mutable route）。
    审批挂起期间：普通消息排入**下一回合**、`/steer` 不解审批——审批卡正文明示
    "只有按钮与 `/approve` `/reject` 生效"。
-   **maxLiveAgents**：live agent 硬上限（P1 起），超限拒绝新话题并给可操作提示；
-   idle/LRU dispose 前先关闭该话题入口队列（dispose 与 followup/approval 竞态收敛）。
+   **maxLiveAgents**：live agent 硬上限（P1 起），超限拒绝新 origin 并给可操作提示；
+   idle/LRU dispose 前先关闭该 origin 入口队列（dispose 与 followup/approval 竞态收敛）。
 9. **安全（Codex R1/R2/R3）**：
    - 白名单 **fail-closed**：`allowedOpenIds` 为空时拒绝一切；仅显式
      `allowAllUsers: true` 且带启动警告时才开放（mock/echo 环境可开）。
-   - 群聊范围：私聊 + 群聊话题；群范围默认不限，非空 `allowedChatIds` 可选收窄。
+   - 群聊范围：私聊 + 普通群 + 群聊话题；群范围默认不限，非空 `allowedChatIds` 可选收窄。
      默认每个话题首次由白名单用户 @机器人后持久化激活：首次 @ 回填此前有界话题历史，
      后续同话题免 @自动进入同一 session，其他话题静默。`im:message.group_msg` 用于接收
-     未 @后续及上下文读取；@ 是话题激活信号，`allowedOpenIds` 才是操作者授权边界；
+     未 @后续及上下文读取。普通群接收所有成员消息但每轮必须由白名单用户明确 @；未 @消息
+     只在下一次触发时作为有界增量历史注入。@ 是触发信号，`allowedOpenIds` 才是操作者授权边界；
      输出会向所在群公开。
    - 卡片 pending 记录绑定 appId/chatId/messageId/operatorOpenId/sessionId/callId/
      deadline，处理即原子删除；错误操作者/跨群/过期留审计日志（重复点击被 SDK 去重，
@@ -243,11 +249,11 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 | 步骤 | 内容 | 验收 |
 | --- | --- | --- |
 | 0 | 环境前置（Node ≥22 / pnpm）+ 仓库骨架 + `security/state/cards` 移植 + lark-bridge 测试搬来跑绿 | vitest 全绿 + 裁剪后契约测试（队列/provider/映射/权限语义已变，不能只跑上游测试） |
-| 1 | **echo spike**：空壳 cordis 插件 + SDK 通道（batch/chatQueue 关闭）+ fail-closed 发送者白名单（`allowedChatIds` 可选收窄群范围）→ 飞书发什么回什么 | 手机发消息，Mac 回显；断网重连可用；群话题/群非话题/p2p 三态行为正确；应用形态（个人应用 vs 企业自建）定案并文档固化 |
+| 1 | **echo spike**：空壳 cordis 插件 + SDK 通道（batch/chatQueue 关闭）+ fail-closed 发送者白名单（`allowedChatIds` 可选收窄群范围）→ 飞书发什么回什么 | 手机发消息，Mac 回显；断网重连可用；普通群/话题群/p2p 三态行为正确；应用形态（个人应用 vs 企业自建）定案并文档固化 |
 | 2 | **共存 spike**：web profile 内创建带 preset 的飞书 session（有工具）；answerer `prepend` 生效且双向隔离（飞书回合审批只到飞书卡、GUI 回合审批只回 GUI）；飞书会话无通往浏览器的提问路径（ask-user 被拒） | 三项都有可复现证据 |
 | 3 | 单会话对话：create/resume + followup + whenIdle + 全文回复（暂不流式） | 飞书会话出现在 Web GUI 列表；GUI 对飞书会话发言=双写回合（输出按 session 流、审批回 GUI） |
 | 4 | **审批闭环**：answerer（prepend）+ 卡片 + 五条结算路径 + 断线/崩溃/通道终态失效状态机 + 终态 updateCard | 飞书完成一次需审批的真实任务；按钮重复点击被去重但文字兜底可用 |
-| 5 | 话题映射（三支路 originKey）+ 全套命令 + 每话题控制队列 + `/new` pending 协议 + `/resume` 原子切换 | 群内多话题并行互不干扰；非话题消息被拒并提示；`/resume` 失败保留旧会话；重启回落规则符合文档 |
+| 5 | 私聊/普通群/话题映射 + 全套命令 + 每 origin 控制队列 + `/new` pending 协议 + `/resume` 原子切换 | 普通群仅 @触发且读取全群有界历史；群内多话题并行互不干扰；`/resume` 失败保留旧会话；重启回落规则符合文档 |
 | 6 | 流式节流 + 进度/终态卡片 + 应用级出站调度器 + 体积预算与永久错误兜底 + 超长分片 | 1s 级卡片更新；429/限流码可恢复；chunk+final 去重与状态映射表测试全绿；30KB/14 天边界兜底生效 |
 
 原 Phase 0（装原版 im-hub 隔离验证）**跳过**：步骤 1 的 echo spike 用自有代码验证
@@ -257,8 +263,9 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 
 1. **会话范围**：飞书只管理自己创建的会话，与 GUI 同列表共享；不接管 GUI 已有会话。
 2. **白名单默认**：fail-closed；显式 `allowAllUsers: true` 才开放。
-3. **群聊范围**：私聊 + 群聊话题；默认允许机器人加入的任意群，非空 `allowedChatIds`
-   才限制到指定群；每个话题首次需 @，激活后同话题免 @，状态跨重启保留。
+3. **群聊范围**：私聊 + 普通群 + 群聊话题；默认允许机器人加入的任意群，非空 `allowedChatIds`
+   才限制到指定群；每个话题首次需 @，激活后同话题免 @并跨重启保留；普通群每轮必须 @，
+   未 @消息仅作为下一轮有界上下文。
 4. **工作目录**：`workspaceRoot/cwd` 配置必填；创建时持久化、恢复时校验一致、
    `/status` 展示。
 5. **代码基形态**：新仓选择性移植（默认，非 fork；如无异议按此执行），CI/测试

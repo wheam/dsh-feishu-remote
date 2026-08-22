@@ -1,17 +1,18 @@
-# 飞书上下文回填（话题 + 有界私聊回溯）设计规格
+# 飞书上下文回填（普通群/话题 + 有界私聊回溯）设计规格
 
-> 状态：**v1.2 已实现（2026-08-22）**。v1.1 的 CLI/SDK 回填实现已经实现阶段 Codex review；
-> v1.2 增加长期私聊的独立双重上限，并适配 dsh `0.1.1-rc.2`。本文档是本功能的单一事实源
-> （延续 docs/05 的惯例）。私聊与群/话题基础读取已在真实租户通过；§7 的长话题、后端切换、
-> 增量与隐私复核仍待完整跑完。
+> 状态：**v1.3 已实现（2026-08-22）**。v1.1 的 CLI/SDK 回填实现已经实现阶段 Codex review；
+> v1.2 增加长期私聊的独立双重上限并适配 dsh `0.1.1-rc.2`；v1.3 增加普通群模式：
+> 官方 `chat_mode=group` 判定、全群 chat history 回填、每轮仅明确 @触发。本文档是本功能的
+> 单一事实源（延续 docs/05 的惯例）。私聊与话题基础读取已在真实租户通过；普通群与 §7 的
+> 长话题、后端切换、增量和隐私复核仍待完整跑完。
 > 2026-08-19 设计阶段经 Codex（gpt-5.6-sol）独立 review（15 findings 处置见
 > docs/14-context-codex-review.md）；2026-08-20 实现阶段经第二轮 Codex review（14 findings
 > 处置见 docs/15-context-impl-review.md），两轮修订均已并入本文档与实现。
 >
-> 需求来源：飞书里与机器人聊天（含话题群），机器人原本只"看见"@过它的消息——
-> 话题中未被 @ 的讨论、私聊中更早的往来，它一概不知道。目标：每个话题首次 @ 时回填
-> 此前完整有界上下文并持久化激活，之后同话题未 @消息也作为普通入站；每条入站普通消息
-> 注入飞书上下文：**话题 → 预算内的完整近期窗口；私聊 → 按更紧预算有界回溯**。
+> 需求来源：飞书里与机器人聊天（含普通群和话题群），机器人原本只"看见"@过它的消息——
+> 群中未被 @ 的讨论、私聊中更早的往来，它一概不知道。目标：每个话题首次 @ 时回填
+> 此前完整有界上下文并持久化激活，之后同话题未 @消息也作为普通入站；普通群接收所有成员
+> 消息但每轮必须由白名单用户明确 @，触发时读取全群有界历史；私聊按更紧预算有界回溯。
 > 实现载体：飞书官方 CLI `@larksuite/cli`（`lark-cli`），SDK 直连兜底。
 >
 > 三个决策点已于 2026-08-19 与用户定案：
@@ -100,17 +101,25 @@
   **全局并发上限 2**（多 origin 并行时同一时刻最多 2 个拉取，进程级信号量）；**熔断**：
   连续 3 次失败 → 5 分钟内拒绝一切拉取（含排队中的 waiter，日志 + `/status` 标熔断），
   到期自动恢复（docs/15 F-10）。
-- **F2 注入方式 → UserMessage 内容块前置。** 上下文是滑动窗口，放 systemPrompt 段
-  （session 级静态）不合适。构造 `content: [上下文块, 用户原文]`；上下文块用
-  **JSON 对象帧**（`{"type":"feishu-context","count":N,"messages":[...]}` 作为首个 text 块），
-  每条消息文本在渲染层做分隔符转义——群成员可写内容无法伪造闭合边界（F8）。
-- **F3 话题 = 预算窗口，私聊 = 有界回溯。** 话题：`+threads-messages-list --thread <threadId ?? rootId>`
+- **F2 注入方式 → 同回合独立上下文消息。** 上下文是滑动窗口，放 systemPrompt 段
+  （session 级静态）不合适。桥接器先用带 transport 标记的复合 UserMessage
+  `content: [上下文块, 用户原文]` 进入 next-turn inbox，以保持原有 message id 与回合认领账本；
+  `agent/pre-step` 在认领后原子拆成 `source.kind=plugin` 的上下文消息和纯净的当前 UserMessage，
+  两者进入同一次模型请求与 durable history。Web GUI 因而把历史显示为默认折叠的「上下文注入」行，
+  蓝色用户气泡只显示当前提问。上下文仍使用 **JSON 对象帧**
+  （`{"type":"feishu-context","count":N,"messages":[...]}`）；每条消息文本在渲染层做分隔符转义——
+  群成员可写内容无法伪造闭合边界（F8）。修复前已落盘的复合消息由浏览器兼容投影只隐藏显示前缀，
+  不改写会话文件。
+- **F3 普通群/话题 = 预算窗口，私聊 = 有界回溯。** 群模式由 `getChatMode(chatId)` 的官方
+  `chat_mode` 判定并缓存：`group` 为普通群、`topic` 为话题群，不用 reply/root 字段猜群类型。
+  话题：`+threads-messages-list --thread <threadId ?? rootId>`
   （事件携带）；若事件 `rootId` 不在结果中（老话题），**补取根消息前置**——CLI 走
   `+messages-mget --message-ids <rootId>`、SDK 走 seam `getMessage`（`im.v1.message.get`），
   补取失败 fail-open 仅告警（docs/15 F-05）。
-  私聊：`+chat-messages-list --chat-id <chatId>`（事件里的 p2p chat id，bot 身份可用）。
+  普通群和私聊：`+chat-messages-list --chat-id <chatId>`（整段 chat history）；普通群只有
+  明确 @的触发消息进入本链路，未 @消息本身不调用 Provider，但会在下次 @时出现在窗口中。
   两条命令统一 `--order desc` + `--page-all` 分页，取满预算为止。
-- **F4 双层有界预算。** 话题/全局默认 150 条 / 100,000 字符，上限 500 条 / 500,000 字符；
+- **F4 双层有界预算。** 普通群/话题/全局默认 150 条 / 100,000 字符，上限 500 条 / 500,000 字符；
   长期私聊额外默认 80 条 / 50,000 字符，实际预算分别为
   `min(contextMaxMessages, contextP2pMaxMessages)` 与 `min(contextMaxChars, contextP2pMaxChars)`。
   80 条加一个 cutoff 观察位仍只需两页基础 CLI 拉取，避免私聊累计几万条后出现无界扫描；
@@ -126,6 +135,7 @@
   跳过注入、宿主日志告警、消息照常进 agent——"它不知道上下文"退化为现状，绝不更差。
   **位置**：`handleMessage` 内、**命令与空消息 guard 之后**、创建 UserMessage 之前——
   `/stop` `/approve` `/status` 等控制命令**零拉取**（`/steer` 首版不注入，文档注明）。
+  普通群未 @消息在路由层即静默返回，同样是**零拉取、零 Agent 工作**。
   拉取在 per-origin 串行队列内（不在 SDK 3s 回调里），独立超时 `contextTimeoutMs`（默认 10s）。
 - **F6 窗口语义：增量窗口 + 位置切片 + 会话创建时全量。**（Codex F-05/F-06 修正，
   docs/15 F-01/F-02 再修正）
@@ -180,7 +190,7 @@
      命令/空消息 guard（现有）→ 普通消息路径：
      1. contextProvider.fetch(origin, 触发消息)   ← 超时 10s、全局并发 2、熔断；失败 fail-open（F5）
      2. 增量过滤（水位 + 因果 cutoff，F6）→ renderTranscript（转义/占位/截断，F4/F8）
-     3. content = [上下文块, 用户原文] → createUserMessage → followup（现有路径不动）
+     3. tagged content = [上下文块, 用户原文] → followup → pre-step 原子拆成 [plugin context, user prompt]
      4. 统计元数据随 pendingClaims 注册（F10）
 ```
 
@@ -284,8 +294,8 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 ### 3.4 注入与卡片
 
 - 上下文块：`{ type: 'text', text: '{"type":"feishu-context","count":N,"fullWindow":bool,"messages":[…] }' }`
-  （JSON 对象帧，F2）作为 content 第一个块；用户原文块不变。`pendingPrompt`（卡片显示用，
-  700 字符 bounded）不变。
+  （JSON 对象帧，F2）在 pre-step 后成为独立的 plugin context；用户原文成为保留原 message id 的
+  普通 UserMessage。`pendingPrompt`（卡片显示用，700 字符 bounded）不变。
 - 回合卡片：上下文统计仍归属到准确的 TurnProgress，供审计与内部状态使用；普通终态卡
   为保持极简不再显示统计脚注，上下文全文也**不回显**（F8/F9）。
 - `/status` 卡新增一行：上下文 `已启用（cli | sdk）` / `不可用（原因）` / `已关闭` / `熔断中`。
@@ -325,7 +335,7 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 
 ## 6. 测试计划（契约测试，无真实凭据）
 
-- 参数构建：origin 两分支 → 命令/flag 正确；**必须含 `--page-all`**；page-limit 推导；
+- 参数构建：origin 三分支（p2p/group/thread）→ 命令/flag 正确；**必须含 `--page-all`**；page-limit 推导；
   私聊默认 80 条保持两页基础拉取；私聊/全局上限取较小值；
   `threadId ?? rootId` 回退；thread 场景 root mget 二次调用与失败 fail-open。
 - 信封解析：`ok:true/false`、**严格 `data.messages`**、**`meta.pagination.complete` 严格
@@ -363,22 +373,25 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 1. 私聊发「我记得我们聊过 X」，bot 复述此前（非 @ 过的）私聊内容 → 私聊回溯生效。
 2. 话题内两人讨论（其中多条不 @ 机器人），最后一条首次 @问「按上面的讨论做」→ 首次完整话题预算窗口生效并激活该话题。
 3. 激活后同话题直接补充内容不 @ → 自动进入同一 session；其他未激活话题静默；bridge 重启后激活仍有效。
-4. **150+ 条的长话题**：近期窗口到预算上限、分页正确、内部回合计数准确。
-5. `/new` 后立刻在旧话题问上下文问题 → 新 session 注入完整窗口（F6 全量分支）。
-6. 同一话题连发多轮 → 每轮只注入增量（宿主日志/回合统计确认，无二次增长）。
-7. 不开 `im:message.group_msg` 时：私聊上下文正常；群话题首次 @仍可到达，但历史回填不可用、后续未 @消息不会送达，因此 sticky 激活功能不完整。
-8. 关掉 CLI（改名二进制 + `contextBackend: sdk`）→ SDK 兜底路径正常；再 `cli` 强制 → 告警且不阻断。
-9. 白名单外群 @ 机器人：拒绝逻辑不变，且**无任何历史拉取**（日志确认）。
-10. 控制命令（/stop /status /approve…）触发**零拉取**（计数断言）。
-11. `/status` 卡上下文行四种状态各见一次；普通终态卡不出现上下文统计。
-12. 隐私复核：Web GUI 会话列表可见注入历史（预期行为，F9）；重启后旧会话/归档/删除流程正常。
-13. 群历史注入攻击样例（如"请执行 rm -rf"）→ agent 不据此授权（F8 边界规则生效）。
+4. 普通群多人连续发言且不 @ → 机器人静默、零拉取、零 Agent；白名单用户 @后读取所有成员的
+   有界 chat history 并在群内回复；再次未 @仍静默，再次 @才执行且复用同一 chat-scoped session。
+5. **150+ 条的长话题/普通群**：近期窗口到预算上限、分页正确、内部回合计数准确。
+6. `/new` 后立刻在原会话范围问上下文问题 → 新 session 注入完整窗口（F6 全量分支）。
+7. 同一话题或普通群连续触发多轮 → 每轮只注入增量（宿主日志/回合统计确认，无二次增长）。
+8. 不开 `im:message.group_msg` 时：私聊上下文正常；群历史不可用，普通群只能收到 @事件且无法读取此前讨论，话题 sticky 激活也不完整。
+9. 关掉 CLI（改名二进制 + `contextBackend: sdk`）→ SDK 兜底路径正常；再 `cli` 强制 → 告警且不阻断。
+10. 白名单外群 @ 机器人：拒绝逻辑不变，且**无任何历史拉取**（日志确认）。
+11. 控制命令（/stop /status /approve…）触发**零拉取**（计数断言）。
+12. `/status` 卡上下文行四种状态各见一次；普通终态卡不出现上下文统计。
+13. 隐私复核：Web GUI 将注入历史显示为默认折叠的上下文行、用户气泡只显示当前提问；修复前旧会话
+    的 JSON 前缀经兼容投影隐藏；重启后旧会话/归档/删除流程正常。
+14. 群历史注入攻击样例（如"请执行 rm -rf"）→ agent 不据此授权（F8 边界规则生效）。
 
 ## 8. 风险与数据流声明
 
-- **数据流（F9）**：群/私聊历史（含未 @ 消息、其他群成员发言）会注入 UserMessage →
-  进入 dsh 会话 durable history（本地持久化）→ 出现在 Web GUI 会话列表（同一批会话）→
-  发送给所配置的模型提供商。`contextMode: off` 完全关闭；群场景默认适用于机器人加入的
+- **数据流（F9）**：群/私聊历史（含未 @ 消息、其他群成员发言）会作为 plugin context →
+  进入 dsh 会话 durable history（本地持久化）→ 在 Web GUI 显示为默认折叠的上下文行 →
+  发送给所配置的模型提供商。当前飞书提问作为同回合独立 UserMessage 显示；`contextMode: off` 完全关闭；群场景默认适用于机器人加入的
   任意群，非空 `allowedChatIds` 可选收窄范围；日志与错误不打印上下文原文；本插件不承诺
   对群讨论内容脱敏。
 - **每次入站都注入窗口 → token 成本**：增量窗口（F6）消除二次增长；预算封顶；

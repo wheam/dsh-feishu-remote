@@ -52,7 +52,7 @@ export interface ContextMessage {
 }
 
 export interface FetchSpec {
-  origin: 'p2p' | 'thread'
+  origin: 'p2p' | 'group' | 'thread'
   chatId: string
   threadId?: string
   /** Thread root message id — back-filled via mget/get when absent (docs/13 F3/F-05). */

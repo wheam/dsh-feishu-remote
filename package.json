@@ -72,6 +72,7 @@
     "@deepseek-ai/dsh-user-approval": "0.1.1-rc.2",
     "@deepseek-ai/dsh-user-questions": "0.1.1-rc.2",
     "@deepseek-ai/dsh-workspace": "0.1.1-rc.2",
+    "dsh-session-groups": "0.1.0",
     "@deepseek-ai/schemastery": "3.18.1",
     "@larksuiteoapi/node-sdk": "1.73.0"
   },
@@ -90,6 +91,7 @@
     "@deepseek-ai/dsh-user-approval": "0.1.1-rc.2",
     "@deepseek-ai/dsh-user-questions": "0.1.1-rc.2",
     "@deepseek-ai/dsh-workspace": "0.1.1-rc.2",
+    "dsh-session-groups": "link:../dsh-session-groups/packages/dsh-session-groups",
     "@deepseek-ai/schemastery": "3.18.1",
     "@types/node": "^24.0.0",
     "esbuild": "0.28.1",
@@ -101,6 +103,9 @@
     "@larksuite/cli": "1.0.88"
   },
   "peerDependenciesMeta": {
+    "dsh-session-groups": {
+      "optional": true
+    },
     "@larksuiteoapi/node-sdk": {
       "optional": true
     }

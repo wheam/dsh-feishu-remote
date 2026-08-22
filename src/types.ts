@@ -134,6 +134,14 @@ export interface LarkChannelLike {
   listMessages(params: LarkMessageListParams): Promise<LarkMessageListResult>
   /** One message by id (docs/13 F3: thread-root back-fill); undefined = not found. */
   getMessage(messageId: string): Promise<Record<string, unknown> | undefined>
+  /** Chat metadata used for provider-owned UI labels; optional for test/fallback channels. */
+  getChatInfo?(chatId: string): Promise<{
+    chatId: string
+    name?: string
+    chatType: 'p2p' | 'group' | 'topic'
+  }>
+  /** Authoritative Feishu chat mode; callers cache this because it rarely changes. */
+  getChatMode?(chatId: string): Promise<'p2p' | 'group' | 'topic'>
   downloadMessageResource(
     messageId: string,
     fileKey: string,

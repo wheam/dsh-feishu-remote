@@ -17,10 +17,11 @@
   (b) 关键路径 try/catch + 每聊天串行队列兜底。残余风险：未捕获异步异常仍可能带崩进程，
   须在验收中覆盖崩溃恢复路径。
 
-- **D2 会话映射 → 话题/线程 ↔ session（确定性前缀 + persistence 事实源）。**
-  群内每个话题 = 一个独立 session；私聊各一个 session；`/new` 显式开新；`/resume <id>` 恢复。
-  `originKey` 三支路：p2p → `p2p:<chatId>`；群话题 → `group:<chatId>:thread:<thread_id>`；
-  群非话题 → 拒绝并提示进话题。SHA-256 前 24 位 hex 为 session 前缀
+- **D2 会话映射 → 私聊/普通群/话题 ↔ session（确定性前缀 + persistence 事实源）。**
+  私聊各一个 session；普通群按 chatId 共用一个 session；话题群内每个话题 = 一个独立 session；`/new` 显式开新；`/resume <id>` 恢复。
+  群类型由官方 `chat_mode`（`group` / `topic`）判定。`originKey`：p2p → `p2p:<chatId>`；
+  普通群 → `group:<chatId>:chat`；群话题 → `group:<chatId>:thread:<thread_id>`；话题群中不属于
+  任何话题的消息仍提示进话题。SHA-256 前 24 位 hex 为 session 前缀
   （`feishu-<24hex>-<base36 ts>`）；`sessionPersistence` 为唯一事实源
   （不建显式映射表，避免双事实源漂移），每次操作 fresh `list()` 并过滤 GUI 归档；
   `/resume` 绑定仅进程内有效、重启回落前缀最新；状态文件仅存轻量元数据
@@ -40,8 +41,8 @@
 - **D5 安全 → 发送者白名单 fail-closed + 不绕过护栏。**
   IM 消息以普通用户输入注入会话（受部署审批策略约束）；空 `allowedOpenIds` 拒绝一切；
   群范围默认不限，非空 `allowedChatIds` 才收窄；每个话题首次由白名单用户 @后持久化激活，
-  首次 @ 回填前文，后续同话题免 @，其他话题静默；@ 是话题激活信号，open_id 白名单才是
-  操作者授权边界；卡片 pending 记录绑定操作者/会话/截止时间；
+  首次 @ 回填前文，后续同话题免 @，其他话题静默；普通群则每一轮都必须 @，未 @消息只进入
+  下一轮有界历史上下文。@ 是触发信号，open_id 白名单才是操作者授权边界；卡片 pending 记录绑定操作者/会话/截止时间；
   凭据写本地私密文件（唯一来源 `.credentials.yaml`）；入站附件净化。
 
 - **D6 配置 → 首版 cordis.patch.yml（仅做配置覆盖）；P1 加 Web GUI 设置卡片（借 im-hub 的 client 注入）。**

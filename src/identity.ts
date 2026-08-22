@@ -1,5 +1,5 @@
 /**
- * Session identity — three-branch originKey (triple-review revised),
+ * Session identity — explicit private / ordinary-group / topic routing,
  * `feishu-` session prefix, and persistence-backed session lookup.
  * Session persistence is the single source of truth: no explicit mapping table.
  */
@@ -8,27 +8,45 @@ import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk'
 
 /**
- * Origin routing result. P0 rejects group messages outside any thread
- * ("请在话题内 @我") — they never reach session creation.
+ * Topic-chat messages outside a thread remain non-actionable. Ordinary-group
+ * messages use one chat-scoped origin and are gated by an explicit @mention in
+ * the bridge before they can reach session creation.
  */
 export type Origin =
   | { kind: 'p2p'; key: string }
+  | { kind: 'group'; key: string }
   | { kind: 'thread'; key: string }
   | { kind: 'nonthread'; key: string }
 
+export type GroupChatMode = 'group' | 'topic'
+
 /**
- * Three-branch origin key (docs/05 §2.6):
+ * Origin key (docs/05 §2.6):
  * - p2p → `p2p:<chatId>`
+ * - ordinary group → `group:<chatId>:chat`
  * - group thread → `group:<chatId>:thread:<thread_id>` (thread_id preferred, falls back to root_id)
- * - group non-thread → `nonthread` marker; the caller rejects before any session work.
+ * - topic chat outside a thread → `nonthread` marker; the caller rejects before session work.
+ *
+ * Direct callers without a resolved mode retain the legacy thread/root
+ * inference. The bridge itself supplies an authoritative mode and deliberately
+ * falls back ambiguous root-only traffic to mention-only ordinary-group mode.
  */
-export function originOf(message: Pick<NormalizedMessage, 'chatType' | 'chatId' | 'threadId' | 'rootId'>): Origin {
+export function originOf(
+  message: Pick<NormalizedMessage, 'chatType' | 'chatId' | 'threadId' | 'rootId'>,
+  groupMode?: GroupChatMode,
+): Origin {
   if (message.chatType === 'p2p') {
     return { kind: 'p2p', key: `p2p:${message.chatId}` }
+  }
+  if (groupMode === 'group') {
+    return { kind: 'group', key: `group:${message.chatId}:chat` }
   }
   const threadId = message.threadId ?? message.rootId
   if (threadId !== undefined && threadId !== '') {
     return { kind: 'thread', key: `group:${message.chatId}:thread:${threadId}` }
+  }
+  if (groupMode !== 'topic') {
+    return { kind: 'group', key: `group:${message.chatId}:chat` }
   }
   return { kind: 'nonthread', key: `group:${message.chatId}:nonthread` }
 }

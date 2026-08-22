@@ -6,21 +6,28 @@ function header(id: string, createdAt: number): SessionHeader {
   return { version: 0, id: SessionId(id), createdAt }
 }
 
-describe('session identity (three-branch originKey)', () => {
+describe('session identity (private / ordinary group / topic)', () => {
   it('routes p2p messages to a per-chat key', () => {
     const origin = originOf({ chatType: 'p2p', chatId: 'oc_private', threadId: undefined, rootId: undefined })
     expect(origin).toEqual({ kind: 'p2p', key: 'p2p:oc_private' })
   })
 
   it('routes group threads to a per-thread key (threadId preferred over rootId)', () => {
-    const withThread = originOf({ chatType: 'group', chatId: 'oc_team', threadId: 'omt_1', rootId: 'om_root' })
+    const withThread = originOf({ chatType: 'group', chatId: 'oc_team', threadId: 'omt_1', rootId: 'om_root' }, 'topic')
     expect(withThread).toEqual({ kind: 'thread', key: 'group:oc_team:thread:omt_1' })
-    const withRootOnly = originOf({ chatType: 'group', chatId: 'oc_team', threadId: undefined, rootId: 'om_root' })
+    const withRootOnly = originOf({ chatType: 'group', chatId: 'oc_team', threadId: undefined, rootId: 'om_root' }, 'topic')
     expect(withRootOnly).toEqual({ kind: 'thread', key: 'group:oc_team:thread:om_root' })
   })
 
-  it('flags group non-thread messages for P0 rejection', () => {
-    const origin = originOf({ chatType: 'group', chatId: 'oc_team', threadId: undefined, rootId: undefined })
+  it('routes an ordinary group to one chat-scoped key, even for a reply carrying rootId', () => {
+    const topLevel = originOf({ chatType: 'group', chatId: 'oc_team', threadId: undefined, rootId: undefined }, 'group')
+    const reply = originOf({ chatType: 'group', chatId: 'oc_team', threadId: undefined, rootId: 'om_root' }, 'group')
+    expect(topLevel).toEqual({ kind: 'group', key: 'group:oc_team:chat' })
+    expect(reply).toEqual(topLevel)
+  })
+
+  it('flags topic-chat messages outside a thread for rejection', () => {
+    const origin = originOf({ chatType: 'group', chatId: 'oc_team', threadId: undefined, rootId: undefined }, 'topic')
     expect(origin.kind).toBe('nonthread')
   })
 

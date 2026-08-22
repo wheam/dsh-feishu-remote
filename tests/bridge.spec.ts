@@ -16,6 +16,7 @@ import type { ContextMessage, FeishuContextProvider } from '../src/context.js'
 import { OutboundScheduler } from '../src/scheduler.js'
 import type { LarkChannelLike } from '../src/types.js'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import type { SessionGroupDescriptor } from 'dsh-session-groups'
 
 // ---------------------------------------------------------------- fakes
 
@@ -164,6 +165,22 @@ class FakePersistence {
   }
 }
 
+class FakeSessionGroups {
+  readonly assignments: Array<{ sessionId: string; group: SessionGroupDescriptor }> = []
+  readonly current = new Map<string, SessionGroupDescriptor>()
+  assignError?: Error
+
+  async assign(sessionId: SessionId, group: SessionGroupDescriptor): Promise<void> {
+    if (this.assignError !== undefined) throw this.assignError
+    this.assignments.push({ sessionId: String(sessionId), group })
+    this.current.set(String(sessionId), group)
+  }
+
+  async unassign(sessionId: SessionId): Promise<void> {
+    this.current.delete(String(sessionId))
+  }
+}
+
 class FakeChannel implements LarkChannelLike {
   readonly handlers = new Map<string, Array<(payload: never) => void | Promise<void>>>()
   readonly sent: Array<{ to: string; input: Record<string, unknown>; options?: unknown; messageId: string }> = []
@@ -171,6 +188,13 @@ class FakeChannel implements LarkChannelLike {
   status: { state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed'; reconnectAttempts: number } = { state: 'idle', reconnectAttempts: 0 }
   connectCalls = 0
   botIdentity = { openId: 'ou_bot', name: 'test-bot' }
+  readonly chatModes = new Map<string, 'group' | 'topic'>()
+  readonly chatModeCalls: string[] = []
+  chatModeError?: Error
+  readonly chatNames = new Map<string, string>()
+  readonly getChatInfoCalls: string[] = []
+  chatInfoError?: Error
+  chatInfoGate?: Promise<void>
   /** History backfill seam fixtures (docs/13 §6). */
   historyItems: Array<Record<string, unknown>> = []
   historyPages: Array<Array<Record<string, unknown>>> = []
@@ -187,6 +211,23 @@ class FakeChannel implements LarkChannelLike {
   }
 
   getConnectionStatus() { return this.status }
+
+  async getChatMode(chatId: string): Promise<'p2p' | 'group' | 'topic'> {
+    this.chatModeCalls.push(chatId)
+    if (this.chatModeError !== undefined) throw this.chatModeError
+    return this.chatModes.get(chatId) ?? 'topic'
+  }
+
+  async getChatInfo(chatId: string): Promise<{ chatId: string; name?: string; chatType: 'group' | 'topic' }> {
+    this.getChatInfoCalls.push(chatId)
+    if (this.chatInfoGate !== undefined) await this.chatInfoGate
+    if (this.chatInfoError !== undefined) throw this.chatInfoError
+    return {
+      chatId,
+      ...(this.chatNames.get(chatId) === undefined ? {} : { name: this.chatNames.get(chatId) }),
+      chatType: this.chatModes.get(chatId) ?? 'topic',
+    }
+  }
 
   on(name: string, handler: (payload: never) => void | Promise<void>): () => void {
     const list = this.handlers.get(name) ?? []
@@ -348,9 +389,16 @@ interface Harness {
   emitCardAction: (value: unknown, operatorOpenId?: string, chatId?: string, messageId?: string) => Promise<void>
 }
 
+interface HarnessBridgeOptions {
+  contextProvider?: FeishuContextProvider
+  sessionGroups?: FakeSessionGroups
+  sessionGroupMetadataTtlMs?: number
+  sessionGroupMetadataNow?: () => number
+}
+
 async function makeHarness(
   configOverrides: Partial<Config> = {},
-  bridgeOptions: { contextProvider?: FeishuContextProvider } = {},
+  bridgeOptions: HarnessBridgeOptions = {},
 ): Promise<Harness> {
   const workspace = await tempWorkspace()
   const statePath = await tempState()
@@ -376,6 +424,8 @@ async function makeHarness(
   const persistence = new FakePersistence()
   ctx.services.set('sessionPersistence', persistence)
   ctx.services.set('workspaceRegistry', { archivedSessionIds: [] })
+  const { sessionGroups, ...runtimeBridgeOptions } = bridgeOptions
+  if (sessionGroups !== undefined) ctx.services.set('sessionGroups', sessionGroups)
   const mountOrder: string[] = []
   const presets = {
     resolve: vi.fn(async (id?: string) => ({ id: id ?? 'standard' })),
@@ -390,7 +440,7 @@ async function makeHarness(
     channelPollMs: 10,
     reconnectBaseMs: 5,
     teardownProducerMs: 40,
-    ...bridgeOptions,
+    ...runtimeBridgeOptions,
   })
   await bridge.start()
   bridges.push(bridge)
@@ -530,7 +580,7 @@ describe('sender allowlist and optional group restriction', () => {
     expect(h.agents.created).toHaveLength(0)
   })
 
-  it('rejects group non-thread messages with the thread hint', async () => {
+  it('rejects topic-chat messages outside a thread with the thread hint', async () => {
     const h = await makeHarness()
     await h.emitMessage('hi', { chatId: 'oc_grp', chatType: 'group' })
     await waitFor(() => h.channel.sent.length > 0)
@@ -538,12 +588,108 @@ describe('sender allowlist and optional group restriction', () => {
     expect(h.agents.created).toHaveLength(0)
   })
 
-  it('silently ignores unmentioned group traffic outside a topic', async () => {
+  it('silently ignores unmentioned top-level traffic in a topic chat', async () => {
     const h = await makeHarness()
     await h.emitMessage('普通群消息', { chatId: 'oc_grp', chatType: 'group', mentionedBot: false })
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(h.channel.sent).toHaveLength(0)
     expect(h.agents.created).toHaveLength(0)
+  })
+
+  it('keeps ordinary groups mention-only and reuses one chat-scoped session', async () => {
+    const h = await makeHarness()
+    h.channel.chatModes.set('oc_grp', 'group')
+
+    await h.emitMessage('大家随便聊天', { chatId: 'oc_grp', chatType: 'group', mentionedBot: false })
+    await h.emitMessage('/status', { chatId: 'oc_grp', chatType: 'group', mentionedBot: false })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(h.agents.created).toHaveLength(0)
+    expect(h.channel.sent).toHaveLength(0)
+
+    await h.emitMessage('请开始处理', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.values().next().value as FakeAgent
+    await waitFor(() => agent.followups.length === 1)
+
+    await h.emitMessage('这句仍然只是群聊', { chatId: 'oc_grp', chatType: 'group', mentionedBot: false })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(agent.followups).toHaveLength(1)
+
+    await h.emitMessage('再做一轮', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => agent.followups.length === 2)
+    expect(h.agents.created).toHaveLength(1)
+    expect(h.channel.chatModeCalls.filter(id => id === 'oc_grp')).toHaveLength(1)
+  })
+
+  it('injects all members ordinary-group history only when an authorized user @mentions DSH', async () => {
+    const provider = new FakeContextProvider()
+    provider.next = [
+      historyMessage({ messageId: 'om_a', senderName: '成员甲', text: '甲提供的资料' }),
+      historyMessage({ messageId: 'om_b', senderName: '成员乙', text: '乙补充的资料' }),
+    ]
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    h.channel.chatModes.set('oc_grp', 'group')
+
+    await h.emitMessage('甲乙继续讨论', { chatId: 'oc_grp', chatType: 'group', mentionedBot: false })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(provider.calls).toHaveLength(0)
+    expect(h.agents.created).toHaveLength(0)
+
+    await h.emitMessage('请根据大家的讨论执行', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => provider.calls.length === 1)
+    expect(provider.calls[0]).toMatchObject({ origin: 'group', chatId: 'oc_grp' })
+    const agent = h.agents.live.values().next().value as FakeAgent
+    await waitFor(() => agent.followups.length === 1)
+    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ n: string; x: string }> }
+    expect(frame.messages.map(item => item.n)).toEqual(['成员乙', '成员甲'])
+    expect(frame.messages.map(item => item.x)).toEqual([
+      expect.stringContaining('乙补充的资料'),
+      expect.stringContaining('甲提供的资料'),
+    ])
+  })
+
+  it('fails safe to mention-only when chat_mode lookup fails and only rootId is present', async () => {
+    const h = await makeHarness()
+    h.channel.chatModeError = new Error('metadata unavailable')
+    const ordinaryReply = { chatId: 'oc_grp', chatType: 'group' as const, rootId: 'om_reply_root' }
+
+    await h.emitMessage('明确触发', { ...ordinaryReply, mentionedBot: true })
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.values().next().value as FakeAgent
+    await waitFor(() => agent.followups.length === 1)
+
+    await h.emitMessage('没有 @，绝不能触发', { ...ordinaryReply, mentionedBot: false })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(agent.followups).toHaveLength(1)
+    expect(h.ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('获取群模式失败'),
+      'group',
+      'oc_grp',
+      expect.stringContaining('metadata unavailable'),
+    )
+  })
+
+  it('sends an ordinary-group task result directly to the group, never into a thread', async () => {
+    const h = await makeHarness()
+    h.channel.chatModes.set('oc_grp', 'group')
+    await h.emitMessage('处理任务', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    const inbound = agent.followups.at(-1) as { id?: unknown }
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitClaim(sessionId, inbound.id, 1)
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: '群内完成。' }] },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
+    const card = h.channel.sent.find(item => item.input.card !== undefined)!
+    expect(card.to).toBe('oc_grp')
+    expect(card.options).toEqual({})
+    expect(JSON.stringify(card.input.card)).toContain('群内完成。')
   })
 })
 
@@ -631,6 +777,245 @@ describe('sticky topic activation', () => {
       chatId: 'oc_grp', chatType: 'group', threadId: 'omt_open', rootId: 'om_root_open', mentionedBot: false,
     })
     await waitFor(() => h.agents.created.length === 1)
+  })
+})
+
+describe('session-group metadata refresh', () => {
+  const cases = [
+    {
+      label: 'ordinary group',
+      mode: 'group' as const,
+      kind: 'group' as const,
+      overrides: { chatId: 'oc_grp', chatType: 'group' as const, mentionedBot: true },
+    },
+    {
+      label: 'topic group',
+      mode: 'topic' as const,
+      kind: 'topic' as const,
+      overrides: {
+        chatId: 'oc_grp',
+        chatType: 'group' as const,
+        threadId: 'omt_refresh',
+        rootId: 'om_root_refresh',
+        mentionedBot: true,
+      },
+    },
+  ]
+
+  it.each(cases)('refreshes an active $label after TTL without changing its group id', async ({ mode, kind, overrides }) => {
+    let now = 1_000
+    const sessionGroups = new FakeSessionGroups()
+    const h = await makeHarness({}, {
+      sessionGroups,
+      sessionGroupMetadataTtlMs: 100,
+      sessionGroupMetadataNow: () => now,
+    })
+    h.channel.chatModes.set('oc_grp', mode)
+    h.channel.chatNames.set('oc_grp', '旧群名')
+
+    await h.emitMessage('第一条消息', overrides)
+    await waitFor(() => sessionGroups.assignments.length === 1)
+    const initial = sessionGroups.assignments[0]!
+    expect(initial.group).toMatchObject({ title: '旧群名', kind })
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp'])
+
+    // Still inside TTL: neither Feishu metadata nor the durable assignment is touched.
+    now = 1_050
+    h.channel.chatNames.set('oc_grp', '新群名')
+    await h.emitMessage('TTL 内的消息', overrides)
+    const agent = h.agents.live.get(initial.sessionId)!
+    await waitFor(() => agent.followups.length === 2)
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp'])
+    expect(sessionGroups.assignments).toHaveLength(1)
+
+    // At expiry, the next message refreshes and rewrites the current Session.
+    now = 1_100
+    await h.emitMessage('TTL 到期后的消息', overrides)
+    await waitFor(() => sessionGroups.assignments.length === 2)
+    const refreshed = sessionGroups.assignments[1]!
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp', 'oc_grp'])
+    expect(refreshed.sessionId).toBe(initial.sessionId)
+    expect(refreshed.group).toMatchObject({ title: '新群名', kind })
+    expect(refreshed.group.id).toBe(initial.group.id)
+    await waitFor(() => agent.followups.length === 3)
+  })
+
+  it('fails open on refresh errors and keeps processing with the old title', async () => {
+    let now = 2_000
+    const sessionGroups = new FakeSessionGroups()
+    const h = await makeHarness({}, {
+      sessionGroups,
+      sessionGroupMetadataTtlMs: 100,
+      sessionGroupMetadataNow: () => now,
+    })
+    h.channel.chatModes.set('oc_grp', 'group')
+    h.channel.chatNames.set('oc_grp', '稳定群名')
+    const overrides = { chatId: 'oc_grp', chatType: 'group' as const, mentionedBot: true }
+
+    await h.emitMessage('第一条消息', overrides)
+    await waitFor(() => sessionGroups.assignments.length === 1)
+    const { sessionId } = sessionGroups.assignments[0]!
+    const agent = h.agents.live.get(sessionId)!
+
+    now = 2_100
+    h.channel.chatInfoError = new Error('Feishu metadata unavailable')
+    await h.emitMessage('刷新失败也要继续', overrides)
+    await waitFor(() => agent.followups.length === 2)
+
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp', 'oc_grp'])
+    expect(sessionGroups.assignments).toHaveLength(1)
+    expect(sessionGroups.current.get(sessionId)?.title).toBe('稳定群名')
+  })
+
+  it('coalesces concurrent metadata refreshes across topics in the same chat', async () => {
+    const sessionGroups = new FakeSessionGroups()
+    const h = await makeHarness({}, { sessionGroups, sessionGroupMetadataTtlMs: 100 })
+    h.channel.chatModes.set('oc_grp', 'topic')
+    h.channel.chatNames.set('oc_grp', '并发作战室')
+    let release!: () => void
+    h.channel.chatInfoGate = new Promise<void>(resolve => { release = resolve })
+
+    await h.emitMessage('话题一', {
+      chatId: 'oc_grp', chatType: 'group', threadId: 'omt_one', rootId: 'om_root_one', mentionedBot: true,
+    })
+    await h.emitMessage('话题二', {
+      chatId: 'oc_grp', chatType: 'group', threadId: 'omt_two', rootId: 'om_root_two', mentionedBot: true,
+    })
+    await waitFor(() => h.channel.getChatInfoCalls.length === 1)
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp'])
+
+    release()
+    await waitFor(() => h.agents.created.length === 2)
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp'])
+    expect(sessionGroups.assignments).toHaveLength(2)
+    expect(sessionGroups.assignments.every(item => item.group.title === '并发作战室')).toBe(true)
+    expect(sessionGroups.assignments.every(item => item.group.kind === 'topic')).toBe(true)
+  })
+
+  it('leaves private-chat participant naming and lookup behavior unchanged', async () => {
+    let now = 3_000
+    const sessionGroups = new FakeSessionGroups()
+    const h = await makeHarness({}, {
+      sessionGroups,
+      sessionGroupMetadataTtlMs: 100,
+      sessionGroupMetadataNow: () => now,
+    })
+    h.channel.rootMessageItem = { sender: { sender_name: '爱丽丝' } }
+
+    await h.emitMessage('私聊一')
+    await waitFor(() => sessionGroups.assignments.length === 1)
+    const { sessionId, group } = sessionGroups.assignments[0]!
+    expect(group).toMatchObject({ title: '与爱丽丝的私聊', kind: 'private' })
+    expect(h.channel.getMessageCalls).toHaveLength(1)
+    expect(h.channel.getChatInfoCalls).toHaveLength(0)
+
+    now = 9_000
+    await h.emitMessage('私聊二')
+    await waitFor(() => h.agents.live.get(sessionId)!.followups.length === 2)
+    expect(h.channel.getMessageCalls).toHaveLength(1)
+    expect(h.channel.getChatInfoCalls).toHaveLength(0)
+    expect(sessionGroups.assignments).toHaveLength(1)
+  })
+
+  it('/new refreshes before rotating so the fresh Session never inherits a stale title', async () => {
+    let now = 4_000
+    const sessionGroups = new FakeSessionGroups()
+    const h = await makeHarness({}, {
+      sessionGroups,
+      sessionGroupMetadataTtlMs: 100,
+      sessionGroupMetadataNow: () => now,
+    })
+    h.channel.chatModes.set('oc_grp', 'group')
+    h.channel.chatNames.set('oc_grp', '轮换前群名')
+    const overrides = { chatId: 'oc_grp', chatType: 'group' as const, mentionedBot: true }
+
+    await h.emitMessage('第一轮', overrides)
+    await waitFor(() => h.agents.created.length === 1)
+    const oldId = h.agents.created[0]!.options.sessionId!
+    const oldAgent = h.agents.live.get(oldId)!
+    const firstMessage = oldAgent.followups.at(-1) as { id?: unknown }
+    await h.emitSessionEvent(oldId, 'turn/start', { turn: 1 })
+    await h.emitClaim(oldId, firstMessage.id, 1)
+    await h.emitSessionEvent(oldId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    oldAgent.status = 'idle'
+
+    now = 4_100
+    h.channel.chatNames.set('oc_grp', '轮换后群名')
+    await h.emitMessage('/new', overrides)
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('下一条普通消息')))
+    await h.emitMessage('新 Session 的第一轮', overrides)
+    await waitFor(() => h.agents.created.length === 2)
+
+    const newId = h.agents.created[1]!.options.sessionId!
+    expect(sessionGroups.current.get(newId)).toMatchObject({ title: '轮换后群名', kind: 'group' })
+    expect(sessionGroups.current.get(newId)?.id).toBe(sessionGroups.assignments[0]!.group.id)
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp', 'oc_grp'])
+  })
+
+  it('/resume assigns the refreshed descriptor to the target Session', async () => {
+    let now = 5_000
+    const sessionGroups = new FakeSessionGroups()
+    const h = await makeHarness({}, {
+      sessionGroups,
+      sessionGroupMetadataTtlMs: 100,
+      sessionGroupMetadataNow: () => now,
+    })
+    h.channel.chatModes.set('oc_grp', 'group')
+    h.channel.chatNames.set('oc_grp', '恢复前群名')
+    const overrides = { chatId: 'oc_grp', chatType: 'group' as const, mentionedBot: true }
+
+    await h.emitMessage('当前会话', overrides)
+    await waitFor(() => h.agents.created.length === 1)
+    const oldId = h.agents.created[0]!.options.sessionId!
+    const oldAgent = h.agents.live.get(oldId)!
+    const firstMessage = oldAgent.followups.at(-1) as { id?: unknown }
+    await h.emitSessionEvent(oldId, 'turn/start', { turn: 1 })
+    await h.emitClaim(oldId, firstMessage.id, 1)
+    await h.emitSessionEvent(oldId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    oldAgent.status = 'idle'
+
+    const target: SessionHeader = {
+      version: 0,
+      id: SessionId(`${oldId}-target`),
+      createdAt: 9,
+      cwd: h.workspace,
+    }
+    h.persistence.headers = [target]
+    h.persistence.remember(String(target.id))
+    now = 5_100
+    h.channel.chatNames.set('oc_grp', '恢复后群名')
+
+    await h.emitMessage(`/resume ${String(target.id)}`, overrides)
+    await waitFor(() => h.agents.resumed.length === 1)
+    expect(sessionGroups.current.get(String(target.id))).toMatchObject({ title: '恢复后群名', kind: 'group' })
+    expect(sessionGroups.current.get(String(target.id))?.id).toBe(sessionGroups.assignments[0]!.group.id)
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp', 'oc_grp'])
+  })
+
+  it('queries current metadata again when a persisted Session is resumed after service restart', async () => {
+    const sessionGroups = new FakeSessionGroups()
+    const h = await makeHarness({}, { sessionGroups })
+    h.channel.chatModes.set('oc_grp', 'group')
+    h.channel.chatNames.set('oc_grp', '重启后的最新群名')
+    const target: SessionHeader = {
+      version: 0,
+      id: SessionId(`${sessionPrefix('group:oc_grp:chat')}-persisted`),
+      createdAt: 9,
+      cwd: h.workspace,
+    }
+    h.persistence.headers = [target]
+    h.persistence.remember(String(target.id))
+
+    await h.emitMessage('服务重启后的第一条消息', {
+      chatId: 'oc_grp', chatType: 'group', mentionedBot: true,
+    })
+    await waitFor(() => h.agents.resumed.length === 1)
+
+    expect(h.channel.getChatInfoCalls).toEqual(['oc_grp'])
+    expect(sessionGroups.current.get(String(target.id))).toMatchObject({
+      title: '重启后的最新群名',
+      kind: 'group',
+    })
   })
 })
 
@@ -846,7 +1231,7 @@ describe('/resume atomic switch', () => {
     await h.emitMessage('hello')
     await waitFor(() => h.agents.created.length === 1)
     await h.emitMessage('/resume other-prefix-1')
-    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('找不到属于当前飞书话题')))
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('找不到属于当前飞书会话范围')))
   })
 })
 
@@ -1370,11 +1755,15 @@ describe('preset setup and ask-user blocking', () => {
     const agentCtx = {
       tools: { restrict: (filter: unknown) => { order.push(`restrict:${JSON.stringify(filter)}`) } },
       systemPrompt: { section: () => undefined },
+      on: (name: string) => { order.push(`on:${name}`); return () => undefined },
     }
     await (h.bridge as unknown as { setupAgent: (agentCtx: never, presetId?: string) => Promise<void> }).setupAgent(agentCtx as never, 'standard')
     const presets = h.ctx.services.get('agentPresets') as { mount: ReturnType<typeof vi.fn>; resolve: ReturnType<typeof vi.fn> }
     expect(presets.mount).toHaveBeenCalledTimes(1)
-    expect(order).toEqual(['restrict:{"deny":["ask_user_question","exit_plan_mode"]}'])
+    expect(order).toEqual([
+      'restrict:{"deny":["ask_user_question","exit_plan_mode"]}',
+      'on:agent/pre-step',
+    ])
   })
 })
 
@@ -1837,7 +2226,7 @@ if (argv[0] === 'config' && argv[1] === 'show') {
 `
 
 describe('context backfill (docs/13)', () => {
-  it('prepends a JSON-framed context block and attributes stats to the exact turn', async () => {
+  it('queues a tagged JSON context envelope and attributes stats to the exact turn', async () => {
     const provider = new FakeContextProvider()
     provider.next = [historyMessage({ messageId: 'om_h1' })]
     const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
@@ -1984,6 +2373,23 @@ describe('context backfill (docs/13)', () => {
     expect(frame.messages[0]!.n).toBe('老王')
     expect(h.channel.listed[0]!.containerIdType).toBe('chat')
     expect(h.channel.listed[0]!.containerId).toBe('oc_p2p')
+  })
+
+  it('sdk backend reads an ordinary group through the whole-chat container', async () => {
+    const h = await makeHarness({ contextMode: 'auto', contextBackend: 'sdk' })
+    h.channel.chatModes.set('oc_grp', 'group')
+    h.channel.historyItems = [{
+      message_id: 'om_group_history',
+      msg_type: 'text',
+      body: { content: JSON.stringify({ text: '所有成员都可贡献上下文' }) },
+      sender: { id: 'ou_member', sender_type: 'user', sender_name: '群成员' },
+      create_time: String(Date.now() - 1_000),
+      deleted: false,
+    }]
+
+    await h.emitMessage('请处理', { chatType: 'group', chatId: 'oc_grp', mentionedBot: true })
+    await waitFor(() => h.channel.listed.length > 0)
+    expect(h.channel.listed[0]).toMatchObject({ containerIdType: 'chat', containerId: 'oc_grp' })
   })
 
   it('sdk backend uses the thread container for group threads', async () => {

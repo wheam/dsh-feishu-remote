@@ -32,10 +32,9 @@ export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike
     handshakeTimeoutMs: 15_000,
     policy: {
       dmMode: 'open',
-      // The bridge owns topic activation: it must SEE unmentioned follow-ups
-      // so a thread can stay active after its first @mention. It still ignores
-      // unmentioned messages in never-activated threads (and enforces the
-      // sender allowlist) before any Agent work.
+      // The bridge must SEE all group messages: active topics accept follow-ups
+      // without another mention, while ordinary groups retain unmentioned
+      // messages only as history and require an explicit @ for every task.
       requireMention: false,
       respondToMentionAll: false,
     },
@@ -107,6 +106,8 @@ export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike
         ? items[0] as Record<string, unknown>
         : undefined
     },
+    getChatInfo: chatId => channel.getChatInfo(chatId),
+    getChatMode: chatId => channel.getChatMode(chatId),
     downloadMessageResource: async (messageId, fileKey, type, maxBytes) => {
       const response = await channel.rawClient.im.v1.messageResource.get({
         path: { message_id: messageId, file_key: fileKey },

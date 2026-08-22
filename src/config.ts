@@ -25,7 +25,7 @@ export interface Config {
   /** Optional group restriction. Empty means every group the bot joins. */
   allowedChatIds?: string[]
   allowAllUsers?: boolean
-  /** Require the first message in each group topic to @mention the bot. */
+  /** Require the first message in each topic to @mention; ordinary groups always require every @. */
   requireMention?: boolean
   provider?: string
   model?: string

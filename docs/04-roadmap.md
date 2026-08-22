@@ -19,7 +19,7 @@
 - 环境前置：Node ≥22、安装 pnpm（`dsh plugin` 依赖 pnpm）、飞书 SDK 精确版本 + 构建期 bundle。
 - 步骤 0：仓库骨架 + `security/state/cards` 移植 + lark-bridge 测试搬来跑绿（+ 裁剪后契约测试）。
 - 步骤 1（echo spike）：空壳 cordis 插件 + SDK 长连接 + fail-closed 发送者白名单
-  （`allowedChatIds` 作为可选群范围限制），跑通"飞书 → Mac → 回显"链路；群话题/群非话题/p2p 三态行为验证；
+  （`allowedChatIds` 作为可选群范围限制），跑通"飞书 → Mac → 回显"链路；普通群/话题群/p2p 三态行为验证；
   飞书应用形态（个人应用 vs 企业自建）定案并文档固化开通清单。
 
 ## Phase 1：MVP（3-5 周，单人）
@@ -28,7 +28,7 @@
   answerer `prepend` 双向隔离；飞书会话无通往浏览器的提问路径。
 - 步骤 3：单会话对话（create/resume + followup + 全文回复）；飞书会话出现在 Web GUI 列表。
 - 步骤 4：**审批卡片闭环**（灵魂功能）+ 六条结算/断线路径 + 终态 updateCard。
-- 步骤 5：话题映射（三支路 originKey）+ 全套命令 + 每话题控制队列 + `/new` pending 协议 +
+- 步骤 5：私聊/普通群/话题映射 + 全套命令 + 每 origin 控制队列 + `/new` pending 协议 +
   `/resume` 原子切换。
 - 步骤 6：流式节流 + 进度/终态卡片 + 应用级出站调度器 + 体积预算与永久错误兜底 + 超长分片。
 
