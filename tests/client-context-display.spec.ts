@@ -95,9 +95,16 @@ describe('multi-bot editor presentation', () => {
 describe('PersonalAgent onboarding presentation', () => {
   it('separates choosing an existing bot from creating a new bot', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
-    expect(source).toContain('props.onboardingStart("select")')
+    expect(source).toContain('props.onboardingStart("select", props.multiAdd ? "new-bot" : "legacy")')
     expect(source).toContain('"onboarding.select": "选择并绑定已有机器人"')
     expect(source).toContain('"onboarding.create": "创建并绑定新机器人"')
     expect(source).toContain('选择你已经创建的机器人')
+  })
+
+  it('makes QR onboarding the primary multi-bot add flow and keeps manual setup advanced', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('children: "扫码添加机器人"')
+    expect(source).toContain('"onboarding.manualAdd": "手动配置（高级）"')
+    expect(source).toContain('onboardingStart: (mode, destination = "legacy")')
   })
 })

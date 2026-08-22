@@ -8,7 +8,7 @@
 ## 0. 结论
 
 > 实现记录（2026-08-23）：Phase A–C 已落入 `src/profile.ts`、`src/bots.ts`、Bridge、Settings/Admin
-> RPC 与 Web GUI；legacy 回归和多机器人专项测试已纳入 `pnpm run check`。Phase D 需要两个真实飞书
+> RPC、Web GUI 与多机器人扫码新增；legacy 回归和多机器人专项测试已纳入 `pnpm run check`。Phase D 需要两个真实飞书
 > App 与租户权限，保留为部署验收项，不在无凭据的仓库测试中伪造通过。
 
 本项目应当支持在**同一个 `dsh web` 进程**中运行多个飞书/Lark 机器人，并允许每个机器人独立配置：
@@ -852,7 +852,11 @@ RPC host 必须自己从当前 descriptor 生成允许迁移的字段白名单�
 
 不能在插件升级时自动转换，避免一次普通升级导致连接身份和 Session prefix 改变。
 
-QR onboarding 的写入目标也必须模式感知：legacy 模式继续更新根字段；multi mode 必须携带目标 botId（或“创建新 bot”意图），由 host 基于最新 revision 更新对应 `bots[]` 元素。首版若尚未实现这条 multi 写入，设置页必须在 multi mode 禁用 QR 按钮并说明可手工填写 appId/credential ref，不能继续写入已被忽略的根字段后显示成功。
+QR onboarding 的写入目标保持模式感知：legacy 模式继续更新根字段；multi mode 携带
+`destination: new-bot`，由 Host 在扫码期间确认 `bots[]` 未被并发修改，再使用开始扫码时的
+settings revision 执行一次 CAS，追加规范化 bot。新 bot 的 Secret 只写 credential provider，App ID、credential ref、扫码 owner
+白名单、App Session namespace 与 SDK 上下文均自动生成。重复 App ID 在写凭据前拒绝；配置写入
+失败时补偿清理新 credential。设置页以「扫码添加机器人」为主入口，手工填写仅作为高级方式。
 
 ### 10.4 Bot 状态展示
 
@@ -1227,7 +1231,7 @@ Profile 是本机管理员控制的 system prompt，信任级别高于飞书聊�
 - legacy 转换 RPC 在 revision 冲突时零写入，在成功时一次性写 bots 并 unset 旧字段；
 - editor snapshot 暴露 host revision；并发页面保存冲突时保留用户编辑且 `saving` 最终复位；
 - base 层 legacy appId 无法 unset 时转换仍成功，multi mode 只运行 bots；
-- multi mode QR onboarding 按 botId 写入，或在未实现时按钮明确禁用；
+- multi mode QR onboarding 以 `destination: new-bot` 原子追加 bot，重复 App 与并发编辑均 fail closed；
 - runtime status RPC 只允许 loopback 且 payload 已脱敏。
 
 ---

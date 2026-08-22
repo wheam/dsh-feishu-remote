@@ -578,9 +578,13 @@ window.__ModuleLoader__.load({
 
 		function MultiBotPanel(props) {
 			const [confirmingLegacyConversion, setConfirmingLegacyConversion] = react.useState(false);
+			const [addingBot, setAddingBot] = react.useState(false);
 			const hook = props.useFeishuBotAdmin;
 			if (hook === void 0) return null;
 			const state = hook(value => value);
+			const onboardingHook = props.usePersonalAgentOnboarding;
+			const onboardingState = onboardingHook === void 0 ? void 0 : onboardingHook(value => value);
+			const onboardingBusy = onboardingActive(onboardingState?.status) || onboardingState?.acting === true;
 			if (!state?.loaded) return react_jsx_runtime.jsx("p", { className: cssDefault.hint, children: "正在加载机器人配置…" });
 			if (state.mode === "unavailable") return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
 				react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人设置仅限 Host 本机" }),
@@ -605,22 +609,30 @@ window.__ModuleLoader__.load({
 						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人管理" }),
 						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: `已配置 ${state.bots.length} 个机器人。点击卡片可以展开并修改设置。` })
 					] }),
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || !state.writable, onClick: props.addBot, children: "添加机器人" })
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || state.dirty || onboardingBusy || !state.writable, onClick: () => setAddingBot(true), children: "扫码添加机器人" })
 				] }),
-				...(state.bots ?? []).map((bot, index) => react_jsx_runtime.jsx(BotEditor, { bot, index, status: statuses.get(bot.id), disabled: state.saving || !state.writable, onEdit: (field, value) => props.editBot(index, field, value), onDelete: () => props.deleteBot(index) }, bot.id || bot.appId || `bot-${index}`)),
+				addingBot ? react_jsx_runtime.jsx(OnboardingPanel, {
+					...props,
+					multiAdd: true,
+					writable: state.writable,
+					cardDirty: state.dirty,
+					onClose: () => setAddingBot(false),
+					onManual: () => { props.addBot(); setAddingBot(false); }
+				}) : null,
+				...(state.bots ?? []).map((bot, index) => react_jsx_runtime.jsx(BotEditor, { bot, index, status: statuses.get(bot.id), disabled: state.saving || onboardingBusy || !state.writable, onEdit: (field, value) => props.editBot(index, field, value), onDelete: () => props.deleteBot(index) }, bot.id || bot.appId || `bot-${index}`)),
 				react_jsx_runtime.jsxs("details", { className: cssDefault.botAdvanced, children: [
 					react_jsx_runtime.jsx("summary", { className: cssDefault.botAdvancedSummary, children: "全局高级设置" }),
 					react_jsx_runtime.jsxs("label", { className: cssDefault.field + " " + cssDefault.botLimit, children: [
 						react_jsx_runtime.jsx("span", { className: cssDefault.label, children: "所有机器人同时运行的任务上限" }),
-						react_jsx_runtime.jsx("input", { className: cssDefault.input, inputMode: "numeric", value: String(state.maxTotalLiveAgents ?? 0), disabled: state.saving || !state.writable, onChange: event => props.editMax(Number(event.target.value || 0)) }),
+						react_jsx_runtime.jsx("input", { className: cssDefault.input, inputMode: "numeric", value: String(state.maxTotalLiveAgents ?? 0), disabled: state.saving || onboardingBusy || !state.writable, onChange: event => props.editMax(Number(event.target.value || 0)) }),
 						react_jsx_runtime.jsx("span", { className: cssDefault.hint, children: "填写 0 表示不限制；一般保持 0 即可。" })
 					] })
 				] }),
 				state.dirty && state.invalid ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, role: "alert", children: "还有必填项未完成，或某个数字/Workspace 设置无效；请展开标记为“待完成”的机器人检查。" }) : null,
 				state.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error }) : null,
 				react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, disabled: !state.dirty || state.saving, onClick: props.discardBots, children: "取消修改" }),
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, disabled: !state.dirty || state.invalid || state.saving || !state.writable, onClick: props.saveBots, children: state.saving ? "保存中…" : "保存更改" })
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, disabled: !state.dirty || state.saving || onboardingBusy, onClick: props.discardBots, children: "取消修改" }),
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, disabled: !state.dirty || state.invalid || state.saving || onboardingBusy || !state.writable, onClick: props.saveBots, children: state.saving ? "保存中…" : "保存更改" })
 				] })
 			] });
 		}
@@ -629,7 +641,8 @@ window.__ModuleLoader__.load({
 			const hook = props.usePersonalAgentOnboarding;
 			if (hook === void 0) return null;
 			const snapshot = hook((value) => value);
-			const status = snapshot?.status;
+			const rawStatus = snapshot?.status;
+			const status = props.multiAdd && rawStatus?.destination !== "new-bot" ? void 0 : rawStatus;
 			const phase = status?.phase ?? "idle";
 			const active = onboardingActive(status);
 			const canCancel = phase === "starting" || phase === "qr_ready";
@@ -644,7 +657,7 @@ window.__ModuleLoader__.load({
 				const appSuffix = status?.app?.appIdSuffix ?? "unknown";
 				const message = props.t("onboarding.updateConfirm").replace("{app}", appSuffix);
 				if (typeof window !== "undefined" && !window.confirm(message)) return;
-				props.onboardingStart("update");
+				props.onboardingStart("update", props.multiAdd ? "new-bot" : "legacy");
 			};
 			const statusClass = status?.connected
 				? cssDefault.status + " " + cssDefault.statusReady
@@ -659,8 +672,8 @@ window.__ModuleLoader__.load({
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
 				react_jsx_runtime.jsxs("div", { className: cssDefault.onboardingHead, children: [
 					react_jsx_runtime.jsxs("div", { children: [
-						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: props.t("onboarding.title") }),
-						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: props.t("onboarding.description") })
+						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: props.t(props.multiAdd ? "onboarding.multiTitle" : "onboarding.title") }),
+						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: props.t(props.multiAdd ? "onboarding.multiDescription" : "onboarding.description") })
 					] }),
 					react_jsx_runtime.jsx("span", { className: statusClass, role: "status", children: props.t(onboardingStatusKey(status)) })
 				] }),
@@ -690,13 +703,13 @@ window.__ModuleLoader__.load({
 					react_jsx_runtime.jsx("button", {
 						type: "button", className: cssDefault.primary,
 						disabled: blocked,
-						onClick: () => props.onboardingStart("select"),
+						onClick: () => props.onboardingStart("select", props.multiAdd ? "new-bot" : "legacy"),
 						children: props.t(configured ? "onboarding.selectOther" : "onboarding.select")
 					}),
 					react_jsx_runtime.jsx("button", {
 						type: "button", className: cssDefault.secondary,
 						disabled: blocked,
-						onClick: () => props.onboardingStart("create"),
+						onClick: () => props.onboardingStart("create", props.multiAdd ? "new-bot" : "legacy"),
 						children: props.t(configured ? "onboarding.createAnother" : "onboarding.create")
 					}),
 					canUpdate ? react_jsx_runtime.jsx("button", {
@@ -716,9 +729,21 @@ window.__ModuleLoader__.load({
 						disabled: acting || !writable,
 						onClick: props.onboardingCancel,
 						children: props.t("onboarding.cancel")
+					}) : null,
+					props.multiAdd && !active && props.onManual ? react_jsx_runtime.jsx("button", {
+						type: "button", className: cssDefault.secondary,
+						disabled: acting || !writable || props.cardDirty === true,
+						onClick: props.onManual,
+						children: props.t("onboarding.manualAdd")
+					}) : null,
+					props.multiAdd && props.onClose ? react_jsx_runtime.jsx("button", {
+						type: "button", className: cssDefault.secondary,
+						disabled: active || acting,
+						onClick: props.onClose,
+						children: props.t(phase === "ready" ? "onboarding.done" : "onboarding.close")
 					}) : null
 				] }),
-				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: props.t("onboarding.manualHint") })
+				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, children: props.t(props.multiAdd ? "onboarding.multiHint" : "onboarding.manualHint") })
 			] });
 		}
 
@@ -931,7 +956,12 @@ window.__ModuleLoader__.load({
 				return {
 					hooks: { feishuBotAdmin: this.store },
 					convertLegacy: () => this.convertLegacy(),
-					addBot: () => this.stage([...this.snapshot.bots, { id: `bot-${this.snapshot.bots.length + 1}`, enabled: true, appId: "", appSecretRef: "", brand: "feishu", allowedOpenIds: "", allowedChatIds: "", allowAllUsers: false, requireMention: true, defaultWorkspace: "", workspacePolicy: "default", profileFile: "", agentPreset: "", provider: "", model: "", maxLiveAgents: 0, contextMode: "auto", contextBackend: "sdk", sessionNamespace: "app" }]),
+					addBot: () => {
+						const used = new Set(this.snapshot.bots.map(bot => bot.id));
+						let number = this.snapshot.bots.length + 1;
+						while (used.has(`bot-${number}`)) number += 1;
+						this.stage([...this.snapshot.bots, { id: `bot-${number}`, enabled: true, appId: "", appSecretRef: "", brand: "feishu", allowedOpenIds: "", allowedChatIds: "", allowAllUsers: false, requireMention: true, defaultWorkspace: "", workspacePolicy: "default", profileFile: "", agentPreset: "", provider: "", model: "", maxLiveAgents: 0, contextMode: "auto", contextBackend: "sdk", sessionNamespace: "app" }]);
+					},
 					deleteBot: index => this.stage(this.snapshot.bots.filter((_bot, item) => item !== index)),
 					editBot: (index, field, value) => this.stage(this.snapshot.bots.map((bot, item) => item === index ? { ...bot, [field]: value } : bot)),
 					editMax: value => this.stage(this.snapshot.bots, value),
@@ -1004,7 +1034,7 @@ window.__ModuleLoader__.load({
 			inject() {
 				return {
 					hooks: { personalAgentOnboarding: this.store },
-					onboardingStart: (mode) => this.invoke("onboarding/start", { mode }),
+					onboardingStart: (mode, destination = "legacy") => this.invoke("onboarding/start", { mode, destination }),
 					onboardingCancel: () => this.invoke("onboarding/cancel"),
 					onboardingRetry: () => this.invoke("onboarding/retry")
 				};
@@ -1025,15 +1055,19 @@ window.__ModuleLoader__.load({
 			"settings.discard": "Discard", "settings.save": "Save", "settings.saving": "Saving…", "settings.saveFailed": "Save failed",
 			"onboarding.title": "Connect a Feishu bot",
 			"onboarding.description": "Choose an existing PersonalAgent you own, or create a new one. A Feishu/Lark scan securely saves its credentials on this Host and connects it without developer-console setup.",
+			"onboarding.multiTitle": "Add a bot",
+			"onboarding.multiDescription": "Scan to choose an existing PersonalAgent or create a new one. App ID, secret storage, owner access, and connection are configured automatically.",
 			"onboarding.select": "Select an existing bot", "onboarding.selectOther": "Switch to an existing bot",
 			"onboarding.create": "Create a new bot", "onboarding.createAnother": "Create another new bot", "onboarding.grant": "Grant missing permissions",
 			"onboarding.retry": "Retry connection", "onboarding.cancel": "Cancel", "onboarding.qrAlt": "Feishu PersonalAgent authorization QR code",
+			"onboarding.manualAdd": "Manual setup (advanced)", "onboarding.done": "Done", "onboarding.close": "Close",
 			"onboarding.qrRendering": "Rendering QR code",
 			"onboarding.scanHintCreate": "Scan with Feishu/Lark, review the permissions, then confirm creation of a new bot.",
 			"onboarding.scanHintSelect": "Scan with Feishu/Lark, choose a PersonalAgent you already own, review the permissions, then confirm binding.",
 			"onboarding.scanHintUpdate": "Scan with Feishu/Lark, review the permission changes for this bot, then confirm.",
 			"onboarding.expiresIn": "Expires in", "onboarding.openLink": "Open the authorization link on this device",
 			"onboarding.manualHint": "If the plugin is reinstalled and its saved settings are still present, it reconnects automatically. Otherwise choose the existing bot here; advanced fields below also support manually-created apps.",
+			"onboarding.multiHint": "Recommended: scan to add the bot. Manual setup is intended only for apps whose credentials are already managed separately.",
 			"onboarding.loopbackOnly": "For security, bot creation is available only when this page is opened on the Host itself (localhost).",
 			"onboarding.updateConfirm": "Re-authorize App …{app} with the requested messaging, event, card, history, and reaction permissions? Feishu will show the final permission diff before applying it.",
 			"onboarding.capabilityUnavailable": "This tenant did not expose a complete permission projection; connection health is used as the final readiness check.",
@@ -1089,15 +1123,19 @@ window.__ModuleLoader__.load({
 			"settings.discard": "放弃", "settings.save": "保存", "settings.saving": "保存中…", "settings.saveFailed": "保存失败",
 			"onboarding.title": "连接飞书机器人",
 			"onboarding.description": "可以选择你已经创建的 PersonalAgent，也可以新建一个。扫码后会在本机安全保存凭据并连接，无需进入开发者后台。",
+			"onboarding.multiTitle": "添加机器人",
+			"onboarding.multiDescription": "扫码选择已有 PersonalAgent，或者创建一个新的。App ID、Secret 安全存储、使用者权限和长连接都会自动配置。",
 			"onboarding.select": "选择并绑定已有机器人", "onboarding.selectOther": "改用已有机器人",
 			"onboarding.create": "创建并绑定新机器人", "onboarding.createAnother": "再创建一个新机器人", "onboarding.grant": "补开缺失权限",
 			"onboarding.retry": "重试连接", "onboarding.cancel": "取消", "onboarding.qrAlt": "飞书 PersonalAgent 授权二维码",
+			"onboarding.manualAdd": "手动配置（高级）", "onboarding.done": "完成", "onboarding.close": "关闭",
 			"onboarding.qrRendering": "正在生成二维码",
 			"onboarding.scanHintCreate": "请用手机飞书/Lark 扫码，核对权限清单后确认创建新机器人。",
 			"onboarding.scanHintSelect": "请用手机飞书/Lark 扫码，选择你已经创建的机器人，核对权限后确认绑定。",
 			"onboarding.scanHintUpdate": "请用手机飞书/Lark 扫码，核对这个机器人的权限变更后确认。",
 			"onboarding.expiresIn": "剩余", "onboarding.openLink": "在本机打开授权链接",
 			"onboarding.manualHint": "重新安装插件后，若原设置仍在会自动重连；若设置已丢失，可在这里重新选择已有机器人。下方高级字段也支持手工自建应用。",
+			"onboarding.multiHint": "推荐直接扫码添加；只有凭据已经由你单独管理的自建应用，才需要手动配置。",
 			"onboarding.loopbackOnly": "出于安全考虑，创建机器人只能在 Host 本机通过 localhost 打开的设置页中进行。",
 			"onboarding.updateConfirm": "确认给 App …{app} 补开本插件申请的消息、事件、卡片、历史与 reaction 权限吗？飞书会在应用前再次展示最终权限差异。",
 			"onboarding.capabilityUnavailable": "当前租户未返回完整权限投影；页面将以机器人长连接健康状态作为最终就绪依据。",

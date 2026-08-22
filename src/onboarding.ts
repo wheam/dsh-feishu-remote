@@ -18,8 +18,9 @@ import {
   type AppAddons,
 } from '@larksuiteoapi/node-sdk'
 import * as QRCode from 'qrcode'
+import { validateMultiBotConfig } from './config.js'
 import { bounded, redactSecrets } from './security.js'
-import type { FlatSettings } from './settings.js'
+import { SETTINGS_NAMESPACE, type FlatSettings } from './settings.js'
 import type { LarkBrand } from './types.js'
 
 export const ONBOARDING_RPC_CHANNEL = '/dsh-feishu-remote'
@@ -71,6 +72,7 @@ export type OnboardingPhase =
   | 'expired'
 
 export type OnboardingMode = 'create' | 'select' | 'update'
+export type OnboardingDestination = 'legacy' | 'new-bot'
 
 export type CapabilityState = 'ok' | 'missing' | 'unknown'
 
@@ -93,6 +95,7 @@ export interface OnboardingStatus {
   revision: number
   phase: OnboardingPhase
   mode?: OnboardingMode
+  destination?: OnboardingDestination
   configured: boolean
   connected: boolean
   /** A created-but-uncommitted app can be re-authorized instead of orphaned. */
@@ -144,8 +147,10 @@ type RegisterResult = Awaited<ReturnType<typeof registerApp>>
 interface RegistrationSession {
   id: string
   mode: OnboardingMode
+  destination: OnboardingDestination
   targetAppId?: string
   previousSettings?: FlatSettings
+  previousRevision?: number
   controller: AbortController
   committing: boolean
   task?: Promise<void>
@@ -155,7 +160,7 @@ export interface OnboardingDependencies {
   registerApp: typeof registerApp
   renderQr: (url: string) => Promise<string>
   probeApp: (appId: string, appSecret: string, brand: LarkBrand) => Promise<AppProbe>
-  getBridgeHealth: () => BridgeHealth | undefined
+  getBridgeHealth: (appId?: string) => BridgeHealth | undefined
   waitForBridge: (appId: string, signal?: AbortSignal) => Promise<BridgeHealth>
 }
 
@@ -181,6 +186,71 @@ function sameBinding(left: FlatSettings, right: FlatSettings): boolean {
     && left.allowedOpenIds === right.allowedOpenIds
     && left.allowedChatIds === right.allowedChatIds
     && left.allowAllUsers === right.allowAllUsers
+}
+
+function sameBotBindings(left: FlatSettings, right: FlatSettings): boolean {
+  return JSON.stringify(left.bots) === JSON.stringify(right.bots)
+}
+
+function botIdFor(appId: string, bots: readonly FlatSettings['bots'][number][]): string {
+  const normalized = appId.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '')
+  const stem = `bot-${normalized.slice(-36) || 'feishu'}`
+  const used = new Set(bots.map(bot => bot.id))
+  if (!used.has(stem)) return stem
+  for (let index = 2; index < 10_000; index += 1) {
+    const suffix = `-${index}`
+    const candidate = `${stem.slice(0, 48 - suffix.length)}${suffix}`
+    if (!used.has(candidate)) return candidate
+  }
+  throw new OnboardingError('bot_id_exhausted', '无法为新机器人生成唯一名称，请先整理现有机器人列表。', false)
+}
+
+function onboardedBot(
+  appId: string,
+  appSecretRef: string,
+  brand: LarkBrand,
+  ownerOpenId: string,
+  existing: readonly FlatSettings['bots'][number][],
+): FlatSettings['bots'][number] {
+  return {
+    id: botIdFor(appId, existing),
+    enabled: true,
+    appId,
+    appSecretRef,
+    brand,
+    statePath: '',
+    inboundDir: '',
+    feishuCliPath: '',
+    allowedOpenIds: [ownerOpenId],
+    allowedChatIds: [],
+    allowAllUsers: false,
+    requireMention: true,
+    defaultWorkspace: '',
+    workspacePolicy: 'default',
+    agentPreset: '',
+    profileFile: '',
+    provider: '',
+    model: '',
+    progressCards: true,
+    progressUpdateMs: 600,
+    workingReaction: true,
+    maxInboundFileBytes: 20 * 1024 * 1024,
+    maxOutboundFileBytes: 30 * 1024 * 1024,
+    interactiveTimeoutMs: 10 * 60 * 1000,
+    enableApprovals: true,
+    cardBodyMaxChars: 12_000,
+    maxLiveAgents: 0,
+    commandAllowlist: [],
+    contextMode: 'auto',
+    contextBackend: 'sdk',
+    contextP2pMaxMessages: 80,
+    contextP2pMaxChars: 50_000,
+    contextMaxMessages: 150,
+    contextMaxChars: 100_000,
+    contextTimeoutMs: 10_000,
+    contextIncludeBot: true,
+    sessionNamespace: 'app',
+  }
 }
 
 function safeErrorText(error: unknown, secret = ''): string {
@@ -379,7 +449,8 @@ function defaultDependencies(overrides: Partial<OnboardingDependencies>): Onboar
 export class PersonalAgentOnboardingService {
   private revision = 0
   private active?: RegistrationSession
-  private pendingApp?: { appId: string; brand: LarkBrand }
+  private pendingApp?: { appId: string; brand: LarkBrand; destination: OnboardingDestination }
+  private statusAppId?: string
   private disposed = false
   private state: Omit<OnboardingStatus, 'configured' | 'connected'> = {
     revision: 0,
@@ -397,19 +468,24 @@ export class PersonalAgentOnboardingService {
 
   status(): OnboardingStatus {
     const current = this.settings.get()
-    const health = this.deps.getBridgeHealth()
-    const configured = current.appId.trim() !== ''
+    const destination = this.state.destination ?? (current.bots.length > 0 ? 'new-bot' : 'legacy')
+    const targetAppId = destination === 'new-bot' ? this.statusAppId : current.appId.trim()
+    const selectedBot = destination === 'new-bot'
+      ? current.bots.find(bot => bot.appId === targetAppId)
+      : undefined
+    const health = this.deps.getBridgeHealth(targetAppId || undefined)
+    const configured = destination === 'new-bot' ? selectedBot !== undefined : targetAppId !== ''
     const currentApp = configured
       ? {
-          appIdSuffix: suffix(current.appId),
+          appIdSuffix: suffix(targetAppId!),
           ...(health?.botName === undefined ? {} : { botName: health.botName }),
-          brand: current.brand,
+          brand: selectedBot?.brand ?? current.brand,
         }
       : undefined
     return {
       ...this.state,
       configured,
-      connected: health?.connected === true && health.appId === current.appId,
+      connected: health?.connected === true && health.appId === targetAppId,
       ...(this.state.app === undefined && currentApp !== undefined ? { app: currentApp } : {}),
     }
   }
@@ -432,20 +508,39 @@ export class PersonalAgentOnboardingService {
     if (!this.isCurrent(session)) throw new OnboardingError('abort', '本次扫码已取消。')
   }
 
-  async start(mode: OnboardingMode = 'create'): Promise<OnboardingStatus> {
+  private settingsRevision(): number | undefined {
+    if (typeof this.ctx.settings.describe !== 'function') return undefined
+    const descriptor = this.ctx.settings.describe({ redactSecrets: true })
+      .find(item => String(item.ns) === String(SETTINGS_NAMESPACE))
+    return descriptor?.revision
+  }
+
+  async start(
+    mode: OnboardingMode = 'create',
+    destination: OnboardingDestination = 'legacy',
+  ): Promise<OnboardingStatus> {
     if (this.disposed) throw new OnboardingError('disposed', '插件正在停止，暂时不能开始扫码。', false)
     if (this.ctx.settings.writable === false) {
       throw new OnboardingError('read_only', '当前部署的设置存储为只读，无法保存扫码结果。', false)
     }
-    if (this.settings.get().bots.length > 0) {
-      throw new OnboardingError('multi_bot_unsupported', '多机器人模式请在机器人列表中配置目标 bot；当前扫码入口不会写入已失效的 legacy 根字段。', false)
+    const multi = this.settings.get().bots.length > 0
+    if (multi && destination !== 'new-bot') {
+      throw new OnboardingError('destination_required', '多机器人模式扫码时必须明确添加为新机器人。', false)
+    }
+    if (!multi && destination === 'new-bot') {
+      throw new OnboardingError('multi_bot_required', '请先转换为多机器人配置，再扫码添加机器人。', false)
     }
     if (this.active?.committing === true) {
       throw new OnboardingError('busy', '正在保存上一轮扫码结果，请等待完成。', false)
     }
-    const previousSettings = { ...this.settings.get() }
+    const previousSettings = structuredClone(this.settings.get())
+    const previousRevision = multi ? this.settingsRevision() : undefined
+    if (multi && previousRevision === undefined) {
+      throw new OnboardingError('settings_unavailable', '无法读取机器人配置版本，未开始扫码；请刷新设置页后重试。', false)
+    }
     const configuredAppId = previousSettings.appId.trim()
-    const targetAppId = this.pendingApp?.appId || configuredAppId
+    const pendingAppId = this.pendingApp?.destination === destination ? this.pendingApp.appId : undefined
+    const targetAppId = pendingAppId || configuredAppId
     if (mode === 'update' && (targetAppId === undefined || targetAppId === '')) {
       throw new OnboardingError('missing_app', '当前还没有可补充权限的 App ID。', false)
     }
@@ -455,13 +550,16 @@ export class PersonalAgentOnboardingService {
     const session: RegistrationSession = {
       id: randomUUID(),
       mode,
+      destination,
       ...(mode === 'update' ? { targetAppId } : {}),
       previousSettings,
+      ...(previousRevision === undefined ? {} : { previousRevision }),
       controller: new AbortController(),
       committing: false,
     }
     this.active = session
-    this.replace({ phase: 'starting', mode })
+    this.statusAppId = mode === 'update' ? targetAppId : undefined
+    this.replace({ phase: 'starting', mode, destination })
     const task = this.run(session).finally(() => {
       if (this.active === session) this.active = undefined
     })
@@ -484,6 +582,7 @@ export class PersonalAgentOnboardingService {
     this.replace({
       phase: 'cancelled',
       mode: active.mode,
+      destination: active.destination,
       error: { code: 'abort', message: '本次扫码已取消。', retryable: true },
       ...(recoverable === undefined ? {} : {
         recoverableApp: true,
@@ -494,21 +593,24 @@ export class PersonalAgentOnboardingService {
   }
 
   async retryConnection(): Promise<OnboardingStatus> {
-    if (this.settings.get().bots.length > 0) {
-      throw new OnboardingError('multi_bot_unsupported', '多机器人模式请从机器人状态列表检查连接。', false)
+    const current = this.settings.get()
+    const destination = current.bots.length > 0 ? 'new-bot' : 'legacy'
+    const appId = destination === 'new-bot' ? this.statusAppId?.trim() ?? '' : current.appId.trim()
+    if (destination === 'new-bot' && !current.bots.some(bot => bot.appId === appId)) {
+      throw new OnboardingError('missing_app', '刚才扫码的机器人尚未保存，无法重试连接。', false)
     }
-    const appId = this.settings.get().appId.trim()
     if (appId === '') throw new OnboardingError('missing_app', '当前没有已保存的 App ID。', false)
     if (this.active !== undefined) throw new OnboardingError('busy', '扫码任务仍在进行，请稍候。', false)
     const session: RegistrationSession = {
       id: randomUUID(),
       mode: this.state.mode ?? 'create',
+      destination,
       targetAppId: appId,
       controller: new AbortController(),
       committing: false,
     }
     this.active = session
-    this.replace({ phase: 'connecting', mode: session.mode })
+    this.replace({ phase: 'connecting', mode: session.mode, destination })
     const task = this.runConnectionRetry(session, appId).finally(() => {
       if (this.active === session) this.active = undefined
     })
@@ -521,21 +623,26 @@ export class PersonalAgentOnboardingService {
     try {
       const health = await this.deps.waitForBridge(appId, session.controller.signal)
       if (!this.isCurrent(session)) return
-      if (this.settings.get().appId.trim() !== appId) {
+      const current = this.settings.get()
+      const stillSelected = session.destination === 'new-bot'
+        ? current.bots.some(bot => bot.appId === appId)
+        : current.appId.trim() === appId
+      if (!stillSelected) {
         throw new OnboardingError('settings_changed', '重试连接期间飞书配置已被修改；未覆盖较新的设置。', false)
       }
       this.replace({
         phase: 'ready',
         mode: session.mode,
+        destination: session.destination,
         app: {
           appIdSuffix: suffix(appId),
           ...(health.botName === undefined ? {} : { botName: health.botName }),
-          brand: this.settings.get().brand,
+          brand: current.bots.find(bot => bot.appId === appId)?.brand ?? current.brand,
         },
       })
     } catch (error) {
       if (!this.isCurrent(session)) return
-      this.replace({ phase: 'failed', mode: session.mode, error: failureFor(error) })
+      this.replace({ phase: 'failed', mode: session.mode, destination: session.destination, error: failureFor(error) })
     }
   }
 
@@ -564,7 +671,11 @@ export class PersonalAgentOnboardingService {
           if (mode !== 'create' && mode !== 'select' && mode !== 'update') {
             throw new OnboardingError('bad_request', 'mode 必须是 create、select 或 update。', false)
           }
-          return { ok: true, value: await this.start(mode) }
+          const destination = body.destination ?? 'legacy'
+          if (destination !== 'legacy' && destination !== 'new-bot') {
+            throw new OnboardingError('bad_request', 'destination 必须是 legacy 或 new-bot。', false)
+          }
+          return { ok: true, value: await this.start(mode, destination) }
         }
         case 'onboarding/cancel':
           return { ok: true, value: this.cancel() }
@@ -652,8 +763,9 @@ export class PersonalAgentOnboardingService {
         throw new OnboardingError('invalid_result', '飞书返回了无效的应用凭据，请重新扫码。')
       }
       const brand: LarkBrand = result.user_info?.tenant_brand === 'lark' ? 'lark' : 'feishu'
-      this.pendingApp = { appId, brand }
-      this.replace({ phase: 'committing', mode: session.mode })
+      this.pendingApp = { appId, brand, destination: session.destination }
+      this.statusAppId = appId
+      this.replace({ phase: 'committing', mode: session.mode, destination: session.destination })
 
       const probe = await this.deps.probeApp(appId, secret, brand)
       if (probe.capabilities.core === 'missing') {
@@ -664,16 +776,26 @@ export class PersonalAgentOnboardingService {
       }
       const scannedOwner = result.user_info?.open_id?.trim()
       const previousSettings = session.previousSettings!
-      const previousOwners = previousSettings.allowedOpenIds
-        .split(/[\s,]+/u)
-        .map(item => item.trim())
-        .filter(Boolean)
+      const previousOwners = session.destination === 'legacy'
+        ? previousSettings.allowedOpenIds
+          .split(/[\s,]+/u)
+          .map(item => item.trim())
+          .filter(Boolean)
+        : []
       const ownerOpenId = scannedOwner || probe.ownerOpenId || (session.mode === 'update' ? previousOwners[0] : undefined)
       if (ownerOpenId === undefined || ownerOpenId === '') {
         throw new OnboardingError('owner_missing', '应用已创建，但无法确认 owner；为保证安全，未切换本地配置。')
       }
-      if (!sameBinding(this.settings.get(), previousSettings)) {
+      const settingsUnchanged = session.destination === 'new-bot'
+        ? sameBotBindings(this.settings.get(), previousSettings)
+        : sameBinding(this.settings.get(), previousSettings)
+      if (!settingsUnchanged) {
         throw new OnboardingError('settings_changed', '扫码期间飞书配置已被修改；为避免覆盖较新的设置，未切换本地配置。', false)
+      }
+      if (session.destination === 'new-bot' && previousSettings.bots.some(bot => bot.appId.trim() === appId)) {
+        this.pendingApp = undefined
+        this.statusAppId = undefined
+        throw new OnboardingError('duplicate_app', '这个机器人已经在列表里了，无需重复添加。', false)
       }
 
       const refName = onboardingCredentialRef(appId, session.id)
@@ -693,25 +815,42 @@ export class PersonalAgentOnboardingService {
           throw new OnboardingError('credential_write_failed', `无法安全保存 App Secret：${safeErrorText(error, secret)}`)
         }
 
-        const patch: Partial<FlatSettings> = {
-          appId,
-          appSecretRef: refName,
-          brand,
-          onboardingManaged: true,
-          ...(session.mode === 'create' || appId !== previousSettings.appId
-            ? { allowedOpenIds: ownerOpenId, allowedChatIds: '', allowAllUsers: false }
-            : {}),
-        }
         try {
-          await this.settings.update(patch)
+          if (session.destination === 'new-bot') {
+            if (!sameBotBindings(this.settings.get(), previousSettings)) {
+              throw new OnboardingError('settings_changed', '保存扫码结果前机器人列表已被修改；未覆盖较新的设置。', false)
+            }
+            const bot = onboardedBot(appId, refName, brand, ownerOpenId, previousSettings.bots)
+            const bots = [...previousSettings.bots, bot]
+            validateMultiBotConfig(bots)
+            await this.ctx.settings.mutate(SETTINGS_NAMESPACE, [
+              { op: 'set', path: ['bots'], value: bots },
+            ], session.previousRevision!)
+          } else {
+            await this.settings.update({
+              appId,
+              appSecretRef: refName,
+              brand,
+              onboardingManaged: true,
+              ...(session.mode === 'create' || appId !== previousSettings.appId
+                ? { allowedOpenIds: ownerOpenId, allowedChatIds: '', allowAllUsers: false }
+                : {}),
+            })
+          }
           settingsCommitted = true
         } catch (error) {
+          if (error instanceof OnboardingError) throw error
+          if (typeof error === 'object' && error !== null && 'code' in error
+            && String((error as { code: unknown }).code) === 'SETTINGS_CONFLICT') {
+            throw new OnboardingError('settings_changed', '机器人列表已被其他操作更新；未覆盖较新的设置。', false)
+          }
           throw new OnboardingError('settings_write_failed', `无法保存飞书应用配置：${safeErrorText(error, secret)}`)
         }
 
         this.replace({
           phase: 'connecting',
           mode: session.mode,
+          destination: session.destination,
           app: {
             appIdSuffix: suffix(appId),
             ownerOpenIdSuffix: suffix(ownerOpenId, 4),
@@ -726,6 +865,7 @@ export class PersonalAgentOnboardingService {
           this.replace({
             phase: 'ready',
             mode: session.mode,
+            destination: session.destination,
             app: {
               appIdSuffix: suffix(appId),
               ownerOpenIdSuffix: suffix(ownerOpenId, 4),
@@ -742,7 +882,7 @@ export class PersonalAgentOnboardingService {
           // is no working tuple to preserve, so retain the new app for retry.
           let rolledBack = false
           let selectionChanged = false
-          if (previousSettings.appId.trim() !== '') {
+          if (session.destination === 'legacy' && previousSettings.appId.trim() !== '') {
             try {
               const selected = this.settings.get()
               if (selected.appId !== appId || selected.appSecretRef !== refName) {
@@ -778,6 +918,7 @@ export class PersonalAgentOnboardingService {
           this.replace({
             phase: 'failed',
             mode: session.mode,
+            destination: session.destination,
             ...(rolledBack || selectionChanged ? {} : {
               app: {
                 appIdSuffix: suffix(appId),
@@ -817,6 +958,7 @@ export class PersonalAgentOnboardingService {
       this.replace({
         phase,
         mode: session.mode,
+        destination: session.destination,
         error: failure,
         ...(recoverable === undefined ? {} : {
           recoverableApp: true,

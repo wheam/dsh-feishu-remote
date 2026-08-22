@@ -180,7 +180,7 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
   }
 
   const onboarding = new PersonalAgentOnboardingService(ctx, settings, {
-    getBridgeHealth: () => manager.healthForApp(),
+    getBridgeHealth: appId => manager.healthForApp(appId),
     waitForBridge,
   })
   const admin = new FeishuAdminService(ctx, settings, manager, config)

@@ -52,6 +52,10 @@ legacy 配置显式转换为多机器人配置，再新增机器人；原机器�
 使用包含 app identity 的隔离身份。每个 bot 使用独立 `appSecretRef`，并可配置
 `defaultWorkspace`、`workspacePolicy: default|locked`、`profileFile` 和 `agentPreset`。
 
+新增机器人默认点击「扫码添加机器人」：选择已有 PersonalAgent 或创建新机器人后，Host 会自动
+保存 Secret、追加 `bots[]` 配置、把扫码者设为初始允许用户并等待连接成功。App ID 与 Secret
+凭据引用无需手填；「手动配置（高级）」仅用于已经在外部管理凭据的应用。
+
 多机器人上下文后端固定为 `sdk`；不要配置 `contextBackend: cli`，共享 lark-cli profile 无法安全
 隔离多个 App。Profile 必须是本机安全权限的 UTF-8 Markdown 普通文件，最大 32 KiB，正文会发送给
 模型提供商，禁止包含凭据。

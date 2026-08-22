@@ -180,10 +180,12 @@ idle
    当前配置正在引用的凭据，也避免多个 web profile 或重复补权互相踩写。
 4. `ctx.credentials.set(credentialRef(newRef), client_secret)` 写入 DSH provider 管理的
    `~/.dsh/.credentials.yaml`，不经过浏览器和 settings value。
-5. 使用 settings namespace 的一次 `update(patch)` 原子写入 `appId`、`appSecretRef`、
-   `allowedOpenIds` 与 `allowedChatIds`，让 watcher 只观察到一组一致的新配置。创建新应用时
-   `allowedOpenIds` 替换为新 owner，`allowedChatIds` 清空；open_id 属于应用身份域，不能沿用
-   旧应用白名单。对同一 app 的增量补权则不改白名单。
+5. 使用 settings namespace 的一次原子写入提交完整绑定，让 watcher 只观察到一组一致的
+   新配置。legacy 模式更新根级 `appId`、`appSecretRef` 与白名单；多机器人模式用明确的
+   `destination: new-bot` 和开始扫码时的 settings revision，通过 CAS `mutate()` 把规范化的新元素
+   追加到 `bots[]`，冲突时拒绝覆盖；绝不回写已失效的 legacy 根字段。
+   新 bot 自动使用 App-scoped Session、SDK 上下文、独立凭据引用，并把扫码 owner 设为唯一初始
+   `allowedOpenIds`；`allowedChatIds` 为空，`allowAllUsers` 保持 false。
 6. settings watcher 热重载 bridge，等待 channel 进入 connected 或明确失败。
 7. 成功后清除内存 Secret；失败时显示可重试状态，按下述回滚规则处理。
 

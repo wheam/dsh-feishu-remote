@@ -7,7 +7,7 @@ import {
   type BridgeHealth,
   type OnboardingDependencies,
 } from '../src/onboarding.js'
-import { flatten, type FlatSettings } from '../src/settings.js'
+import { SETTINGS_NAMESPACE, flatten, type FlatSettings } from '../src/settings.js'
 
 function okProbe(overrides: Partial<AppProbe> = {}): AppProbe {
   return {
@@ -26,11 +26,13 @@ function harness(options: {
   settingsUpdate?: (patch: Partial<FlatSettings>) => Promise<void>
   initialSettings?: Partial<FlatSettings>
   settingsWritable?: boolean
+  settingsCas?: boolean
   credentialWritable?: boolean
   probe?: AppProbe
   waitForBridge?: (appId: string, signal?: AbortSignal) => Promise<BridgeHealth>
 } = {}) {
   let current = { ...flatten({}), ...options.initialSettings }
+  let settingsRevision = 7
   const updates: Array<Partial<FlatSettings>> = []
   const settings = {
     get: () => current,
@@ -47,6 +49,20 @@ function harness(options: {
     set: vi.fn(async () => undefined),
     unset: vi.fn(async () => undefined),
   }
+  const mutate = vi.fn(async (
+    _namespace: unknown,
+    operations: Array<{ op: string; path: string[]; value?: unknown }>,
+    revision: number,
+  ) => {
+    if (revision !== settingsRevision) throw Object.assign(new Error('settings conflict'), { code: 'SETTINGS_CONFLICT' })
+    const bots = operations.find(item => item.op === 'set' && item.path[0] === 'bots')?.value as FlatSettings['bots'] | undefined
+    if (bots === undefined) throw new Error('missing bots operation')
+    const patch = { bots }
+    updates.push(patch)
+    if (options.settingsUpdate !== undefined) await options.settingsUpdate(patch)
+    current = { ...current, ...patch }
+    settingsRevision += 1
+  })
   let resolveRegistration: ((value: {
     client_id: string
     client_secret: string
@@ -83,19 +99,29 @@ function harness(options: {
   }
   const ctx = {
     credentials,
-    settings: { writable: options.settingsWritable ?? true },
+    settings: {
+      writable: options.settingsWritable ?? true,
+      ...(options.settingsCas ? {
+        describe: () => [{ ns: SETTINGS_NAMESPACE, revision: settingsRevision }],
+        mutate,
+      } : {}),
+    },
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   }
   const service = new PersonalAgentOnboardingService(ctx as never, settings as never, deps)
   return {
     service,
     settings,
+    mutate,
     credentials,
     updates,
     registerApp,
     registerAppMock,
     resolveRegistration: resolveRegistration!,
-    changeSettings: (patch: Partial<FlatSettings>) => { current = { ...current, ...patch } },
+    changeSettings: (patch: Partial<FlatSettings>) => {
+      current = { ...current, ...patch }
+      settingsRevision += 1
+    },
   }
 }
 
@@ -104,6 +130,86 @@ async function waitForPhase(service: PersonalAgentOnboardingService, phase: stri
 }
 
 describe('PersonalAgent onboarding', () => {
+  it('adds a scanned PersonalAgent directly to multi-bot settings', async () => {
+    const primary = flatten({
+      bots: [{
+        id: 'primary',
+        appId: 'cli_primary',
+        appSecretRef: 'REF_PRIMARY',
+        allowedOpenIds: ['ou_primary_owner'],
+      }],
+    }).bots[0]!
+    const h = harness({ initialSettings: { bots: [primary] }, settingsCas: true })
+
+    await h.service.start('select', 'new-bot')
+    h.resolveRegistration({
+      client_id: 'cli_second',
+      client_secret: 'second-secret',
+      user_info: { open_id: 'ou_second_owner', tenant_brand: 'lark' },
+    })
+    await waitForPhase(h.service, 'ready')
+
+    expect(h.settings.update).not.toHaveBeenCalled()
+    expect(h.mutate).toHaveBeenCalledOnce()
+    expect(h.updates[0]?.bots).toHaveLength(2)
+    expect(h.updates[0]?.bots?.[0]).toEqual(primary)
+    expect(h.updates[0]?.bots?.[1]).toMatchObject({
+      id: 'bot-cli-second',
+      enabled: true,
+      appId: 'cli_second',
+      brand: 'lark',
+      allowedOpenIds: ['ou_second_owner'],
+      allowAllUsers: false,
+      contextBackend: 'sdk',
+      sessionNamespace: 'app',
+    })
+    expect(h.updates[0]?.bots?.[1]?.appSecretRef).toMatch(/^DSH_FEISHU_APP_SECRET_[A-F0-9]{12}_[A-F0-9]{8}$/u)
+    expect(JSON.stringify(h.updates)).not.toContain('second-secret')
+    expect(h.service.status()).toMatchObject({ destination: 'new-bot', configured: true, connected: true })
+  })
+
+  it('does not duplicate a bot selected again in multi-bot onboarding', async () => {
+    const existing = flatten({
+      bots: [{ id: 'primary', appId: 'cli_existing', appSecretRef: 'REF_PRIMARY' }],
+    }).bots[0]!
+    const h = harness({ initialSettings: { bots: [existing] }, settingsCas: true })
+
+    await h.service.start('select', 'new-bot')
+    h.resolveRegistration({
+      client_id: 'cli_existing',
+      client_secret: 'duplicate-secret',
+      user_info: { open_id: 'ou_owner' },
+    })
+    await waitForPhase(h.service, 'failed')
+
+    expect(h.service.status().error?.code).toBe('duplicate_app')
+    expect(h.settings.update).not.toHaveBeenCalled()
+    expect(h.credentials.set).not.toHaveBeenCalled()
+    expect(h.credentials.unset).not.toHaveBeenCalled()
+    expect(JSON.stringify(h.service.status())).not.toContain('duplicate-secret')
+  })
+
+  it('cleans up the new credential when a concurrent settings revision wins', async () => {
+    const existing = flatten({
+      bots: [{ id: 'primary', appId: 'cli_primary', appSecretRef: 'REF_PRIMARY' }],
+    }).bots[0]!
+    const h = harness({ initialSettings: { bots: [existing] }, settingsCas: true })
+
+    await h.service.start('create', 'new-bot')
+    h.changeSettings({ maxTotalLiveAgents: 4 })
+    h.resolveRegistration({
+      client_id: 'cli_concurrent',
+      client_secret: 'concurrent-secret',
+      user_info: { open_id: 'ou_owner' },
+    })
+    await waitForPhase(h.service, 'failed')
+
+    expect(h.service.status().error?.code).toBe('settings_changed')
+    expect(h.credentials.set).toHaveBeenCalledOnce()
+    expect(h.credentials.unset).toHaveBeenCalledOnce()
+    expect(h.settings.update).not.toHaveBeenCalled()
+  })
+
   it('offers an existing-app selection flow without forcing creation or targeting one App ID', async () => {
     const h = harness()
     await h.service.start('select')
