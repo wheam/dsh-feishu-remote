@@ -32,6 +32,20 @@ describe('BridgeStateStore (lightweight metadata)', () => {
     expect(reloaded.isPendingNew('p2p:oc_1')).toBe(false)
   })
 
+  it('persists topic activation across store reloads without changing the first mention time', async () => {
+    const { path, store } = await stateStore()
+    const key = 'group:oc_1:thread:omt_1'
+    await store.activateThread(key, 123)
+    await store.activateThread(key, 456)
+    expect(store.isThreadActivated(key)).toBe(true)
+    expect(store.snapshot().activatedThreads[key]).toBe(123)
+
+    const reloaded = new BridgeStateStore(path)
+    await reloaded.refresh()
+    expect(reloaded.isThreadActivated(key)).toBe(true)
+    expect(reloaded.snapshot().activatedThreads[key]).toBe(123)
+  })
+
   it('persists card view preferences and callback verification', async () => {
     const { path, store } = await stateStore()
     await store.setCardView('p2p:oc_1', 'developer')

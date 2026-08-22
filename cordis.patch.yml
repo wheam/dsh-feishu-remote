@@ -10,6 +10,7 @@
 #       appSecretRef: 'DSH_FEISHU_APP_SECRET'
 #       allowedOpenIds: ['ou_...']
 #       allowedChatIds: []        # optional restriction; empty = any joined group
+#       requireMention: true      # first @ activates a topic; later replies need no @
 #       cwd: '/Users/you/work'
 #       workspaceRoot: '/Users/you/work'
 #

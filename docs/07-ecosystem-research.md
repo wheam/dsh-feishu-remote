@@ -41,7 +41,7 @@
 3. **话题键**：`thread_id`（omt_ 前缀）比 root_id 更可靠（thread_id 缺失=非话题群）；`originKey = chatId + (thread_id ?? root_id)`。
 4. **去重**：官方明示用 `message_id` 去重，勿用 event_id。
 5. **卡片 patch**：patch 前后 config 均需 `update_multi:true`（群聊共享更新必须）；单条消息 patch 限 5 QPS、有效期 14 天、30KB；cardkit 流式（SDK 已封装 `channel.stream()`）是 P1 更优流式方案。
-6. **免 @**：不是话题特权而是权限档位（需敏感权限 `im:message.group_msg`，审核后话题群全部消息免 @ 推送）——P0 维持 `group_at_msg:readonly` + 每条 @ 正确。
+6. **免 @**：不是话题特权而是权限档位（需敏感权限 `im:message.group_msg`，审核后话题群全部消息免 @ 推送）。2026-08-22 已在 Bridge 层加话题 gate：首次 @前静默并在首次 @回填前文，之后仅该话题免 @，避免其他话题被自动触发。
 7. **握手**：`bot/v3/info` → `POST /callback/ws/endpoint` → WS；pong 动态更新 pingInterval（服务端权威）；autoReconnect 硬编码 30s 抖动/120s 无限重试；非法 appId 静默 15s 超时。
 
 ## 四、合并借鉴清单（按优先级）

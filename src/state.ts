@@ -1,6 +1,7 @@
 /**
  * Owner-only atomic metadata state. Keeps ONLY lightweight metadata
- * (`/new` pending markers, card view preferences, callback verification):
+ * (`/new` pending markers, activated Feishu topics, card view preferences,
+ * callback verification):
  * session identity lives in session persistence (single source of truth).
  * Corrupt or mis-permissioned files are isolated to `.corrupt-<ts>` with a
  * warning and rebuilt from an empty state — never silently overwritten.
@@ -33,6 +34,8 @@ export interface BridgeState {
   version: 1
   /** originKey → true while a `/new` is pending (consumed by the next plain message). */
   pendingNew: Record<string, true>
+  /** Thread originKey → first authorized @mention time; survives restarts. */
+  activatedThreads: Record<string, number>
   /** originKey → card view preference. */
   cardViewPrefs: Record<string, 'compact' | 'standard' | 'developer'>
   cardVerifiedAt?: number
@@ -49,7 +52,7 @@ export interface CorruptStateEvent {
 }
 
 function emptyState(): BridgeState {
-  return { version: 1, pendingNew: {}, cardViewPrefs: {}, deliveryFailures: [], contextWatermarks: {} }
+  return { version: 1, pendingNew: {}, activatedThreads: {}, cardViewPrefs: {}, deliveryFailures: [], contextWatermarks: {} }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,6 +88,17 @@ function parseState(text: string): BridgeState {
   for (const [key, value] of Object.entries(raw.pendingNew)) {
     if (key.trim() === '' || value !== true) throw new Error('dsh-feishu-remote: invalid pendingNew entry in state file')
     pendingNew[key] = true
+  }
+  const activatedThreads: Record<string, number> = {}
+  if (raw.activatedThreads !== undefined) {
+    if (!isRecord(raw.activatedThreads)) throw new Error('dsh-feishu-remote: invalid activatedThreads in state file')
+    for (const [key, value] of Object.entries(raw.activatedThreads)) {
+      if (!key.startsWith('group:') || !key.includes(':thread:') || key.length > 500
+        || typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        throw new Error('dsh-feishu-remote: invalid activatedThreads entry in state file')
+      }
+      activatedThreads[key] = value
+    }
   }
   const cardViewPrefs = stringRecord(
     raw.cardViewPrefs ?? {},
@@ -138,6 +152,7 @@ function parseState(text: string): BridgeState {
   return {
     version: 1,
     pendingNew,
+    activatedThreads,
     cardViewPrefs,
     deliveryFailures,
     contextWatermarks,
@@ -230,6 +245,26 @@ export class BridgeStateStore {
 
   isPendingNew(key: string): boolean {
     return this.state.pendingNew[key] === true
+  }
+
+  /** Persist the first authorized @mention that activates one group topic. */
+  async activateThread(key: string, at = Date.now()): Promise<void> {
+    if (!key.startsWith('group:') || !key.includes(':thread:')) {
+      throw new Error('dsh-feishu-remote: only group thread origins can be activated')
+    }
+    await this.mutate(current => ({
+      next: {
+        ...current,
+        activatedThreads: current.activatedThreads[key] === undefined
+          ? { ...current.activatedThreads, [key]: at }
+          : current.activatedThreads,
+      },
+      result: undefined,
+    }))
+  }
+
+  isThreadActivated(key: string): boolean {
+    return this.state.activatedThreads[key] !== undefined
   }
 
   async setCardView(key: string, preset: 'compact' | 'standard' | 'developer'): Promise<void> {

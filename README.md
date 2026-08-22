@@ -27,7 +27,7 @@ mock 冒烟（真实 dsh web 进程内加载）通过。
 - **交互隔离**：飞书会话 setup 内先 `presets.mount` 再 `tools.restrict({deny:['ask_user_question','exit_plan_mode']})`——飞书会话不存在通往浏览器的提问路径。
 - **极简进度卡片**：运行中只显示「正在处理」与最新一段 assistant 进展，约 600ms 普通 patch 同一张无标题栏卡片；turn 结束后，同一张卡清掉过程，只保留最后一个非空、未请求工具的 assistant 总结。因为正文会由长变短，普通任务卡不启用飞书 append-oriented `streaming_mode`，避免打字机拼接残影。普通回合卡不再显示目录、模型、session、工具轨迹、token、上下文统计或操作按钮；私聊也不再带原消息引用横幅，群话题仍保持原位回复。完整过程继续保存在 DSH 会话历史/Web GUI；审批卡保留批准/拒绝按钮作为安全边界。完整 `assistant/message` **替换**该 step 的 chunk 缓冲（helhello 缺陷修复）+ seq 水位去重；终态优先与失败兜底不变。
 - **出站调度器**：应用级全局并发上限 + 卡片更新合并（同 messageId 只发最新）+ 终态优先 + 429/`400+99991400`/`230020` 限流识别（`x-ogw-ratelimit-reset` aware 退避 + 抖动）+ 永久错误（230001/230002/230025/230031/230010/230011/230110/230013/230027/232009/404/99991400）改发新卡；30KB/14 天边界兜底 + 超长全文落工作区文件并回显 session id。
-- **安全**：发送者白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围默认开放（机器人加入任意群后，白名单内用户均可在话题中 @它），非空 `allowedChatIds` 可选地收窄到指定群；白名单外消息在宿主日志回显发送者 open_id 自举；出站脱敏；状态文件 0600 原子写、损坏隔离为 `.corrupt-<ts>` 从空重建。
+- **安全与话题激活**：发送者白名单 fail-closed（空 `allowedOpenIds` 拒绝一切，`allowAllUsers: true` 才开放）；群范围默认开放，非空 `allowedChatIds` 可选收窄。默认每个话题首次需由白名单用户 @机器人：首次 @ 前的消息只留在飞书历史中、不触发 Agent；首次 @ 时 CLI 回填完整有界话题上下文，之后同话题的新消息免 @并自动进入同一 Session；其他话题仍保持静默。激活状态写入 0600 状态文件并跨重启保留；白名单外消息不能激活或驱动 Agent。
 - **命令集**：`/new` `/status` `/stop`（`cancel({kind:'user'}, {keepInbox:true})`）`/sessions` `/resume` `/approve` `/reject` `/steer` `/help` `/commands`；旧 `/view` 与旧卡片动作仅返回停用提示。Harness 原生命令透传走 **allowlist**（未知命令默认拒绝）。
 - **P1**：Web GUI 设置卡片（`dsh-settings` 平铺 schema + 手写 client 模块，保存后热重载）；`maxLiveAgents` 硬上限；mock 通道（stdin→stdout 文本链路，`appId: 'mock'` 启用）。
 - **飞书上下文回填（docs/13 v1.2）**：每条普通消息注入上下文——话题读取最近 150 条/100,000 字符，长期私聊另受更紧的 80 条/50,000 字符上限约束（两者均可配置，实际取私聊与全局上限的较小值，不会扫描几万条历史）。官方 `lark-cli` 主路径（`@larksuite/cli@1.0.88` optional 依赖 + postinstall 自动装二进制，`pnpm-workspace.yaml allowBuilds` 放行；CLI 缺失自动降级已 bundle 的 SDK 直连，`contextBackend: auto|cli|sdk`）；增量水位窗口（新会话全量注入、后续回合只注入新消息，水位按 session 持久化）+ 因果 cutoff + JSON 帧防注入 + system prompt 不可信边界规则；全局并发 2 + 熔断；控制命令零拉取；普通回合卡不显示上下文统计，诊断信息仍可通过 `/status` 查看。群历史需 `im:message.group_msg` 权限（docs/09 §3）。
@@ -52,6 +52,7 @@ dsh plugin --profile web add link:/path/to/dsh-feishu-remote
 #     appId: 'cli_xxx'            # 或环境变量 DSH_FEISHU_APP_ID
 #     allowedOpenIds: ['ou_...']  # 你的 open_id（fail-closed，必填）
 #     allowedChatIds: []          # 可选群限制；空 = 机器人加入的任意群都可用
+#     requireMention: true        # 每个话题首次需 @；激活后同话题免 @
 #     cwd: '/Users/you/work'      # 必填
 #     workspaceRoot: '/Users/you/work'  # 必填
 

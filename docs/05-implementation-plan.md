@@ -206,10 +206,11 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 9. **安全（Codex R1/R2/R3）**：
    - 白名单 **fail-closed**：`allowedOpenIds` 为空时拒绝一切；仅显式
      `allowAllUsers: true` 且带启动警告时才开放（mock/echo 环境可开）。
-   - P0 群聊范围：私聊 + 群聊话题，每条消息必须 @机器人（最小权限
-     `group_at_msg:readonly`）；群范围默认不限，机器人加入任意群后 owner 都可使用，
-     非空 `allowedChatIds` 可选地收窄范围。@ 是投递条件，`allowedOpenIds` 才是操作者
-     授权边界；输出会向所在群公开；话题内免 @ 留 P1（更高权限）。
+   - 群聊范围：私聊 + 群聊话题；群范围默认不限，非空 `allowedChatIds` 可选收窄。
+     默认每个话题首次由白名单用户 @机器人后持久化激活：首次 @ 回填此前有界话题历史，
+     后续同话题免 @自动进入同一 session，其他话题静默。`im:message.group_msg` 用于接收
+     未 @后续及上下文读取；@ 是话题激活信号，`allowedOpenIds` 才是操作者授权边界；
+     输出会向所在群公开。
    - 卡片 pending 记录绑定 appId/chatId/messageId/operatorOpenId/sessionId/callId/
      deadline，处理即原子删除；错误操作者/跨群/过期留审计日志（重复点击被 SDK 去重，
      到不了插件，由文字兜底覆盖）。
@@ -256,8 +257,8 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 
 1. **会话范围**：飞书只管理自己创建的会话，与 GUI 同列表共享；不接管 GUI 已有会话。
 2. **白名单默认**：fail-closed；显式 `allowAllUsers: true` 才开放。
-3. **群聊范围**：P0 = 私聊 + 群聊话题，每条消息需 @机器人；默认允许机器人加入的
-   任意群，非空 `allowedChatIds` 才限制到指定群；免 @ 留 P1。
+3. **群聊范围**：私聊 + 群聊话题；默认允许机器人加入的任意群，非空 `allowedChatIds`
+   才限制到指定群；每个话题首次需 @，激活后同话题免 @，状态跨重启保留。
 4. **工作目录**：`workspaceRoot/cwd` 配置必填；创建时持久化、恢复时校验一致、
    `/status` 展示。
 5. **代码基形态**：新仓选择性移植（默认，非 fork；如无异议按此执行），CI/测试
@@ -290,7 +291,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 - 飞书开放平台配置繁琐 → 一次性成本，Phase 0 真实租户验证后文档固化开通清单：
   应用形态（个人应用 PersonalAgent / 企业自建应用，各有所需前提，Phase 0 定案）、
   机器人能力、事件订阅=长连接、卡片回调=长连接、版本发布/审核、Lark 国际版单独凭据；
-  最小权限清单（`im:message.p2p_msg:readonly` / `im:message.group_at_msg:readonly` /
+  权限清单（`im:message.p2p_msg:readonly` / `im:message.group_msg` /
   `im:message:send_as_bot`；事件 `im.message.receive_v1` + 卡片回调
   `card.action.trigger`；回调 3 秒内只做鉴权+入队）。
 - mock 适配器只覆盖文本链路（无卡片/审批概念，且 stdin 在壳 App 拉起的进程里未必可用）

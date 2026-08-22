@@ -71,7 +71,7 @@ const HELP_TEXT = `## DeepSeek Harness Feishu Remote
 - \`/resume <session-id>\`：恢复一个历史 Session（仅限同话题前缀）
 - \`/help\`：显示本说明
 
-只有审批卡保留批准/拒绝按钮；停止任务请用 \`/stop\`，也可给正在运行的任务卡添加 ❌ reaction。群聊请在每个话题内 @机器人。`
+只有审批卡保留批准/拒绝按钮；停止任务请用 \`/stop\`，也可给正在运行的任务卡添加 ❌ reaction。群聊中每个话题首次需 @机器人；首次 @ 会读取此前话题上下文，之后同话题可免 @连续沟通。`
 
 /** Ask-user tools blocked on Feishu sessions: questions must never reach the unattended browser. */
 const BLOCKED_TOOLS = ['ask_user_question', 'exit_plan_mode'] as const
@@ -665,10 +665,15 @@ export class FeishuRemoteBridge {
     // 3-second callback budget: authenticate synchronously, enqueue the rest.
     if (this.stopped) return
     if (!this.isGloballyAllowed(message.senderId)) {
-      this.ctx.logger?.warn?.(
-        'dsh-feishu-remote: 已拒绝未授权飞书用户（把该 open_id 抄入 allowedOpenIds 即可自举）：sender=%s chat=%s message=%s',
-        message.senderId, message.chatId, message.messageId,
-      )
+      // Sticky-topic mode receives every group reply. Keep normal conversation
+      // from unauthorized participants silent; audit only explicit attempts to
+      // invoke the bot (private messages or @mentions).
+      if (message.chatType !== 'group' || message.mentionedBot) {
+        this.ctx.logger?.warn?.(
+          'dsh-feishu-remote: 已拒绝未授权飞书用户（把该 open_id 抄入 allowedOpenIds 即可自举）：sender=%s chat=%s message=%s',
+          message.senderId, message.chatId, message.messageId,
+        )
+      }
       return
     }
     if (
@@ -682,6 +687,10 @@ export class FeishuRemoteBridge {
     }
     const origin = originOf(message)
     if (origin.kind === 'nonthread') {
+      // The channel deliberately delivers unmentioned group messages so an
+      // activated topic can keep flowing. Never nag on unrelated top-level
+      // traffic; only an explicit @ outside a topic gets the usage hint.
+      if (!message.mentionedBot) return
       this.ctx.logger?.warn?.('dsh-feishu-remote: 已拒绝群内非话题消息：chat=%s message=%s', message.chatId, message.messageId)
       void this.safeSend(message.chatId, { markdown: '请在话题内 @我 发送任务。' }, message)
       return
@@ -692,6 +701,27 @@ export class FeishuRemoteBridge {
   private async handleMessage(message: NormalizedMessage, origin: Extract<Origin, { kind: 'p2p' | 'thread' }>): Promise<void> {
     try {
       await this.state.refresh()
+      if (origin.kind === 'thread' && this.config.requireMention) {
+        if (message.mentionedBot) {
+          // Persist before Agent work: the first @ activates this topic even
+          // if the task itself later fails, and activation survives restart.
+          await this.state.activateThread(origin.key, message.createTime || Date.now())
+        } else if (!this.state.isThreadActivated(origin.key)) {
+          // Backward compatibility for topics that @mentioned DSH before this
+          // feature existed: a persisted session with this deterministic
+          // origin prefix is proof that the topic was activated previously.
+          const alreadyHasSession = this.sessions.has(origin.key)
+            || sessionsForPrefix(await this.freshHeaders(), sessionPrefix(origin.key)).length > 0
+          if (alreadyHasSession) {
+            await this.state.activateThread(origin.key, message.createTime || Date.now())
+          } else {
+            // Pre-activation messages remain in Feishu history. They do not
+            // trigger Agent work now, but the first later @ reads them through
+            // the existing full-window CLI context backfill.
+            return
+          }
+        }
+      }
       const text = message.content.trim()
       if (text.startsWith('/')) {
         await this.handleCommand(message, text, origin)

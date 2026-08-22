@@ -32,7 +32,11 @@ export const DEFAULT_CHANNEL_FACTORY = (config: ResolvedConfig): LarkChannelLike
     handshakeTimeoutMs: 15_000,
     policy: {
       dmMode: 'open',
-      requireMention: config.requireMention,
+      // The bridge owns topic activation: it must SEE unmentioned follow-ups
+      // so a thread can stay active after its first @mention. It still ignores
+      // unmentioned messages in never-activated threads (and enforces the
+      // sender allowlist) before any Agent work.
+      requireMention: false,
       respondToMentionAll: false,
     },
     safety: {

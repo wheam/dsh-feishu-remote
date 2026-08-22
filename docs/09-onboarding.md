@@ -21,10 +21,10 @@
 | 权限 | 用途 |
 | --- | --- |
 | `im:message.p2p_msg:readonly` | 接收私聊消息 |
-| `im:message.group_at_msg:readonly` | 接收群内 @机器人 消息（P0 每条群消息必须 @） |
+| `im:message.group_at_msg:readonly` | 接收群内首次 @机器人 消息 |
 | `im:message:send_as_bot` | 以机器人身份发消息 / 更新卡片 |
 | `im:message:readonly` | 上下文回填：读取私聊历史（`im:message`/`im:message:readonly`/`im:message.history:readonly` 三选一，规格见 docs/13 §1.2） |
-| `im:message.group_msg` | 上下文回填：读取群/话题全部消息（需随新版本发布；由用户另派 Codex 在开发者后台配置） |
+| `im:message.group_msg` | **必需**：接收话题激活后的未 @后续，并读取首次 @前的群/话题历史 |
 | `im:message.reactions:write_only` | 发送、删除消息表情回复（「敲键盘」working reaction；`im:message` 与本品二选一即可；需随新版本发布） |
 
 ## 4. 事件订阅 = 长连接
@@ -48,6 +48,7 @@
     appId: 'cli_xxxx'
     allowedOpenIds: ['ou_xxxx']   # 白名单外消息会在宿主日志回显 open_id 供自举
     allowedChatIds: []            # 空 = 任意已加入群可用；填写 oc_xxxx 可选地限制群范围
+    requireMention: true          # 每个话题首次需 @；激活后同话题免 @
     cwd: '/Users/you/work'
     workspaceRoot: '/Users/you/work'
 ```
@@ -69,13 +70,16 @@
 2. 断网重连后长连接恢复；未结审批按状态机结算（六条路径均有单测，租户内抽查按钮/文字两条）。
 3. 白名单外 open_id 无法驱动任何操作；空 `allowedOpenIds` 拒绝一切；默认可在机器人加入的
    任意群 @使用；配置非空 `allowedChatIds` 时，列表外群被拒。
-4. 连续发消息观察卡片更新频率（约 600ms 一次，全局限速）；断网期间发消息 → 重连后终态送达。
-5. 飞书会话具备 preset 工具能力（让 agent 执行一个 bash/fs 任务验证）。
-6. Web GUI 打开飞书会话发言 → 其审批回 GUI；飞书回合审批只到飞书卡（双向隔离）。
-7. **极简进度卡视觉**：运行期卡片是否只显示「正在处理」与最新进展、终态是否在同一张卡
+4. 新话题先发两条不 @的资料（应无响应），第三条 @机器人（应结合前文回答）；之后在同话题
+   直接发消息不 @（应继续进入同一 session）；另一个从未 @过的话题应保持静默；重启后已激活
+   话题仍可免 @继续。
+5. 连续发消息观察卡片更新频率（约 600ms 一次，全局限速）；断网期间发消息 → 重连后终态送达。
+6. 飞书会话具备 preset 工具能力（让 agent 执行一个 bash/fs 任务验证）。
+7. Web GUI 打开飞书会话发言 → 其审批回 GUI；飞书回合审批只到飞书卡（双向隔离）。
+8. **极简进度卡视觉**：运行期卡片是否只显示「正在处理」与最新进展、终态是否在同一张卡
    清掉过程并只保留总结；私聊是否不再显示原消息引用横幅、群话题是否仍留在原话题。给
    运行中卡片添加 ❌ reaction 或发送 `/stop` 后能否在可接受延迟内收到终态卡；若客户端对
    `message.patch` 路径完全不呈现增量效果，评估升级 cardkit 元素级流式（docs/05 §2.5）。
-8. **「敲键盘」working reaction**：发消息后触发消息上出现 ✍️/敲键盘表情、回合结束
+9. **「敲键盘」working reaction**：发消息后触发消息上出现 ✍️/敲键盘表情、回合结束
    （含 /stop、reaction 取消、出错）后消失；权限缺失时仅日志告警、不影响回合
    （`workingReaction: false` 可关闭）。

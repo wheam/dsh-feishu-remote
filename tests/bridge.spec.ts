@@ -267,8 +267,13 @@ let messageSeq = 0
 let eventSeq = 0
 const workspaces: string[] = []
 const stateRoots: string[] = []
+const bridges: FeishuRemoteBridge[] = []
 
 afterEach(async () => {
+  // Stop producers before removing temp roots. Context-watermark and topic-
+  // activation writes are intentionally asynchronous in production; deleting
+  // their directory first makes macOS rm race a late atomic rename (ENOTEMPTY).
+  await Promise.allSettled(bridges.splice(0).map(bridge => bridge.stop()))
   await Promise.all([
     ...workspaces.splice(0).map(root => rm(root, { recursive: true, force: true })),
     ...stateRoots.splice(0).map(root => rm(root, { recursive: true, force: true })),
@@ -289,7 +294,14 @@ async function tempState(): Promise<string> {
 
 function message(
   content: string,
-  overrides: Partial<Record<'chatId' | 'chatType' | 'senderId' | 'threadId' | 'rootId', string>> = {},
+  overrides: Partial<{
+    chatId: string
+    chatType: 'p2p' | 'group'
+    senderId: string
+    threadId: string
+    rootId: string
+    mentionedBot: boolean
+  }> = {},
 ) {
   return {
     messageId: `om_in_${++messageSeq}`,
@@ -301,7 +313,7 @@ function message(
     resources: [],
     mentions: [],
     mentionAll: false,
-    mentionedBot: true,
+    mentionedBot: overrides.mentionedBot ?? true,
     createTime: Date.now(),
     ...(overrides.threadId === undefined ? {} : { threadId: overrides.threadId }),
     ...(overrides.rootId === undefined ? {} : { rootId: overrides.rootId }),
@@ -381,6 +393,7 @@ async function makeHarness(
     ...bridgeOptions,
   })
   await bridge.start()
+  bridges.push(bridge)
   await waitFor(() => channel.connectCalls >= 1, 'first channel connect')
 
   const emitSessionEvent = async (sessionId: string, type: SessionEvent['type'], data: SessionEvent['data']): Promise<void> => {
@@ -523,6 +536,101 @@ describe('sender allowlist and optional group restriction', () => {
     await waitFor(() => h.channel.sent.length > 0)
     expect(String(h.channel.sent[0]!.input.markdown)).toContain('话题内')
     expect(h.agents.created).toHaveLength(0)
+  })
+
+  it('silently ignores unmentioned group traffic outside a topic', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('普通群消息', { chatId: 'oc_grp', chatType: 'group', mentionedBot: false })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(h.channel.sent).toHaveLength(0)
+    expect(h.agents.created).toHaveLength(0)
+  })
+})
+
+describe('sticky topic activation', () => {
+  it('ignores pre-activation replies, then routes unmentioned follow-ups only inside the activated topic', async () => {
+    const h = await makeHarness()
+    const topic = { chatId: 'oc_grp', chatType: 'group' as const, threadId: 'omt_sticky', rootId: 'om_root_sticky' }
+
+    await h.emitMessage('首次 @ 前的资料', { ...topic, mentionedBot: false })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(h.agents.created).toHaveLength(0)
+
+    await h.emitMessage('开始处理', { ...topic, mentionedBot: true })
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.values().next().value as FakeAgent
+    await waitFor(() => agent.followups.length === 1)
+
+    await h.emitMessage('无需再次 @ 的补充', { ...topic, mentionedBot: false })
+    await waitFor(() => agent.followups.length === 2)
+    expect(h.agents.created).toHaveLength(1)
+
+    await h.emitMessage('另一个话题不能串入', {
+      chatId: 'oc_grp', chatType: 'group', threadId: 'omt_other', rootId: 'om_root_other', mentionedBot: false,
+    })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(h.agents.created).toHaveLength(1)
+    expect(agent.followups).toHaveLength(2)
+  })
+
+  it('uses the existing full-window context backfill on the first @mention', async () => {
+    const provider = new FakeContextProvider()
+    provider.next = [historyMessage({ messageId: 'om_before_mention', text: '首次 @ 之前的话题资料' })]
+    const h = await makeHarness({ contextMode: 'auto' }, { contextProvider: provider })
+    const topic = { chatId: 'oc_grp', chatType: 'group' as const, threadId: 'omt_context', rootId: 'om_root_context' }
+
+    await h.emitMessage('此前未 @ 的消息', { ...topic, mentionedBot: false })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(provider.calls).toHaveLength(0)
+
+    await h.emitMessage('请结合前文处理', { ...topic, mentionedBot: true })
+    await waitFor(() => provider.calls.length === 1)
+    expect(provider.calls[0]!.watermark).toBeUndefined()
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.values().next().value as FakeAgent
+    await waitFor(() => agent.followups.length === 1)
+    const content = followupContent(agent, 0)
+    expect(String((content[0] as { text?: unknown }).text)).toContain('首次 @ 之前的话题资料')
+  })
+
+  it('persists activation across bridge restarts', async () => {
+    const first = await makeHarness()
+    const topic = { chatId: 'oc_grp', chatType: 'group' as const, threadId: 'omt_restart', rootId: 'om_root_restart' }
+    await first.emitMessage('首次激活', { ...topic, mentionedBot: true })
+    await waitFor(() => first.agents.created.length === 1)
+    await first.bridge.stop()
+
+    const restarted = await makeHarness({ statePath: first.statePath })
+    await restarted.emitMessage('重启后无需再次 @', { ...topic, mentionedBot: false })
+    await waitFor(() => restarted.agents.created.length === 1)
+  })
+
+  it('retroactively recognizes a topic session created before activation state existed', async () => {
+    const h = await makeHarness()
+    const key = 'group:oc_grp:thread:omt_legacy'
+    const prefix = sessionPrefix(key)
+    const legacy: SessionHeader = {
+      version: 0,
+      id: SessionId(`${prefix}-legacy`),
+      createdAt: 1,
+      cwd: h.workspace,
+    }
+    h.persistence.headers = [legacy]
+    h.persistence.remember(String(legacy.id))
+
+    await h.emitMessage('旧话题也无需重新 @', {
+      chatId: 'oc_grp', chatType: 'group', threadId: 'omt_legacy', rootId: 'om_root_legacy', mentionedBot: false,
+    })
+    await waitFor(() => h.agents.resumed.length === 1)
+    expect(h.agents.resumed[0]!.options.resumeSessionId).toBe(legacy.id)
+  })
+
+  it('processes unmentioned topics immediately when requireMention is disabled', async () => {
+    const h = await makeHarness({ requireMention: false })
+    await h.emitMessage('无需首次 @', {
+      chatId: 'oc_grp', chatType: 'group', threadId: 'omt_open', rootId: 'om_root_open', mentionedBot: false,
+    })
+    await waitFor(() => h.agents.created.length === 1)
   })
 })
 
