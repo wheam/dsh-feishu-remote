@@ -278,6 +278,7 @@ export class FeishuBotManager {
         ...(slot.error === undefined && runtimeError === undefined ? {} : { error: slot.error ?? runtimeError }),
         connected: health?.connected ?? false,
         terminalFailure: health?.terminalFailure ?? false,
+        ...(health?.botName === undefined ? {} : { botName: health.botName }),
         liveAgents: slot.bridge?.liveAgentCount() ?? 0,
         provisionalAgents: slot.bridge?.provisionalAgentCount() ?? 0,
         ...(slot.lastConnectedAt === undefined ? {} : { lastConnectedAt: slot.lastConnectedAt }),

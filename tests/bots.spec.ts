@@ -9,7 +9,7 @@ class FakeBridge {
   provisional = 0
   async start() { this.started += 1 }
   async stop() { this.stopped += 1 }
-  health() { return { appId: this.appId, connected: true, terminalFailure: false } }
+  health() { return { appId: this.appId, connected: true, terminalFailure: false, botName: `${this.appId} name` } }
   liveAgentCount() { return this.live }
   provisionalAgentCount() { return this.provisional }
   profileStatus() { return undefined }
@@ -54,7 +54,7 @@ describe('FeishuBotManager', () => {
     const h = harness({ REF_A: 'a' })
     await h.manager.reconcile(config())
     expect(h.bridges.map(item => item.appId)).toEqual(['cli_a'])
-    expect(h.manager.status().find(item => item.id === 'bot-a')).toMatchObject({ status: 'connected', connected: true })
+    expect(h.manager.status().find(item => item.id === 'bot-a')).toMatchObject({ status: 'connected', connected: true, botName: 'cli_a name' })
     expect(h.manager.status().find(item => item.id === 'bot-b')).toMatchObject({ status: 'disabled', connected: false })
     await h.manager.stop()
   })

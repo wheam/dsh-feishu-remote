@@ -85,6 +85,18 @@ describe('multi-bot editor presentation', () => {
     })
   })
 
+  it('uses the real connected bot name while retaining its list role', () => {
+    expect(present(
+      { appId: 'cli_aa00abefea385be9', appSecretRef: 'REF', sessionNamespace: 'app' },
+      1,
+      { connected: true, liveAgents: 0, status: 'connected', botName: 'DSH Remote · Mini' },
+    )).toMatchObject({
+      name: 'DSH Remote · Mini',
+      appLabel: '机器人 2 · App ID：cli_…385be9',
+      statusLabel: '已连接',
+    })
+  })
+
   it('uses theme tokens so labels remain readable in light and dark themes', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(source).toContain('color:var(--dsw-alias-label-primary)!important')
@@ -106,5 +118,16 @@ describe('PersonalAgent onboarding presentation', () => {
     expect(source).toContain('children: "扫码添加机器人"')
     expect(source).toContain('"onboarding.manualAdd": "手动配置（高级）"')
     expect(source).toContain('onboardingStart: (mode, destination = "legacy")')
+  })
+
+  it('auto-dismisses a completed add flow and keeps technical fields collapsed', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('onboardingStatus.phase !== "ready"')
+    expect(source).toContain('void props.refreshBots?.()')
+    expect(source).toContain('setAddingBot(false)')
+    expect(source).toContain('title: "常用设置"')
+    expect(source).toContain('title: "访问控制"')
+    expect(source).toContain('title: "角色与模型"')
+    expect(source).toContain('title: "连接与高级配置"')
   })
 })

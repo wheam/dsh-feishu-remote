@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
 		const css = ".fr_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:8px;list-style:none;overflow:hidden}.fr_cardOpen{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}.fr_header{cursor:pointer;text-align:left;width:100%;font:inherit;background:0 0;border:0;align-items:center;gap:8px;padding:10px 14px;display:flex}.fr_header:hover{background:var(--dsw-alias-interactive-bg-hover)}.fr_headText{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.fr_name{color:var(--dsw-alias-label-primary);font-weight:600}.fr_description{color:var(--dsw-alias-label-tertiary);font-size:12px}.fr_pending{color:var(--dsw-alias-state-warn-primary);font-size:12px}.fr_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .12s}.fr_chevronOpen{transform:rotate(180deg)}.fr_body{flex-direction:column;gap:14px;padding:0 14px 14px;display:flex}.fr_readOnly{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px}.fr_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.fr_failed{color:var(--dsw-alias-state-error-primary);margin:0 auto 0 0;font-size:12px}.fr_discard,.fr_save{font:inherit;cursor:pointer;border-radius:6px;padding:5px 12px;font-size:13px}.fr_discard{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}.fr_discard:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}.fr_save{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_save:hover:not(:disabled){border-color:var(--dsw-alias-button-info-hover);background:var(--dsw-alias-button-info-hover)}.fr_discard:active:not(:disabled),.fr_save:active:not(:disabled){transform:translateY(1px)}.fr_discard:focus-visible:not(:disabled),.fr_save:focus-visible:not(:disabled){outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.fr_discard:disabled,.fr_save:disabled{opacity:.5;cursor:default}.fr_field{flex-direction:column;gap:4px;display:flex}.fr_head{align-items:center;gap:8px;display:flex}.fr_label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500}.fr_badges{align-items:center;gap:6px;display:flex}.fr_badge{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_badgeMuted{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-tertiary);border-radius:999px;padding:1px 6px;font-size:11px}.fr_reset{color:var(--dsw-alias-state-business-primary);cursor:pointer;background:0 0;border:0;padding:0;font-size:11px}.fr_reset:hover:not(:disabled){text-decoration:underline}.fr_input,.fr_select{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major);border-radius:6px;padding:6px 8px;font-size:13px}.fr_inputInvalid{border:1px solid var(--dsw-alias-state-error-primary);font:inherit;color:var(--dsw-alias-label-primary);border-radius:6px;padding:6px 8px;font-size:13px}.fr_input:disabled,.fr_select:disabled{opacity:.6}.fr_hint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px}.fr_invalid{color:var(--dsw-alias-state-error-primary);margin:0;font-size:12px}.fr_groupTitle{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 -4px}.fr_sep{height:1px;background:var(--dsw-alias-border-l2);margin:2px 0 0}";
 		const pageCss = ".fr_page{flex-direction:column;gap:16px;display:flex;max-width:760px}.fr_pageHead{flex-direction:column;gap:4px;display:flex}.fr_pageTitle{margin:0;font-size:16px;font-weight:600;color:var(--dsw-alias-label-primary)}.fr_pageDesc{margin:0;font-size:12px;color:var(--dsw-alias-label-tertiary)}.fr_pageGroup{margin:0 0 2px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);text-transform:uppercase;letter-spacing:.04em}";
 		const readabilityCss = ".fr_field{gap:6px}.fr_label{display:block!important;color:var(--dsw-alias-label-primary)!important;line-height:1.4;opacity:1!important;visibility:visible!important}.fr_hint{display:block!important;color:var(--dsw-alias-label-secondary)!important;line-height:1.45;opacity:1!important;visibility:visible!important}.fr_input::placeholder{color:var(--dsw-alias-label-tertiary)!important;opacity:1!important}.fr_input,.fr_select{min-height:34px}.fr_head{min-height:19px}";
-		const onboardingCss = ".fr_onboarding{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.fr_onboardingHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.fr_onboardingTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600}.fr_onboardingDesc,.fr_onboardingMeta,.fr_onboardingError{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.fr_onboardingError{color:var(--dsw-alias-state-error-primary)}.fr_status{border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_statusReady{color:var(--dsw-alias-state-success-primary)}.fr_statusBusy{color:var(--dsw-alias-state-warn-primary)}.fr_statusFailed{color:var(--dsw-alias-state-error-primary)}.fr_qrWrap{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.fr_qr{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:8px;padding:8px}.fr_qrHelp{display:flex;flex-direction:column;gap:6px;max-width:300px}.fr_qrLink{font-size:12px;color:var(--dsw-alias-state-business-primary)}.fr_actions{display:flex;flex-wrap:wrap;gap:8px}.fr_primary,.fr_secondary{font:inherit;cursor:pointer;border-radius:6px;padding:6px 11px;font-size:12px}.fr_primary{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_secondary{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.fr_primary:disabled,.fr_secondary:disabled{opacity:.5;cursor:default}.fr_capabilities{display:flex;flex-wrap:wrap;gap:6px}.fr_capability{border-radius:999px;padding:2px 7px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botList{display:flex;flex-direction:column;gap:12px}.fr_botIntro{display:flex;flex-direction:column;gap:3px;min-width:0}.fr_botCard{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);padding:0 14px 14px}.fr_botSummary{cursor:pointer;padding:13px 0;color:var(--dsw-alias-label-primary);display:flex;align-items:center;gap:10px;list-style:none}.fr_botSummary::-webkit-details-marker{display:none}.fr_botSummaryText{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.fr_botSummaryName{font-size:14px;font-weight:600}.fr_botSummaryMeta{font-size:11px;font-weight:400;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fr_botSummaryAside{display:flex;align-items:center;gap:8px}.fr_botSummaryChevron{color:var(--dsw-alias-label-tertiary);font-size:14px;transition:transform .12s}.fr_botCard[open]>.fr_botSummary .fr_botSummaryChevron{transform:rotate(180deg)}.fr_botStatusBadge{border-radius:999px;padding:2px 8px;font-size:11px;font-weight:500;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botStatusBadgeOk{color:var(--dsw-alias-state-success-primary)}.fr_botStatusBadgeError{color:var(--dsw-alias-state-error-primary)}.fr_botSection{border-top:1px solid var(--dsw-alias-border-l2);padding:12px 0 2px;display:flex;flex-direction:column;gap:10px}.fr_botSectionTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}.fr_botSectionDesc{margin:-6px 0 0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.45}.fr_botGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.fr_botWide{grid-column:1/-1}.fr_botStatus{font-size:12px;color:var(--dsw-alias-label-secondary);margin:0 0 10px}.fr_botStatusError{color:var(--dsw-alias-state-error-primary)}.fr_botToolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.fr_botAdvanced{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:0 12px 12px;background:var(--dsw-alias-bg-layer-2)}.fr_botAdvancedSummary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;padding:10px 0}.fr_botLimit{max-width:360px}.fr_checkbox{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:13px}.fr_botDanger{align-self:flex-start;margin-top:2px}@media(max-width:640px){.fr_botGrid{grid-template-columns:1fr}.fr_botWide{grid-column:auto}.fr_botToolbar{align-items:stretch}.fr_botLimit{max-width:none;width:100%}.fr_botSummaryMeta{max-width:180px}}";
+		const onboardingCss = ".fr_onboarding{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.fr_onboardingHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.fr_onboardingTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600}.fr_onboardingDesc,.fr_onboardingMeta,.fr_onboardingError{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.fr_onboardingError{color:var(--dsw-alias-state-error-primary)}.fr_status{border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_statusReady{color:var(--dsw-alias-state-success-primary)}.fr_statusBusy{color:var(--dsw-alias-state-warn-primary)}.fr_statusFailed{color:var(--dsw-alias-state-error-primary)}.fr_qrWrap{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.fr_qr{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:8px;padding:8px}.fr_qrHelp{display:flex;flex-direction:column;gap:6px;max-width:300px}.fr_qrLink{font-size:12px;color:var(--dsw-alias-state-business-primary)}.fr_actions{display:flex;flex-wrap:wrap;gap:8px}.fr_primary,.fr_secondary{font:inherit;cursor:pointer;border-radius:6px;padding:6px 11px;font-size:12px}.fr_primary{border:1px solid var(--dsw-alias-button-info-fill);background:var(--dsw-alias-button-info-fill);color:var(--dsw-alias-label-primary-foreground)}.fr_secondary{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.fr_primary:disabled,.fr_secondary:disabled{opacity:.5;cursor:default}.fr_capabilities{display:flex;flex-wrap:wrap;gap:6px}.fr_capability{border-radius:999px;padding:2px 7px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botList{display:flex;flex-direction:column;gap:12px}.fr_botIntro{display:flex;flex-direction:column;gap:3px;min-width:0}.fr_botCard{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);padding:0 14px 12px}.fr_botSummary{cursor:pointer;padding:13px 0;color:var(--dsw-alias-label-primary);display:flex;align-items:center;gap:10px;list-style:none}.fr_botSummary::-webkit-details-marker{display:none}.fr_botSummaryText{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.fr_botSummaryName{font-size:14px;font-weight:600}.fr_botSummaryMeta{font-size:11px;font-weight:400;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fr_botSummaryAside{display:flex;align-items:center;gap:8px}.fr_botSummaryChevron{color:var(--dsw-alias-label-tertiary);font-size:14px;transition:transform .12s}.fr_botCard[open]>.fr_botSummary .fr_botSummaryChevron{transform:rotate(180deg)}.fr_botStatusBadge{border-radius:999px;padding:2px 8px;font-size:11px;font-weight:500;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-secondary)}.fr_botStatusBadgeOk{color:var(--dsw-alias-state-success-primary)}.fr_botStatusBadgeError{color:var(--dsw-alias-state-error-primary)}.fr_botSection{border-top:1px solid var(--dsw-alias-border-l2);padding:12px 0 2px;display:flex;flex-direction:column;gap:10px}.fr_botSectionTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}.fr_botSectionDesc{margin:-6px 0 0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.45}.fr_botGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.fr_botWide{grid-column:1/-1}.fr_botStatus{font-size:12px;color:var(--dsw-alias-label-secondary);margin:0 0 10px}.fr_botStatusError{color:var(--dsw-alias-state-error-primary)}.fr_botToolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.fr_botAdvanced{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:0 12px 12px;background:var(--dsw-alias-bg-layer-2)}.fr_botAdvancedSummary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;padding:10px 0}.fr_botDisclosure{border-top:1px solid var(--dsw-alias-border-l2)}.fr_botDisclosureSummary{cursor:pointer;list-style:none;padding:12px 0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}.fr_botDisclosureSummary::-webkit-details-marker{display:none}.fr_botDisclosureSummary:after{content:'›';color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .12s}.fr_botDisclosure[open]>.fr_botDisclosureSummary:after{transform:rotate(90deg)}.fr_botDisclosureMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:400;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fr_botDisclosureBody{display:flex;flex-direction:column;gap:10px;padding:0 0 12px}.fr_botQuickToggles{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.fr_botQuickToggle{border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:9px 10px;background:var(--dsw-alias-bg-layer-3);display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-primary);font-size:12px}.fr_botLimit{max-width:360px}.fr_checkbox{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:13px}.fr_botDanger{align-self:flex-start;margin-top:2px}@media(max-width:640px){.fr_botGrid,.fr_botQuickToggles{grid-template-columns:1fr}.fr_botWide{grid-column:auto}.fr_botToolbar{align-items:stretch}.fr_botLimit{max-width:none;width:100%}.fr_botSummaryMeta{max-width:180px}.fr_botDisclosureMeta{max-width:180px}}";
 		const tagId = "dsh-feishu-remote/settings-card.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
@@ -50,7 +50,7 @@ window.__ModuleLoader__.load({
 			"qrHelp": "fr_qrHelp", "qrLink": "fr_qrLink", "actions": "fr_actions",
 			"primary": "fr_primary", "secondary": "fr_secondary", "capabilities": "fr_capabilities",
 			"capability": "fr_capability"
-			,"botList":"fr_botList","botIntro":"fr_botIntro","botCard":"fr_botCard","botSummary":"fr_botSummary","botSummaryText":"fr_botSummaryText","botSummaryName":"fr_botSummaryName","botSummaryMeta":"fr_botSummaryMeta","botSummaryAside":"fr_botSummaryAside","botSummaryChevron":"fr_botSummaryChevron","botStatusBadge":"fr_botStatusBadge","botStatusBadgeOk":"fr_botStatusBadgeOk","botStatusBadgeError":"fr_botStatusBadgeError","botSection":"fr_botSection","botSectionTitle":"fr_botSectionTitle","botSectionDesc":"fr_botSectionDesc","botGrid":"fr_botGrid","botWide":"fr_botWide","botStatus":"fr_botStatus","botStatusError":"fr_botStatusError","botToolbar":"fr_botToolbar","botAdvanced":"fr_botAdvanced","botAdvancedSummary":"fr_botAdvancedSummary","botLimit":"fr_botLimit","checkbox":"fr_checkbox","botDanger":"fr_botDanger"
+			,"botList":"fr_botList","botIntro":"fr_botIntro","botCard":"fr_botCard","botSummary":"fr_botSummary","botSummaryText":"fr_botSummaryText","botSummaryName":"fr_botSummaryName","botSummaryMeta":"fr_botSummaryMeta","botSummaryAside":"fr_botSummaryAside","botSummaryChevron":"fr_botSummaryChevron","botStatusBadge":"fr_botStatusBadge","botStatusBadgeOk":"fr_botStatusBadgeOk","botStatusBadgeError":"fr_botStatusBadgeError","botSection":"fr_botSection","botSectionTitle":"fr_botSectionTitle","botSectionDesc":"fr_botSectionDesc","botGrid":"fr_botGrid","botWide":"fr_botWide","botStatus":"fr_botStatus","botStatusError":"fr_botStatusError","botToolbar":"fr_botToolbar","botAdvanced":"fr_botAdvanced","botAdvancedSummary":"fr_botAdvancedSummary","botDisclosure":"fr_botDisclosure","botDisclosureSummary":"fr_botDisclosureSummary","botDisclosureMeta":"fr_botDisclosureMeta","botDisclosureBody":"fr_botDisclosureBody","botQuickToggles":"fr_botQuickToggles","botQuickToggle":"fr_botQuickToggle","botLimit":"fr_botLimit","checkbox":"fr_checkbox","botDanger":"fr_botDanger"
 		};
 
 		// ------------------------------------------------------------ chrome
@@ -426,10 +426,10 @@ window.__ModuleLoader__.load({
 				["allowedChatIds", "限定可用的群聊 ID（可留空）", "list"],
 			],
 			workspace: [
-				["defaultWorkspace", "默认 Workspace ID 或绝对路径"],
-				["profileFile", "机器人 Profile Markdown 路径"],
+				["defaultWorkspace", "默认工作区（可留空）"],
 			],
 			agent: [
+				["profileFile", "角色说明文件（Profile）"],
 				["agentPreset", "Agent 预设"], ["provider", "模型提供方"], ["model", "模型"],
 			],
 			advanced: [
@@ -439,7 +439,7 @@ window.__ModuleLoader__.load({
 		};
 		const BOT_SELECT_FIELDS = {
 			brand: ["brand", "平台", [["feishu", "飞书"], ["lark", "Lark"], ["larkoffice", "Lark Office"]]],
-			workspacePolicy: ["workspacePolicy", "Workspace 使用方式", [["default", "优先使用默认 Workspace"], ["locked", "固定使用该 Workspace"]]],
+			workspacePolicy: ["workspacePolicy", "工作区使用方式", [["default", "允许聊天选择工作区"], ["locked", "始终使用默认工作区"]]],
 			contextMode: ["contextMode", "读取飞书聊天上下文", [["auto", "自动"], ["off", "关闭"]]],
 			contextBackend: ["contextBackend", "上下文连接方式", [["auto", "自动"], ["sdk", "飞书 SDK"]]],
 		};
@@ -459,8 +459,11 @@ window.__ModuleLoader__.load({
 
 		function botPresentation(bot, index, status) {
 			const appId = typeof bot.appId === "string" ? bot.appId.trim() : "";
-			const name = appId === "" ? "新机器人" : bot.sessionNamespace === "legacy" ? "主机器人" : `机器人 ${index + 1}`;
-			const appLabel = appId === "" ? "尚未填写 App ID" : appId.length <= 12 ? `App ID：${appId}` : `App ID：${appId.slice(0, 4)}…${appId.slice(-6)}`;
+			const role = bot.sessionNamespace === "legacy" ? "主机器人" : `机器人 ${index + 1}`;
+			const runtimeName = typeof status?.botName === "string" ? status.botName.trim() : "";
+			const name = appId === "" ? "新机器人" : runtimeName || role;
+			const maskedApp = appId === "" ? "尚未填写 App ID" : appId.length <= 12 ? `App ID：${appId}` : `App ID：${appId.slice(0, 4)}…${appId.slice(-6)}`;
+			const appLabel = runtimeName === "" || appId === "" ? maskedApp : `${role} · ${maskedApp}`;
 			if (bot.enabled === false) return { name, appLabel, statusLabel: "已停用", statusTone: "muted", detail: "这个机器人当前已停用。" };
 			if (appId === "" || typeof bot.appSecretRef !== "string" || bot.appSecretRef.trim() === "") return { name, appLabel, statusLabel: "待完成", statusTone: "error", detail: "请填写 App ID 和 App Secret 凭据引用，然后保存。" };
 			if (status === void 0) return { name, appLabel, statusLabel: "读取中", statusTone: "muted", detail: "正在读取机器人连接状态…" };
@@ -469,6 +472,33 @@ window.__ModuleLoader__.load({
 			if (status.connected) return { name, appLabel, statusLabel: "已连接", statusTone: "ok", detail: `连接正常 · 当前运行 ${live} 个任务` };
 			if (status.status === "starting") return { name, appLabel, statusLabel: "连接中", statusTone: "muted", detail: "机器人正在建立连接…" };
 			return { name, appLabel, statusLabel: "未连接", statusTone: "error", detail: "机器人当前未连接，请展开检查配置。" };
+		}
+
+		function botListCount(value) {
+			if (Array.isArray(value)) return value.filter(Boolean).length;
+			if (typeof value !== "string") return 0;
+			return value.split(/[\s,]+/).filter(Boolean).length;
+		}
+
+		function botAccessSummary(bot) {
+			if (bot.allowAllUsers === true) return "所有人都可以使用（有风险）";
+			const users = botListCount(bot.allowedOpenIds);
+			const chats = botListCount(bot.allowedChatIds);
+			if (users === 0) return "尚未授权用户";
+			return `已授权 ${users} 位用户${chats > 0 ? ` · 限定 ${chats} 个群聊` : ""}`;
+		}
+
+		function botAgentSummary(bot) {
+			const preset = typeof bot.agentPreset === "string" ? bot.agentPreset.trim() : "";
+			const model = typeof bot.model === "string" ? bot.model.trim() : "";
+			const profile = typeof bot.profileFile === "string" ? bot.profileFile.trim() : "";
+			const values = [preset ? `预设 ${preset}` : "", model ? `模型 ${model}` : "", profile ? "已设置角色说明" : ""].filter(Boolean);
+			return values.length > 0 ? values.join(" · ") : "使用系统默认";
+		}
+
+		function botConnectionSummary(bot) {
+			const brand = bot.brand === "lark" || bot.brand === "larkoffice" ? "Lark" : "飞书";
+			return `${brand} · 凭据已安全保存`;
 		}
 
 		function BotField(props) {
@@ -490,7 +520,7 @@ window.__ModuleLoader__.load({
 
 		function BotSelectField(props) {
 			const [field, label, options] = props.spec;
-			return react_jsx_runtime.jsxs("label", { className: cssDefault.field, children: [
+			return react_jsx_runtime.jsxs("label", { className: props.wide ? cssDefault.field + " " + cssDefault.botWide : cssDefault.field, children: [
 				react_jsx_runtime.jsx("span", { className: cssDefault.label, children: label }),
 				react_jsx_runtime.jsx("select", {
 					className: cssDefault.select,
@@ -518,6 +548,16 @@ window.__ModuleLoader__.load({
 			] });
 		}
 
+		function BotDisclosure(props) {
+			return react_jsx_runtime.jsxs("details", { className: cssDefault.botDisclosure, children: [
+				react_jsx_runtime.jsxs("summary", { className: cssDefault.botDisclosureSummary, children: [
+					react_jsx_runtime.jsx("span", { children: props.title }),
+					react_jsx_runtime.jsx("span", { className: cssDefault.botDisclosureMeta, children: props.summary })
+				] }),
+				react_jsx_runtime.jsx("div", { className: cssDefault.botDisclosureBody, children: props.children })
+			] });
+		}
+
 		function BotEditor(props) {
 			const [open, setOpen] = react.useState(!props.bot.appId);
 			const presentation = botPresentation(props.bot, props.index, props.status);
@@ -538,53 +578,62 @@ window.__ModuleLoader__.load({
 					] })
 				] }),
 				react_jsx_runtime.jsx("p", { className: presentation.statusTone === "error" ? cssDefault.botStatus + " " + cssDefault.botStatusError : cssDefault.botStatus, children: presentation.detail }),
-				react_jsx_runtime.jsx(BotSection, { title: "连接", description: "填写飞书应用信息；凭据引用指向 Host 安全保存的 App Secret。", children: [
-					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
-						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.enabled !== false, disabled: props.disabled, onChange: event => props.onEdit("enabled", event.target.checked) }),
-						"启用此机器人"
+				react_jsx_runtime.jsx(BotSection, { title: "常用设置", description: "扫码生成的连接和权限通常无需修改；日常只需设置工作区和群聊响应方式。", children: [
+					react_jsx_runtime.jsxs("div", { className: cssDefault.botQuickToggles, children: [
+						react_jsx_runtime.jsxs("label", { className: cssDefault.botQuickToggle, children: [
+							react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.enabled !== false, disabled: props.disabled, onChange: event => props.onEdit("enabled", event.target.checked) }),
+							"启用机器人"
+						] }),
+						react_jsx_runtime.jsxs("label", { className: cssDefault.botQuickToggle, children: [
+							react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.requireMention !== false, disabled: props.disabled, onChange: event => props.onEdit("requireMention", event.target.checked) }),
+							"话题首次使用需要 @机器人"
+						] })
 					] }),
-					react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.brand, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
-					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.connection, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+					react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.workspacePolicy, bot: props.bot, disabled: props.disabled, wide: true, onEdit: props.onEdit }),
+					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.workspace, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
 				] }),
-				react_jsx_runtime.jsx(BotSection, { title: "使用权限", description: "默认只允许指定用户；开放给所有人会带来远程执行风险。", children: [
-					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
+				react_jsx_runtime.jsx(BotDisclosure, { title: "访问控制", summary: botAccessSummary(props.bot), children: react_jsx_runtime.jsxs("div", { className: cssDefault.botGrid, children: [
+					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox + " " + cssDefault.botWide, children: [
 						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.allowAllUsers === true, disabled: props.disabled, onChange: event => props.onEdit("allowAllUsers", event.target.checked) }),
 						"允许任何人使用（不建议）"
 					] }),
-					react_jsx_runtime.jsxs("label", { className: cssDefault.checkbox, children: [
-						react_jsx_runtime.jsx("input", { type: "checkbox", checked: props.bot.requireMention !== false, disabled: props.disabled, onChange: event => props.onEdit("requireMention", event.target.checked) }),
-						"话题中第一次使用时必须 @机器人"
-					] }),
 					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.access, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
-				] }),
-				react_jsx_runtime.jsx(BotSection, { title: "Workspace", description: "为这个机器人指定默认工作区和专属行为说明。", children: [
-					react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.workspacePolicy, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
-					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.workspace, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
-				] }),
-				react_jsx_runtime.jsx(BotSection, { title: "Agent 与上下文", description: "留空时使用 DSH 的默认 Agent 和模型。", children: [
+				] }) }),
+				react_jsx_runtime.jsx(BotDisclosure, { title: "角色与模型", summary: botAgentSummary(props.bot), children: react_jsx_runtime.jsxs("div", { className: cssDefault.botGrid, children: [
 					react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.contextMode, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
 					...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.agent, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
-				] }),
-				react_jsx_runtime.jsxs("details", { className: cssDefault.botAdvanced, children: [
-					react_jsx_runtime.jsx("summary", { className: cssDefault.botAdvancedSummary, children: "机器人高级设置" }),
+				] }) }),
+				react_jsx_runtime.jsx(BotDisclosure, { title: "连接与高级配置", summary: botConnectionSummary(props.bot), children: react_jsx_runtime.jsxs(react.Fragment, { children: [
 					react_jsx_runtime.jsxs("div", { className: cssDefault.botGrid, children: [
+						react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.brand, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
+						...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.connection, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
 						react_jsx_runtime.jsx(BotSelectField, { spec: BOT_SELECT_FIELDS.contextBackend, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
 						...BotTextFields({ fields: BOT_TEXT_FIELD_GROUPS.advanced, bot: props.bot, disabled: props.disabled, onEdit: props.onEdit }),
-					] })
-				] }),
-				react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary + " " + cssDefault.botDanger, disabled: props.disabled, onClick: props.onDelete, children: "从列表中移除此机器人" })
+					] }),
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary + " " + cssDefault.botDanger, disabled: props.disabled, onClick: props.onDelete, children: "移除此机器人" })
+				] }) })
 			] });
 		}
 
 		function MultiBotPanel(props) {
 			const [confirmingLegacyConversion, setConfirmingLegacyConversion] = react.useState(false);
 			const [addingBot, setAddingBot] = react.useState(false);
+			const [addStarted, setAddStarted] = react.useState(false);
+			const [addBaselineRevision, setAddBaselineRevision] = react.useState(-1);
 			const hook = props.useFeishuBotAdmin;
 			if (hook === void 0) return null;
 			const state = hook(value => value);
 			const onboardingHook = props.usePersonalAgentOnboarding;
 			const onboardingState = onboardingHook === void 0 ? void 0 : onboardingHook(value => value);
 			const onboardingBusy = onboardingActive(onboardingState?.status) || onboardingState?.acting === true;
+			const onboardingStatus = onboardingState?.status;
+			react.useEffect(() => {
+				if (!addingBot || !addStarted || onboardingStatus?.destination !== "new-bot"
+					|| onboardingStatus.phase !== "ready" || (onboardingStatus.revision ?? -1) <= addBaselineRevision) return;
+				void props.refreshBots?.();
+				setAddingBot(false);
+				setAddStarted(false);
+			}, [addingBot, addStarted, addBaselineRevision, onboardingStatus?.revision]);
 			if (!state?.loaded) return react_jsx_runtime.jsx("p", { className: cssDefault.hint, children: "正在加载机器人配置…" });
 			if (state.mode === "unavailable") return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
 				react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人设置仅限 Host 本机" }),
@@ -609,15 +658,21 @@ window.__ModuleLoader__.load({
 						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人管理" }),
 						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: `已配置 ${state.bots.length} 个机器人。点击卡片可以展开并修改设置。` })
 					] }),
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || state.dirty || onboardingBusy || !state.writable, onClick: () => setAddingBot(true), children: "扫码添加机器人" })
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || state.dirty || onboardingBusy || !state.writable, onClick: () => {
+						setAddBaselineRevision(onboardingStatus?.revision ?? -1);
+						setAddStarted(false);
+						setAddingBot(true);
+					}, children: "扫码添加机器人" })
 				] }),
 				addingBot ? react_jsx_runtime.jsx(OnboardingPanel, {
 					...props,
 					multiAdd: true,
+					baselineRevision: addBaselineRevision,
 					writable: state.writable,
 					cardDirty: state.dirty,
-					onClose: () => setAddingBot(false),
-					onManual: () => { props.addBot(); setAddingBot(false); }
+					onboardingStart: (mode, destination) => { setAddStarted(true); props.onboardingStart(mode, destination); },
+					onClose: () => { setAddingBot(false); setAddStarted(false); },
+					onManual: () => { props.addBot(); setAddingBot(false); setAddStarted(false); }
 				}) : null,
 				...(state.bots ?? []).map((bot, index) => react_jsx_runtime.jsx(BotEditor, { bot, index, status: statuses.get(bot.id), disabled: state.saving || onboardingBusy || !state.writable, onEdit: (field, value) => props.editBot(index, field, value), onDelete: () => props.deleteBot(index) }, bot.id || bot.appId || `bot-${index}`)),
 				react_jsx_runtime.jsxs("details", { className: cssDefault.botAdvanced, children: [
@@ -642,7 +697,9 @@ window.__ModuleLoader__.load({
 			if (hook === void 0) return null;
 			const snapshot = hook((value) => value);
 			const rawStatus = snapshot?.status;
-			const status = props.multiAdd && rawStatus?.destination !== "new-bot" ? void 0 : rawStatus;
+			const staleMultiStatus = props.multiAdd && (rawStatus?.destination !== "new-bot"
+				|| (rawStatus?.revision ?? -1) <= (props.baselineRevision ?? -1));
+			const status = staleMultiStatus ? void 0 : rawStatus;
 			const phase = status?.phase ?? "idle";
 			const active = onboardingActive(status);
 			const canCancel = phase === "starting" || phase === "qr_ready";
@@ -956,6 +1013,7 @@ window.__ModuleLoader__.load({
 				return {
 					hooks: { feishuBotAdmin: this.store },
 					convertLegacy: () => this.convertLegacy(),
+					refreshBots: () => this.refresh(true),
 					addBot: () => {
 						const used = new Set(this.snapshot.bots.map(bot => bot.id));
 						let number = this.snapshot.bots.length + 1;

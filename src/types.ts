@@ -87,6 +87,7 @@ export interface BotRuntimeStatus {
   error?: string
   connected: boolean
   terminalFailure: boolean
+  botName?: string
   liveAgents: number
   provisionalAgents: number
   lastConnectedAt?: number
