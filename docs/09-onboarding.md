@@ -47,12 +47,12 @@
 
 ### 6.1 多机器人配置
 
-一个 `dsh web` 进程现在可以运行多个飞书 App。先在 Host 本机 Web GUI 的「飞书遥控」页面把
-legacy 配置显式转换为多机器人配置，再新增机器人；原机器人保留 legacy Session 身份，新机器人
-使用包含 app identity 的隔离身份。每个 bot 使用独立 `appSecretRef`，并可配置
+一个 `dsh web` 进程现在可以运行多个飞书 App。在 Host 本机 Web GUI 的「飞书遥控」页面点击
+「添加机器人」时，旧配置会在后台自动迁移；原机器人保留 legacy Session 身份，新机器人使用包含
+app identity 的隔离身份。每个 bot 使用独立 `appSecretRef`，并可配置
 `defaultWorkspace`、`workspacePolicy: default|locked`、`profileFile` 和 `agentPreset`。
 
-新增机器人默认点击「扫码添加机器人」：选择已有 PersonalAgent 或创建新机器人后，Host 会自动
+新增机器人点击「添加机器人」：选择已有 PersonalAgent 或创建新机器人后，Host 会自动
 保存 Secret、追加 `bots[]` 配置、把扫码者设为初始允许用户并等待连接成功。App ID 与 Secret
 凭据引用无需手填；「手动配置（高级）」仅用于已经在外部管理凭据的应用。
 

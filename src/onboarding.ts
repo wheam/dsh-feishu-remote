@@ -528,7 +528,7 @@ export class PersonalAgentOnboardingService {
       throw new OnboardingError('destination_required', '多机器人模式扫码时必须明确添加为新机器人。', false)
     }
     if (!multi && destination === 'new-bot') {
-      throw new OnboardingError('multi_bot_required', '请先转换为多机器人配置，再扫码添加机器人。', false)
+      throw new OnboardingError('multi_bot_required', '机器人列表尚未准备完成，请稍后重试添加。', false)
     }
     if (this.active?.committing === true) {
       throw new OnboardingError('busy', '正在保存上一轮扫码结果，请等待完成。', false)

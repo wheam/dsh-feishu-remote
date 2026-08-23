@@ -839,24 +839,24 @@ feishu-remote:
 
 ### 10.3 Legacy 转换
 
-legacy 页面提供显式“转换为多机器人配置”：
+legacy 页面不暴露转换概念；用户点击“添加机器人”后，client 在打开新增流程前执行以下原子迁移：
 
 1. 将当前有效配置复制为 `bots[0]`；
 2. 自动生成可编辑 botId；
 3. 设置 `sessionNamespace: legacy`；
 4. client 调用 loopback RPC `settings/convert-legacy`，不传自称的 revision；host 用 `ctx.settings.describe({ redactSecrets: true })` 读取当前 descriptor/revision，从同一当前值生成 bot，再在一次 `ctx.settings.mutate(namespace, ops, revision)` 中写入 `bots`、`maxTotalLiveAgents` 并 unset user 层旧 bot 字段；CAS 冲突则整次失败并要求刷新；
-5. 保存前展示不可逆的配置形状变化，但说明 Session 与 state 不会删除；
-6. 失败时保持原文档不变。
+5. 原机器人在 UI 中仍只显示为一个机器人，不额外显示“迁移项”或“添加项”；
+6. 失败时保持原文档不变，并停留在原页面显示可操作错误。
 
 RPC host 必须自己从当前 descriptor 生成允许迁移的字段白名单，不能信任 client 传来的 secret、任意路径 op 或 credential value。legacy 根字段中的 `defaultWorkspace`、`workspacePolicy`、`profileFile` 也要进入 bot。mutation 只能 unset user 层，无法删除 `base: flatten(config)` 里的 patch.yml 字段；这是预期行为，因为 multi mode 明确忽略所有 legacy 根字段。成功响应返回新 revision 和脱敏后的规范化摘要。
 
-不能在插件升级时自动转换，避免一次普通升级导致连接身份和 Session prefix 改变。
+不能在插件升级时自动转换；只在用户明确点击“添加机器人”时触发，避免一次普通升级导致配置形状变化。
 
 QR onboarding 的写入目标保持模式感知：legacy 模式继续更新根字段；multi mode 携带
 `destination: new-bot`，由 Host 在扫码期间确认 `bots[]` 未被并发修改，再使用开始扫码时的
 settings revision 执行一次 CAS，追加规范化 bot。新 bot 的 Secret 只写 credential provider，App ID、credential ref、扫码 owner
 白名单、App Session namespace 与 SDK 上下文均自动生成。重复 App ID 在写凭据前拒绝；配置写入
-失败时补偿清理新 credential。设置页以「扫码添加机器人」为主入口，手工填写仅作为高级方式。
+失败时补偿清理新 credential。设置页以「添加机器人」为主入口，手工填写折叠在高级设置中。
 
 ### 10.4 Bot 状态展示
 

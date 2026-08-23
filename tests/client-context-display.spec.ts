@@ -110,14 +110,25 @@ describe('PersonalAgent onboarding presentation', () => {
     expect(source).toContain('props.onboardingStart("select", props.multiAdd ? "new-bot" : "legacy")')
     expect(source).toContain('"onboarding.select": "选择并绑定已有机器人"')
     expect(source).toContain('"onboarding.create": "创建并绑定新机器人"')
+    expect(source).toContain('"onboarding.createAnother": "创建新机器人并替换"')
     expect(source).toContain('选择你已经创建的机器人')
   })
 
   it('makes QR onboarding the primary multi-bot add flow and keeps manual setup advanced', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
-    expect(source).toContain('children: "扫码添加机器人"')
+    expect(source).toContain('children: "添加机器人"')
+    expect(source).toContain('children: "手动配置与高级设置"')
     expect(source).toContain('"onboarding.manualAdd": "手动配置（高级）"')
     expect(source).toContain('onboardingStart: (mode, destination = "legacy")')
+  })
+
+  it('hides legacy migration and advanced fields behind user-facing actions', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('const converted = await props.convertLegacy()')
+    expect(source).toContain('children: managingLegacy ? "收起" : "更换或修复"')
+    expect(source).toContain('添加机器人不会替换当前机器人')
+    expect(source).not.toContain('转换为多机器人配置')
+    expect(source).not.toContain('再创建一个新机器人')
   })
 
   it('auto-dismisses a completed add flow and keeps technical fields collapsed', () => {

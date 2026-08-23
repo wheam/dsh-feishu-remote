@@ -616,8 +616,9 @@ window.__ModuleLoader__.load({
 		}
 
 		function MultiBotPanel(props) {
-			const [confirmingLegacyConversion, setConfirmingLegacyConversion] = react.useState(false);
 			const [addingBot, setAddingBot] = react.useState(false);
+			const [managingLegacy, setManagingLegacy] = react.useState(false);
+			const [preparingAdd, setPreparingAdd] = react.useState(false);
 			const [addStarted, setAddStarted] = react.useState(false);
 			const [addBaselineRevision, setAddBaselineRevision] = react.useState(-1);
 			const hook = props.useFeishuBotAdmin;
@@ -627,6 +628,20 @@ window.__ModuleLoader__.load({
 			const onboardingState = onboardingHook === void 0 ? void 0 : onboardingHook(value => value);
 			const onboardingBusy = onboardingActive(onboardingState?.status) || onboardingState?.acting === true;
 			const onboardingStatus = onboardingState?.status;
+			const legacyConfigured = state?.legacyConfigured === true || onboardingStatus?.configured === true;
+			const beginAdd = async () => {
+				if (state.saving || state.dirty || onboardingBusy || !state.writable) return;
+				setAddBaselineRevision(onboardingStatus?.revision ?? -1);
+				setAddStarted(false);
+				if (state.mode === "legacy") {
+					setPreparingAdd(true);
+					const converted = await props.convertLegacy();
+					setPreparingAdd(false);
+					if (!converted) return;
+				}
+				setManagingLegacy(false);
+				setAddingBot(true);
+			};
 			react.useEffect(() => {
 				if (!addingBot || !addStarted || onboardingStatus?.destination !== "new-bot"
 					|| onboardingStatus.phase !== "ready" || (onboardingStatus.revision ?? -1) <= addBaselineRevision) return;
@@ -639,18 +654,48 @@ window.__ModuleLoader__.load({
 				react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人设置仅限 Host 本机" }),
 				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error ?? "请在 Host 的 localhost 设置页管理机器人；此处不显示可能已失效的 legacy 字段。" })
 			] });
-			if (state.mode === "legacy") return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
-				react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "多机器人模式" }),
-				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: "转换会保留原机器人的 legacy Session 身份，并启用逐机器人默认 Workspace 与 Profile。" }),
-				state.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error }) : null,
-				confirmingLegacyConversion ? react_jsx_runtime.jsxs(react.Fragment, { children: [
-					react_jsx_runtime.jsx("p", { className: cssDefault.onboardingMeta, role: "status", children: "此操作会原子改写配置：原机器人保留 legacy Session 身份，多机器人上下文固定改用 SDK；未显式配置的入站目录将改为 App 隔离路径。新机器人使用 App 隔离身份。" }),
-					react_jsx_runtime.jsxs("div", { className: cssDefault.actions, children: [
-						react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving, onClick: () => setConfirmingLegacyConversion(false), children: "取消" }),
-						react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || props.cardDirty || !state.writable, onClick: () => { setConfirmingLegacyConversion(false); props.convertLegacy(); }, children: state.saving ? "转换中…" : "确认转换" })
-					] })
-				] }) : react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: state.saving || props.cardDirty || !state.writable, onClick: () => setConfirmingLegacyConversion(true), children: "转换为多机器人配置" })
-			] });
+			if (state.mode === "legacy") {
+				const app = onboardingStatus?.app;
+				const connected = onboardingStatus?.connected === true;
+				const statusClass = connected
+					? cssDefault.botStatusBadge + " " + cssDefault.botStatusBadgeOk
+					: cssDefault.botStatusBadge + " " + cssDefault.botStatusBadgeError;
+				return react_jsx_runtime.jsxs("div", { className: cssDefault.botList, children: [
+					react_jsx_runtime.jsxs("div", { className: cssDefault.botToolbar, children: [
+						react_jsx_runtime.jsxs("div", { className: cssDefault.botIntro, children: [
+							react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人管理" }),
+							react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: legacyConfigured ? "已连接 1 个机器人。添加机器人不会替换当前机器人。" : "连接一个飞书机器人后，就可以从飞书远程使用 DSH。" })
+						] }),
+						react_jsx_runtime.jsx("button", {
+							type: "button", className: cssDefault.primary,
+							disabled: state.saving || props.cardDirty || onboardingBusy || !state.writable,
+							onClick: legacyConfigured ? beginAdd : () => setManagingLegacy(true),
+							children: preparingAdd ? "正在准备…" : legacyConfigured ? "添加机器人" : "连接机器人"
+						})
+					] }),
+					legacyConfigured ? react_jsx_runtime.jsxs("div", { className: cssDefault.botCard, children: [
+						react_jsx_runtime.jsxs("div", { className: cssDefault.botSummary, children: [
+							react_jsx_runtime.jsxs("span", { className: cssDefault.botSummaryText, children: [
+								react_jsx_runtime.jsx("span", { className: cssDefault.botSummaryName, children: app?.botName || "当前机器人" }),
+								react_jsx_runtime.jsx("span", { className: cssDefault.botSummaryMeta, children: [app?.brand, app?.appIdSuffix ? `App …${app.appIdSuffix}` : state.legacyAppIdSuffix ? `App …${state.legacyAppIdSuffix}` : null].filter(Boolean).join(" · ") })
+							] }),
+							react_jsx_runtime.jsxs("span", { className: cssDefault.botSummaryAside, children: [
+								react_jsx_runtime.jsx("span", { className: statusClass, children: connected ? "已连接" : "需要处理" })
+							] })
+						] }),
+						react_jsx_runtime.jsxs("div", { className: cssDefault.actions, children: [
+							react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.secondary, disabled: onboardingBusy || !state.writable, onClick: () => setManagingLegacy(value => !value), children: managingLegacy ? "收起" : "更换或修复" })
+						] })
+					] }) : null,
+					managingLegacy ? react_jsx_runtime.jsx(OnboardingPanel, {
+						...props,
+						writable: state.writable,
+						cardDirty: props.cardDirty,
+						onClose: () => setManagingLegacy(false)
+					}) : null,
+					state.error ? react_jsx_runtime.jsx("p", { className: cssDefault.onboardingError, children: state.error }) : null
+				] });
+			}
 			const statuses = new Map((state.statuses ?? []).map(item => [item.id, item]));
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.botList, children: [
 				react_jsx_runtime.jsxs("div", { className: cssDefault.botToolbar, children: [
@@ -658,11 +703,7 @@ window.__ModuleLoader__.load({
 						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: "机器人管理" }),
 						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: `已配置 ${state.bots.length} 个机器人。点击卡片可以展开并修改设置。` })
 					] }),
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || state.dirty || onboardingBusy || !state.writable, onClick: () => {
-						setAddBaselineRevision(onboardingStatus?.revision ?? -1);
-						setAddStarted(false);
-						setAddingBot(true);
-					}, children: "扫码添加机器人" })
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.primary, disabled: state.saving || state.dirty || onboardingBusy || !state.writable, onClick: beginAdd, children: "添加机器人" })
 				] }),
 				addingBot ? react_jsx_runtime.jsx(OnboardingPanel, {
 					...props,
@@ -726,11 +767,13 @@ window.__ModuleLoader__.load({
 				: Math.max(0, Math.ceil((status.expiresAt - Date.now()) / 1000));
 			const scanHintKey = status?.mode === "select" ? "onboarding.scanHintSelect"
 				: status?.mode === "update" ? "onboarding.scanHintUpdate" : "onboarding.scanHintCreate";
+			const titleKey = props.multiAdd ? "onboarding.multiTitle" : configured ? "onboarding.manageTitle" : "onboarding.title";
+			const descriptionKey = props.multiAdd ? "onboarding.multiDescription" : configured ? "onboarding.manageDescription" : "onboarding.description";
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.onboarding, children: [
 				react_jsx_runtime.jsxs("div", { className: cssDefault.onboardingHead, children: [
 					react_jsx_runtime.jsxs("div", { children: [
-						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: props.t(props.multiAdd ? "onboarding.multiTitle" : "onboarding.title") }),
-						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: props.t(props.multiAdd ? "onboarding.multiDescription" : "onboarding.description") })
+						react_jsx_runtime.jsx("h3", { className: cssDefault.onboardingTitle, children: props.t(titleKey) }),
+						react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: props.t(descriptionKey) })
 					] }),
 					react_jsx_runtime.jsx("span", { className: statusClass, role: "status", children: props.t(onboardingStatusKey(status)) })
 				] }),
@@ -793,7 +836,7 @@ window.__ModuleLoader__.load({
 						onClick: props.onManual,
 						children: props.t("onboarding.manualAdd")
 					}) : null,
-					props.multiAdd && props.onClose ? react_jsx_runtime.jsx("button", {
+					props.onClose ? react_jsx_runtime.jsx("button", {
 						type: "button", className: cssDefault.secondary,
 						disabled: active || acting,
 						onClick: props.onClose,
@@ -804,30 +847,18 @@ window.__ModuleLoader__.load({
 			] });
 		}
 
-		function FeishuRemoteSettingsCard(props) {
-			const { t } = props;
-			const state = props.useFeishuRemoteSettingsCard((snapshot) => snapshot);
-			const onboarding = props.usePersonalAgentOnboarding?.((snapshot) => snapshot);
-			const admin = props.useFeishuBotAdmin?.((snapshot) => snapshot);
-			const multi = admin !== void 0 && admin.mode !== "legacy";
-			const active = onboardingActive(onboarding?.status);
-			const disabled = !state.writable || active;
+		function LegacyAdvancedSettings(props) {
+			const { t, state } = props;
+			const disabled = !state.writable || props.active;
 			const fieldProps = { disabled };
-			return react_jsx_runtime.jsx(PluginSettingsCard, {
-				t,
-				titleKey: "settings.title",
-				descriptionKey: "settings.description",
-				state: { ...state, invalid: state.invalid || active },
-				onSave: active ? () => {} : props.save,
-					onDiscard: props.discard,
-					hideFooter: multi,
-					children: [
-						react_jsx_runtime.jsx(MultiBotPanel, { ...props, key: "multi", cardDirty: state.dirty }),
-						multi ? null : react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
-					...(multi ? [] : FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
+			const blocked = !state.dirty || state.invalid || state.saving || props.active;
+			return react_jsx_runtime.jsxs("details", { className: cssDefault.botAdvanced, children: [
+				react_jsx_runtime.jsx("summary", { className: cssDefault.botAdvancedSummary, children: "手动配置与高级设置" }),
+				react_jsx_runtime.jsx("p", { className: cssDefault.onboardingDesc, children: "扫码连接的机器人通常无需修改这些字段。仅在使用自建应用、限制使用者或排查连接问题时展开。" }),
+				...FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
 					key: group.key,
 					children: [
-						react_jsx_runtime.jsx("p", { className: cssDefault.groupTitle, children: t(`g.${group.key}`) }),
+						react_jsx_runtime.jsx("p", { className: props.page ? cssDefault.pageGroup : cssDefault.groupTitle, children: t(`g.${group.key}`) }),
 						group.fields.map((entry) => react_jsx_runtime.jsx(Field, {
 							spec: entry.spec,
 							kind: entry.kind,
@@ -842,7 +873,33 @@ window.__ModuleLoader__.load({
 						}, entry.field)),
 						react_jsx_runtime.jsx("div", { className: cssDefault.sep })
 					]
-					})))
+				})),
+				react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
+					state.failed ? react_jsx_runtime.jsx("p", { className: cssDefault.failed, role: "status", children: t("settings.saveFailed") }) : null,
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, onClick: props.discard, disabled: !state.dirty || state.saving, children: t("settings.discard") }),
+					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, onClick: props.save, disabled: blocked, children: t(state.saving ? "settings.saving" : "settings.save") })
+				] })
+			] });
+		}
+
+		function FeishuRemoteSettingsCard(props) {
+			const { t } = props;
+			const state = props.useFeishuRemoteSettingsCard((snapshot) => snapshot);
+			const onboarding = props.usePersonalAgentOnboarding?.((snapshot) => snapshot);
+			const admin = props.useFeishuBotAdmin?.((snapshot) => snapshot);
+			const multi = admin !== void 0 && admin.mode !== "legacy";
+			const active = onboardingActive(onboarding?.status);
+			return react_jsx_runtime.jsx(PluginSettingsCard, {
+				t,
+				titleKey: "settings.title",
+				descriptionKey: "settings.description",
+				state: { ...state, invalid: state.invalid || active },
+				onSave: active ? () => {} : props.save,
+				onDiscard: props.discard,
+				hideFooter: true,
+				children: [
+					react_jsx_runtime.jsx(MultiBotPanel, { ...props, key: "multi", cardDirty: state.dirty }),
+					multi ? null : react_jsx_runtime.jsx(LegacyAdvancedSettings, { ...props, key: "advanced", t, state, active })
 				]
 			});
 		}
@@ -858,9 +915,6 @@ window.__ModuleLoader__.load({
 			const admin = props.useFeishuBotAdmin?.((snapshot) => snapshot);
 			const multi = admin !== void 0 && admin.mode !== "legacy";
 			const active = onboardingActive(onboarding?.status);
-			const disabled = !state.writable || active;
-			const fieldProps = { disabled };
-			const blocked = !state.dirty || state.invalid || state.saving || active;
 			return react_jsx_runtime.jsxs("div", { className: cssDefault.page, children: [
 				react_jsx_runtime.jsxs("div", { className: cssDefault.pageHead, children: [
 					react_jsx_runtime.jsx("h2", { className: cssDefault.pageTitle, children: t("settings.title") }),
@@ -868,32 +922,8 @@ window.__ModuleLoader__.load({
 					state.dirty ? react_jsx_runtime.jsx("span", { className: cssDefault.pending, children: t("settings.unsaved") }) : null,
 					!state.writable ? react_jsx_runtime.jsx("p", { className: cssDefault.readOnly, role: "status", children: t("settings.readOnly") }) : null
 				] }),
-					react_jsx_runtime.jsx(MultiBotPanel, { ...props, key: "multi", cardDirty: state.dirty }),
-					multi ? null : react_jsx_runtime.jsx(OnboardingPanel, { ...props, key: "onboarding", writable: state.writable, cardDirty: state.dirty }),
-				...(multi ? [] : FIELD_GROUPS.map((group) => react_jsx_runtime.jsxs(react.Fragment, {
-					key: group.key,
-					children: [
-						react_jsx_runtime.jsx("p", { className: cssDefault.pageGroup, children: t(`g.${group.key}`) }),
-						group.fields.map((entry) => react_jsx_runtime.jsx(Field, {
-							spec: entry.spec,
-							kind: entry.kind,
-							labelKey: entry.labelKey,
-							hintKey: entry.hintKey,
-							placeholderKey: entry.placeholderKey,
-							t,
-							fieldProps,
-							state: state[entry.field] ?? { text: "", overridden: false, invalid: false, configured: false },
-							onEdit: (text) => props.edit(entry.field, text),
-							onReset: () => props.resetField(entry.field)
-						}, entry.field)),
-						react_jsx_runtime.jsx("div", { className: cssDefault.sep })
-					]
-				}))),
-				multi ? null : react_jsx_runtime.jsxs("div", { className: cssDefault.footer, children: [
-					state.failed ? react_jsx_runtime.jsx("p", { className: cssDefault.failed, role: "status", children: t("settings.saveFailed") }) : null,
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.discard, onClick: props.discard, disabled: !state.dirty || state.saving, children: t("settings.discard") }),
-					react_jsx_runtime.jsx("button", { type: "button", className: cssDefault.save, onClick: props.save, disabled: blocked, children: t(state.saving ? "settings.saving" : "settings.save") })
-				] })
+				react_jsx_runtime.jsx(MultiBotPanel, { ...props, key: "multi", cardDirty: state.dirty }),
+				multi ? null : react_jsx_runtime.jsx(LegacyAdvancedSettings, { ...props, key: "advanced", t, state, active, page: true })
 			] });
 		}
 
@@ -919,7 +949,7 @@ window.__ModuleLoader__.load({
 		var FeishuBotAdminController = class {
 			constructor(connection) {
 				this.connection = connection;
-				this.snapshot = { loaded: false, writable: false, mode: "loading", revision: 0, bots: [], statuses: [], maxTotalLiveAgents: 0, dirty: false, invalid: false, saving: false, error: void 0 };
+				this.snapshot = { loaded: false, writable: false, mode: "loading", revision: 0, bots: [], statuses: [], legacyConfigured: false, legacyAppIdSuffix: "", maxTotalLiveAgents: 0, dirty: false, invalid: false, saving: false, error: void 0 };
 				this.store = runtime.createSnapshotStore(this.snapshot);
 				this.stopped = true;
 				this.timer = void 0;
@@ -957,8 +987,9 @@ window.__ModuleLoader__.load({
 					const [editor, runtimeStatus] = await Promise.all([this.request("settings/editor-snapshot"), this.request("bots/status")]);
 					if (!this.snapshot.dirty || force) {
 						const bots = structuredClone(editor.config.bots ?? []);
+						const legacyAppId = typeof editor.config.appId === "string" ? editor.config.appId.trim() : "";
 						this.original = { bots: structuredClone(bots), maxTotalLiveAgents: editor.config.maxTotalLiveAgents ?? 0 };
-						this.publish({ loaded: true, writable: editor.writable, mode: editor.mode, revision: editor.revision, bots, maxTotalLiveAgents: editor.config.maxTotalLiveAgents ?? 0, statuses: runtimeStatus.bots ?? [], dirty: false, invalid: false, error: void 0 });
+						this.publish({ loaded: true, writable: editor.writable, mode: editor.mode, revision: editor.revision, bots, legacyConfigured: editor.mode === "legacy" && legacyAppId !== "", legacyAppIdSuffix: legacyAppId.slice(-6), maxTotalLiveAgents: editor.config.maxTotalLiveAgents ?? 0, statuses: runtimeStatus.bots ?? [], dirty: false, invalid: false, error: void 0 });
 					} else {
 						this.publish({ statuses: runtimeStatus.bots ?? [] });
 					}
@@ -981,10 +1012,10 @@ window.__ModuleLoader__.load({
 				return () => { this.stopped = true; if (this.timer !== void 0) clearTimeout(this.timer); };
 			}
 			async convertLegacy() {
-				if (this.snapshot.saving || !this.snapshot.writable) return;
+				if (this.snapshot.saving || !this.snapshot.writable) return false;
 				this.publish({ saving: true, error: void 0 });
-				try { await this.request("settings/convert-legacy"); await this.refresh(true); }
-				catch (error) { this.publish({ error: error instanceof Error ? error.message : String(error) }); }
+				try { await this.request("settings/convert-legacy"); await this.refresh(true); return true; }
+				catch (error) { this.publish({ error: error instanceof Error ? error.message : String(error) }); return false; }
 				finally { this.publish({ saving: false }); }
 			}
 			async save() {
@@ -1113,10 +1144,12 @@ window.__ModuleLoader__.load({
 			"settings.discard": "Discard", "settings.save": "Save", "settings.saving": "Saving…", "settings.saveFailed": "Save failed",
 			"onboarding.title": "Connect a Feishu bot",
 			"onboarding.description": "Choose an existing PersonalAgent you own, or create a new one. A Feishu/Lark scan securely saves its credentials on this Host and connects it without developer-console setup.",
+			"onboarding.manageTitle": "Manage current bot",
+			"onboarding.manageDescription": "Reconnect, replace, or repair permissions for this bot. Replacing it does not add another bot.",
 			"onboarding.multiTitle": "Add a bot",
 			"onboarding.multiDescription": "Scan to choose an existing PersonalAgent or create a new one. App ID, secret storage, owner access, and connection are configured automatically.",
-			"onboarding.select": "Select an existing bot", "onboarding.selectOther": "Switch to an existing bot",
-			"onboarding.create": "Create a new bot", "onboarding.createAnother": "Create another new bot", "onboarding.grant": "Grant missing permissions",
+			"onboarding.select": "Select an existing bot", "onboarding.selectOther": "Replace with an existing bot",
+			"onboarding.create": "Create a new bot", "onboarding.createAnother": "Create a new bot and replace", "onboarding.grant": "Grant missing permissions",
 			"onboarding.retry": "Retry connection", "onboarding.cancel": "Cancel", "onboarding.qrAlt": "Feishu PersonalAgent authorization QR code",
 			"onboarding.manualAdd": "Manual setup (advanced)", "onboarding.done": "Done", "onboarding.close": "Close",
 			"onboarding.qrRendering": "Rendering QR code",
@@ -1181,10 +1214,12 @@ window.__ModuleLoader__.load({
 			"settings.discard": "放弃", "settings.save": "保存", "settings.saving": "保存中…", "settings.saveFailed": "保存失败",
 			"onboarding.title": "连接飞书机器人",
 			"onboarding.description": "可以选择你已经创建的 PersonalAgent，也可以新建一个。扫码后会在本机安全保存凭据并连接，无需进入开发者后台。",
+			"onboarding.manageTitle": "管理当前机器人",
+			"onboarding.manageDescription": "可重新连接、更换机器人或修复权限；这里的操作会替换当前机器人，不会新增机器人。",
 			"onboarding.multiTitle": "添加机器人",
 			"onboarding.multiDescription": "扫码选择已有 PersonalAgent，或者创建一个新的。App ID、Secret 安全存储、使用者权限和长连接都会自动配置。",
-			"onboarding.select": "选择并绑定已有机器人", "onboarding.selectOther": "改用已有机器人",
-			"onboarding.create": "创建并绑定新机器人", "onboarding.createAnother": "再创建一个新机器人", "onboarding.grant": "补开缺失权限",
+			"onboarding.select": "选择并绑定已有机器人", "onboarding.selectOther": "更换为已有机器人",
+			"onboarding.create": "创建并绑定新机器人", "onboarding.createAnother": "创建新机器人并替换", "onboarding.grant": "补开缺失权限",
 			"onboarding.retry": "重试连接", "onboarding.cancel": "取消", "onboarding.qrAlt": "飞书 PersonalAgent 授权二维码",
 			"onboarding.manualAdd": "手动配置（高级）", "onboarding.done": "完成", "onboarding.close": "关闭",
 			"onboarding.qrRendering": "正在生成二维码",
