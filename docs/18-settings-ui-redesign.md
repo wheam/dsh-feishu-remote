@@ -1,6 +1,6 @@
 # 18 · 设置页重设计方案（草案）
 
-状态：提案，待 review。配套设计稿：Claude Design 画布（4 张 artboard：首次扫码 / 机器人列表 / 机器人详情 / 插件配置摘要卡）。
+状态：已实施（分支 settings-ui-redesign，2026-08-24）。经 Codex 六轮 review/verify，结论可合入 main。配套设计稿：Claude Design 画布（4 张 artboard）。P1/P2 未做项见 §3.2 与 §5。
 
 ## 0. 问题定义
 
