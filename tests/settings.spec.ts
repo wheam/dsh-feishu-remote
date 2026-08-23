@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { Config } from '../src/config.js'
-import { purgeForbiddenSettingsKeys } from '../src/index.js'
+import { createSettingsGuard, purgeForbiddenSettingsKeys } from '../src/index.js'
 import {
   HOST_ONLY_BOT_KEYS,
   SETTINGS_NAMESPACE,
@@ -167,10 +167,70 @@ describe('settings namespace (flat ↔ nested)', () => {
     Object.assign(stale.bots[0]!, {
       statePath: '/evil/state.json', inboundDir: '/evil/inbox', feishuCliPath: '/evil/bin', appSecret: 'leaked',
     })
-    const config = unflatten(stale, { bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', statePath: '/hidden/a.json' }] })
-    expect(config.bots?.[0]).toMatchObject({ statePath: '/hidden/a.json' })
+    // The entry declares all three, so the entry wins all three: the settings
+    // layer is never AUTHORITATIVE for a host-only key.
+    const config = unflatten(stale, { bots: [{
+      id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A',
+      statePath: '/hidden/a.json', inboundDir: '/hidden/a', feishuCliPath: '/trusted/lark',
+    }] })
+    expect(config.bots?.[0]).toMatchObject({
+      statePath: '/hidden/a.json', inboundDir: '/hidden/a', feishuCliPath: '/trusted/lark',
+    })
     expect(JSON.stringify(config.bots)).not.toContain('/evil')
     expect(JSON.stringify(config.bots)).not.toContain('leaked')
+  })
+
+  /**
+   * Codex batch-4 BLOCKER-2. `settingsPurgePlan()` REFUSES to delete a
+   * host-only path the trusted entry config does not declare — it is the only
+   * copy a pre-f774159 install has. The runtime projection therefore has to
+   * use it: dropping it moved the bot to the default state file, silently.
+   */
+  it('projects a RETAINED user-layer host-only value when the entry provides none', () => {
+    const entry: Config = { bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] }
+    const flat = flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] })
+    Object.assign(flat.bots[0]!, {
+      statePath: '/legacy/only-here.json', inboundDir: '/legacy/inbox', feishuCliPath: '/legacy/lark',
+    })
+    expect(settingsPurgePlan({ bots: [{ id: 'bot-a', statePath: '/legacy/only-here.json' }] }, entry).retained)
+      .toEqual([{ scope: 'bots.bot-a', key: 'statePath' }])
+    expect(unflatten(flat, entry).bots?.[0]).toMatchObject({
+      statePath: '/legacy/only-here.json', inboundDir: '/legacy/inbox', feishuCliPath: '/legacy/lark',
+    })
+  })
+
+  it('lets the entry win key by key while retaining the keys it says nothing about', () => {
+    const entry: Config = {
+      bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', statePath: '/host/a.json' }],
+    }
+    const flat = flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] })
+    Object.assign(flat.bots[0]!, { statePath: '/legacy/a.json', inboundDir: '/legacy/inbox' })
+    expect(unflatten(flat, entry).bots?.[0]).toMatchObject({
+      statePath: '/host/a.json', inboundDir: '/legacy/inbox',
+    })
+  })
+
+  it('keeps a retained ROOT host-only value in single-bot mode and on the legacy continuation bot', () => {
+    const flat = flatten({ appId: 'cli_old' })
+    Object.assign(flat, { statePath: '/legacy/root-state.json' })
+    // Single-bot: straight onto the root config.
+    expect(unflatten(flat, { appId: 'cli_old' }))
+      .toMatchObject({ statePath: '/legacy/root-state.json' })
+    // Converted to multi in the GUI: it belongs to the bot that continues the
+    // legacy session identity, and to no other bot.
+    const converted = {
+      ...flat,
+      bots: flatten({ bots: [
+        { id: 'bot-new', appId: 'cli_new', appSecretRef: 'REF_NEW' },
+        { id: 'primary-bot', appId: 'cli_old', appSecretRef: 'REF_P', sessionNamespace: 'legacy' as const },
+      ] }).bots,
+    }
+    const config = unflatten(converted, { appId: 'cli_old' })
+    expect(config.bots?.[0]).not.toHaveProperty('statePath')
+    expect(config.bots?.[1]).toMatchObject({ statePath: '/legacy/root-state.json' })
+    // …and the ENTRY root still outranks it.
+    expect(unflatten(converted, { appId: 'cli_old', statePath: '/host/root-state.json' }).bots?.[1])
+      .toMatchObject({ statePath: '/host/root-state.json' })
   })
 
   it('round-trips bots[] and process capacity without carrying secret values', () => {
@@ -329,6 +389,9 @@ describe('settings descriptor (the layers the browser actually receives)', () =>
       .toEqual({ safe: false, reason: 'user_layer_dirty' })
     // The operator's only copy of that path survives …
     expect(JSON.stringify(scope.get().bots[0])).toContain('/legacy/only-here.json')
+    // … and, batch-4 BLOCKER-2, it actually reaches the bridge: the bot keeps
+    // reading the very state file it read before the upgrade.
+    expect(unflatten(scope.get(), entry).bots?.[0]).toMatchObject({ statePath: '/legacy/only-here.json' })
     // … the stale secret does not …
     expect(JSON.stringify(settings.describe({ redactSecrets: true })[0]?.user)).not.toContain('super-secret')
     expect(scope.get().model).toBe('kept-model')
@@ -343,6 +406,56 @@ describe('settings descriptor (the layers the browser actually receives)', () =>
     }, entry)
     expect(plan.retained).toEqual([])
     expect(plan.ops).toEqual([{ op: 'set', path: ['bots'], value: [{ id: 'bot-a' }] }])
+  })
+
+  /**
+   * Codex batch-4 MAJOR-1. The common case is "the admin MOVED the path in
+   * cordis.patch.yml": the entry now says something else, and the entry is
+   * authoritative in `unflatten()`. Keeping the stale user value there only
+   * locked the GUI forever, so a differing entry value purges too — retaining
+   * is reserved for the keys the entry says nothing about.
+   */
+  it('purges a user-layer host-only value the entry OVERRIDES with a different one', () => {
+    const entry: Config = { bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', statePath: '/moved/a.json' }] }
+    const plan = settingsPurgePlan({ bots: [{ id: 'bot-a', statePath: '/old/a.json' }] }, entry)
+    expect(plan.retained).toEqual([])
+    expect(plan.ops).toEqual([{ op: 'set', path: ['bots'], value: [{ id: 'bot-a' }] }])
+    // The moved path is what actually runs, so nothing was lost.
+    const flat = flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] })
+    expect(unflatten(flat, entry).bots?.[0]).toMatchObject({ statePath: '/moved/a.json' })
+  })
+
+  it('purges a differing ROOT host-only value the entry overrides, and retains one it does not', () => {
+    const moved = settingsPurgePlan({ statePath: '/old/root.json' }, { statePath: '/moved/root.json' })
+    expect(moved.retained).toEqual([])
+    expect(moved.ops).toEqual([{ op: 'unset', path: ['statePath'] }])
+    const orphan = settingsPurgePlan({ statePath: '/old/root.json' }, {})
+    expect(orphan.ops).toEqual([])
+    expect(orphan.retained).toEqual([{ scope: 'root', key: 'statePath' }])
+  })
+
+  /**
+   * The purge planner and the runtime projection must agree about who owns a
+   * legacy ROOT path: purging a value the projection then refuses to lend
+   * back would move that bot's state file (batch-4 BLOCKER-2/MAJOR-1).
+   */
+  it('lends a legacy entry ROOT path to the continuation bot only, in both directions', () => {
+    const entry: Config = { appId: 'cli_old', statePath: '/host/root.json' }
+    const plan = settingsPurgePlan({ bots: [
+      { id: 'bot-new', appId: 'cli_new', statePath: '/legacy/new.json' },
+      { id: 'primary-bot', appId: 'cli_old', sessionNamespace: 'legacy', statePath: '/host/root.json' },
+    ] }, entry)
+    // The continuation bot's copy is redundant with the entry root …
+    expect(plan.retained).toEqual([{ scope: 'bots.bot-new', key: 'statePath' }])
+    // … the other bot's is the only copy there is, and it survives the trip.
+    const flat = flatten({ bots: [
+      { id: 'bot-new', appId: 'cli_new', appSecretRef: 'REF_NEW' },
+      { id: 'primary-bot', appId: 'cli_old', appSecretRef: 'REF_P', sessionNamespace: 'legacy' },
+    ] })
+    Object.assign(flat.bots[0]!, { statePath: '/legacy/new.json' })
+    const config = unflatten(flat, entry)
+    expect(config.bots?.[0]).toMatchObject({ statePath: '/legacy/new.json' })
+    expect(config.bots?.[1]).toMatchObject({ statePath: '/host/root.json' })
   })
 })
 
@@ -404,6 +517,35 @@ describe('settings GUI safety gate', () => {
       },
     }
     expect(await purgeForbiddenSettingsKeys(ctx as never, { statePath: '/legacy/only-here.json' }))
+      .toEqual({ safe: true })
+  })
+
+  /**
+   * Codex batch-4 MAJOR-2: the verdict is a live re-scan, not a value cached
+   * at startup. An admin who cleans the settings file must get the GUI back
+   * on the next request — and a layer that turns dirty must lock again.
+   */
+  it('re-scans on every call, so a cleaned layer unlocks without a restart', () => {
+    let user: Record<string, unknown> = { ...DIRTY_USER }
+    const ctx = fakeCtx({ describe: () => [{ ns: 'feishu-remote', revision: 3, base: {}, value: user, user }] })
+    const guard = createSettingsGuard(ctx as never)
+    expect(guard()).toEqual({ safe: false, reason: 'user_layer_dirty' })
+    user = { model: 'kept' }
+    expect(guard()).toEqual({ safe: true })
+    user = { ...DIRTY_USER }
+    expect(guard()).toEqual({ safe: false, reason: 'user_layer_dirty' })
+  })
+
+  it('reports read_only_dirty / purge_failed through the same dynamic guard', () => {
+    expect(createSettingsGuard(fakeCtx({ writable: false }) as never)())
+      .toEqual({ safe: false, reason: 'read_only_dirty' })
+    expect(createSettingsGuard(fakeCtx({ describe: () => [] }) as never)())
+      .toEqual({ safe: false, reason: 'purge_failed' })
+    // A failed startup purge keeps its reason while the layer stays dirty …
+    const guard = createSettingsGuard(fakeCtx({}) as never, { purgeFailed: true })
+    expect(guard()).toEqual({ safe: false, reason: 'purge_failed' })
+    // … and a clean scan clears it for good.
+    expect(createSettingsGuard(fakeCtx({ user: {} }) as never, { purgeFailed: true })())
       .toEqual({ safe: true })
   })
 

@@ -12,11 +12,14 @@ import { flatten, type FlatSettings } from '../src/settings.js'
 const FLAT_KEYS = new Set(Object.keys(flatten({})))
 const FLAT_DEFAULTS = flatten({}) as unknown as Record<string, unknown>
 
+type GuiState = { safe: boolean; reason?: 'purge_failed' | 'read_only_dirty' | 'user_layer_dirty' }
+
 interface HarnessOptions {
   revision?: number
   credentialValue?: string
   writable?: boolean
-  guiState?: { safe: boolean; reason?: 'purge_failed' | 'read_only_dirty' | 'user_layer_dirty' }
+  /** The DYNAMIC gate: re-read on every request, exactly like the real one. */
+  guiState?: () => GuiState
   statuses?: unknown[]
 }
 
@@ -56,7 +59,7 @@ function harness(initial: FlatSettings, options: HarnessOptions = {}) {
       scope as never,
       manager as never,
       { statePath: '/host/state.json', inboundDir: '/host/inbox', feishuCliPath: '/trusted/lark' },
-      options.guiState ?? { safe: true },
+      options.guiState ?? (() => ({ safe: true })),
     ),
     mutate,
     current: () => current,
@@ -342,7 +345,7 @@ describe('FeishuAdminService', () => {
         status: 'disabled',
         error: 'dsh-feishu-remote: duplicate statePath /Users/me/.dsh/feishu-remote/cli_a.json',
         reasonCode: 'duplicate_state_path',
-        detail: '与另一个机器人共用同一份会话状态文件',
+        detail: '与另一个机器人共用同一份会话状态文件，请在 cordis.patch.yml 中为它单独配置',
         connected: false,
         terminalFailure: false,
         liveAgents: 0,
@@ -362,7 +365,7 @@ describe('FeishuAdminService', () => {
         id: 'bot-a',
         status: 'disabled',
         reasonCode: 'duplicate_state_path',
-        detail: '与另一个机器人共用同一份会话状态文件',
+        detail: '与另一个机器人共用同一份会话状态文件，请在 cordis.patch.yml 中为它单独配置',
         liveAgents: 0,
         provisionalAgents: 0,
       }] },
@@ -376,7 +379,7 @@ describe('FeishuAdminService', () => {
    */
   it('publishes the GUI fail-closed state and refuses every write while unsafe', async () => {
     const h = harness(flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] }), {
-      guiState: { safe: false, reason: 'user_layer_dirty' },
+      guiState: () => ({ safe: false, reason: 'user_layer_dirty' }),
     })
     expect(await h.service.handleRpc('settings/gui-state', {}, new AbortController().signal))
       .toEqual({ ok: true, value: { safe: false, reason: 'user_layer_dirty' } })
@@ -389,6 +392,35 @@ describe('FeishuAdminService', () => {
     }, new AbortController().signal)
     expect(result).toMatchObject({ ok: false, code: 'settings_unsafe', details: { reason: 'user_layer_dirty' } })
     expect(h.mutate).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Codex batch-4 MAJOR-2: the gate is re-evaluated per request. An admin who
+   * cleans the offending field must get the GUI back on the NEXT call, not
+   * after a restart of the whole web profile.
+   */
+  it('unlocks the GUI on the next request once the layers are cleaned, with no restart', async () => {
+    let dirty = true
+    const h = harness(flatten({ appId: 'cli_primary' }), {
+      guiState: () => (dirty ? { safe: false, reason: 'user_layer_dirty' } : { safe: true }),
+    })
+    expect(await h.service.handleRpc('settings/editor-snapshot', {}, new AbortController().signal))
+      .toMatchObject({ ok: true, value: { guiSafe: false, guiReason: 'user_layer_dirty' } })
+    expect(await h.service.handleRpc('settings/save-legacy', {
+      revision: 7, config: { model: 'm' },
+    }, new AbortController().signal)).toMatchObject({ ok: false, code: 'settings_unsafe' })
+    expect(h.mutate).not.toHaveBeenCalled()
+
+    dirty = false
+    const snapshot = await h.service.handleRpc('settings/editor-snapshot', {}, new AbortController().signal)
+    expect(snapshot).toMatchObject({ ok: true, value: { guiSafe: true } })
+    expect((snapshot as { value: Record<string, unknown> }).value).not.toHaveProperty('guiReason')
+    expect(await h.service.handleRpc('settings/gui-state', {}, new AbortController().signal))
+      .toEqual({ ok: true, value: { safe: true } })
+    expect(await h.service.handleRpc('settings/save-legacy', {
+      revision: 7, config: { model: 'm' },
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    expect(h.mutate).toHaveBeenCalledTimes(1)
   })
 
   it('reports a clean GUI state and allows writes when the layers are safe', async () => {

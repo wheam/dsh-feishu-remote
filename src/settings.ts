@@ -19,6 +19,14 @@
  * reach the browser through the standard settings descriptor (`base`,
  * `value`, `user` all come from this shape). They live only in the raw
  * registration `Config` and are re-overlaid host-side by `unflatten()`.
+ *
+ * RETAINED user-layer paths (Codex batch-4 BLOCKER-2): a pre-f774159 install
+ * may hold the ONLY copy of a bot's `statePath`/`inboundDir`/`feishuCliPath`
+ * in the settings user layer. {@link settingsPurgePlan} refuses to delete
+ * such a value, and `unflatten()` therefore has to USE it: the entry config
+ * stays authoritative wherever it provides a value, and the retained user
+ * value fills the gap where it does not. Without that the purge's `retained`
+ * promise was a lie — the bot silently moved to the default state file.
  */
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
@@ -56,6 +64,18 @@ export interface SettingsGuiState {
   safe: boolean
   reason?: 'purge_failed' | 'read_only_dirty' | 'user_layer_dirty'
 }
+
+/**
+ * A DYNAMIC gate (Codex batch-4 MAJOR-2). The GUI safety verdict used to be
+ * computed once at startup and cached in two services, so an admin who
+ * cleaned `cordis.patch.yml` / the settings file stayed locked out until the
+ * next restart, and onboarding — which never saw the cached value — wrote
+ * straight past the gate. Every editor-snapshot, every `settings/gui-state`
+ * read and every mutating RPC (admin AND onboarding start/commit) calls this
+ * instead; the implementation re-scans the live settings descriptor, which is
+ * an in-memory read.
+ */
+export type SettingsGuard = () => SettingsGuiState
 
 export const flatSchema: Schema<FlatSettings> = Schema.object({
   appId: Schema.string().default(''),
@@ -299,37 +319,77 @@ function hostOnlyFields(source: HostOnlyBotFields): HostOnlyBotFields {
   return picked as HostOnlyBotFields
 }
 
+/** One settings bot as far as the legacy-continuation lookup is concerned. */
+interface BotIdentityLike {
+  id?: unknown
+  appId?: unknown
+  sessionNamespace?: unknown
+}
+
+/**
+ * Index of the ONE settings bot that continues the legacy (root-level)
+ * identity, or -1.
+ *
+ * A config that is still legacy at the entry level (no `bots[]`) but has been
+ * converted to multi-bot in the GUI lends its ROOT host-only paths to exactly
+ * one bot: the one stamped `sessionNamespace: 'legacy'` (what
+ * `settings/convert-legacy` writes), or failing that the one carrying the
+ * legacy appId. That bot is the same Feishu app as before, so it must keep
+ * reading the same state file. Shared by the runtime projection and the purge
+ * planner so the two can never disagree about who owns a root path.
+ */
+function legacyContinuationIndex(bots: readonly BotIdentityLike[], entry: Config): number {
+  if ((entry.bots ?? []).length > 0) return -1
+  const byNamespace = bots.findIndex(bot => bot.sessionNamespace === 'legacy')
+  if (byNamespace >= 0) return byNamespace
+  const legacyAppId = (entry.appId ?? '').trim()
+  if (legacyAppId === '') return -1
+  return bots.findIndex(bot => typeof bot.appId === 'string' && bot.appId.trim() === legacyAppId)
+}
+
 /**
  * Re-attach the host-only per-bot keys the settings layer never carries.
  *
  * `id` is the immutable identity of a bot, so a `bots[]` entry declared in
  * cordis.patch.yml lends its host-only paths to the settings bot with the
- * SAME id. A config that is still legacy at the entry level (no `bots[]`) but
- * has been converted to multi-bot in the GUI lends its ROOT paths to exactly
- * one bot: the one that continues the legacy session identity
- * (`sessionNamespace: 'legacy'`, which is what `settings/convert-legacy`
- * stamps), or failing that the one carrying the legacy appId. That bot is the
- * same Feishu app as before, so it must keep reading the same state file.
+ * SAME id; a legacy-shaped entry lends its ROOT paths to the legacy
+ * continuation bot (see {@link legacyContinuationIndex}).
+ *
+ * Precedence per key, highest first (Codex batch-4 BLOCKER-2):
+ *   1. the entry `bots[]` entry with the same id — trusted admin YAML;
+ *   2. the entry ROOT value, for the legacy continuation bot only;
+ *   3. the RETAINED user-layer value on that bot;
+ *   4. the RETAINED user-layer ROOT value, again for the continuation bot.
+ *
+ * 3 and 4 exist because {@link settingsPurgePlan} deliberately does not delete
+ * a user-layer path the entry knows nothing about: it is the only copy of
+ * that bot's on-disk state location. The settings layer is still never
+ * AUTHORITATIVE — any value the entry provides wins — and the GUI stays
+ * fail-closed for as long as such a value is there, so no browser write can
+ * introduce one.
  */
-function overlayHostOnlyBots(bots: FlatSettings['bots'], entry: Config): BotConfig[] {
+function overlayHostOnlyBots(
+  bots: FlatSettings['bots'],
+  entry: Config,
+  root: Partial<FlatSettings>,
+): BotConfig[] {
   const entryBots = new Map((entry.bots ?? []).map(bot => [bot.id, bot]))
-  const legacyAppId = (entry.appId ?? '').trim()
-  const legacyRoot = entryBots.size === 0 ? hostOnlyFields(entry) : {}
-  const legacyIndex = entryBots.size > 0 || Object.keys(legacyRoot).length === 0
-    ? -1
-    : bots.findIndex(bot => bot.sessionNamespace === 'legacy') >= 0
-      ? bots.findIndex(bot => bot.sessionNamespace === 'legacy')
-      : legacyAppId === '' ? -1 : bots.findIndex(bot => bot.appId.trim() === legacyAppId)
+  const legacyEntryRoot = entryBots.size === 0 ? hostOnlyFields(entry) : {}
+  const legacyUserRoot = entryBots.size === 0 ? hostOnlyFields(root as HostOnlyBotFields) : {}
+  const legacyIndex = legacyContinuationIndex(bots, entry)
   return bots.map((bot, index) => {
     const carried = structuredClone(bot) as Record<string, unknown>
-    // A stale user layer written by an older build may still contain these;
-    // the settings layer is never authoritative for them.
+    // What a stale user layer still carries — kept only as the LAST fallback.
+    const retainedBot = hostOnlyFields(carried as HostOnlyBotFields)
     for (const key of FORBIDDEN_ROOT_KEYS) delete carried[key]
     const declared = entryBots.get(bot.id)
     const overlay = declared !== undefined
       ? hostOnlyFields(declared)
-      : index === legacyIndex ? legacyRoot : {}
-    return { ...carried, ...overlay } as unknown as BotConfig
+      : index === legacyIndex ? legacyEntryRoot : {}
+    const retained = index === legacyIndex
+      ? { ...legacyUserRoot, ...retainedBot }
+      : retainedBot
+    return { ...carried, ...retained, ...overlay } as unknown as BotConfig
   })
 }
 
@@ -344,7 +404,9 @@ export interface SettingsPurgePlan {
    * Host-only values the purge deliberately did NOT delete because the
    * trusted entry config does not carry them (audit M1). Deleting these would
    * silently move a pre-f774159 install's state file or inbox: the operator
-   * has to copy them into cordis.patch.yml first.
+   * has to copy them into cordis.patch.yml first. Until then `unflatten()`
+   * keeps projecting them onto the runtime config (batch-4 BLOCKER-2) and the
+   * GUI stays fail-closed.
    */
   retained: Array<{ scope: string; key: HostOnlyBotKey; }>
 }
@@ -356,13 +418,17 @@ function nonEmptyString(value: unknown): value is string {
 /**
  * Decide, for ONE host-only key on one node, whether purging it is lossless.
  *
- * Lossless when the user layer holds nothing meaningful, or holds exactly
- * what the trusted entry config already provides (the entry value wins in
- * `unflatten()` anyway). Otherwise the value is the only copy that exists.
+ * Lossless when the user layer holds nothing meaningful, or when the trusted
+ * entry config provides a value for that key AT ALL (Codex batch-4 MAJOR-1).
+ * The entry is authoritative: `unflatten()` overlays the entry value over the
+ * user one, so a DIFFERING user value is already dead weight — keeping it
+ * only locked the GUI forever after the ordinary "admin moved the path in
+ * cordis.patch.yml" edit. A value is retained only when the entry knows
+ * nothing about that key, where it really is the only copy that exists.
  */
 function purgeIsLossless(userValue: unknown, entryValue: string | undefined): boolean {
   if (!nonEmptyString(userValue)) return true
-  return nonEmptyString(entryValue) && entryValue.trim() === userValue.trim()
+  return nonEmptyString(entryValue)
 }
 
 /**
@@ -384,9 +450,6 @@ export function settingsPurgePlan(user: unknown, entry: Config = {}): SettingsPu
   if (typeof user !== 'object' || user === null || Array.isArray(user)) return plan
   const section = user as Record<string, unknown>
   const entryBots = new Map((entry.bots ?? []).map(bot => [bot.id, bot]))
-  // A legacy entry (no bots[]) lends its ROOT host-only paths to the settings
-  // bots, exactly as overlayHostOnlyBots() does.
-  const entryFallback: HostOnlyBotFields = entryBots.size === 0 ? entry : {}
 
   if (Object.hasOwn(section, 'appSecret')) plan.ops.push({ op: 'unset', path: ['appSecret'] })
   for (const key of HOST_ONLY_BOT_KEYS) {
@@ -397,12 +460,20 @@ export function settingsPurgePlan(user: unknown, entry: Config = {}): SettingsPu
 
   const bots = section.bots
   if (!Array.isArray(bots)) return plan
+  // A legacy entry (no bots[]) lends its ROOT host-only paths to exactly ONE
+  // settings bot, exactly as overlayHostOnlyBots() does — lending them to
+  // every bot would purge a path the runtime projection then fails to restore.
+  const identities: BotIdentityLike[] = bots.map(bot => (
+    typeof bot === 'object' && bot !== null && !Array.isArray(bot) ? bot as BotIdentityLike : {}
+  ))
+  const legacyIndex = legacyContinuationIndex(identities, entry)
+  const entryRoot: HostOnlyBotFields = entryBots.size === 0 ? entry : {}
   let dirty = false
-  const cleaned = bots.map(bot => {
+  const cleaned = bots.map((bot, index) => {
     if (typeof bot !== 'object' || bot === null || Array.isArray(bot)) return bot
     const value = bot as Record<string, unknown>
     const id = typeof value.id === 'string' ? value.id : ''
-    const declared = entryBots.get(id) ?? entryFallback
+    const declared = entryBots.get(id) ?? (index === legacyIndex ? entryRoot : {})
     const kept: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
       if (key === 'appSecret') {
@@ -456,8 +527,17 @@ export function findForbiddenSettingsKeys(layer: unknown): string[] {
  */
 export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config): Config {
   const value = flat ?? {}
+  // Root host-only paths: the entry wins key by key, a RETAINED user-layer
+  // value fills the gap (Codex batch-4 BLOCKER-2). Spreading `entry` alone
+  // would drop the retained value of a legacy install the entry never
+  // declared, moving its state file to the default location.
+  const rootHostOnly: HostOnlyBotFields = {
+    ...hostOnlyFields(value as HostOnlyBotFields),
+    ...hostOnlyFields(entry),
+  }
   return {
     ...entry,
+    ...rootHostOnly,
     // A successful QR bind moves the secret source to the credential provider.
     // Do not let a legacy inline patch secret shadow that newly selected ref.
     appSecret: value.onboardingManaged === true ? '' : entry.appSecret,
@@ -489,6 +569,6 @@ export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config
     workspacePolicy: value.workspacePolicy ?? 'default',
     profileFile: value.profileFile ?? '',
     maxTotalLiveAgents: value.maxTotalLiveAgents ?? 0,
-    bots: overlayHostOnlyBots(value.bots ?? [], entry),
+    bots: overlayHostOnlyBots(value.bots ?? [], entry, value),
   }
 }

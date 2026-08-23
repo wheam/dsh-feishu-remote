@@ -26,6 +26,7 @@ function harness(options: {
   settingsUpdate?: (patch: Partial<FlatSettings>) => Promise<void>
   initialSettings?: Partial<FlatSettings>
   settingsWritable?: boolean
+  guiGuard?: OnboardingDependencies['guiGuard']
   settingsCas?: boolean
   credentialWritable?: boolean
   probe?: AppProbe
@@ -96,6 +97,7 @@ function harness(options: {
     probeApp: async () => options.probe ?? okProbe(),
     getBridgeHealth: () => health,
     waitForBridge,
+    ...(options.guiGuard === undefined ? {} : { guiGuard: options.guiGuard }),
   }
   const ctx = {
     credentials,
@@ -389,6 +391,40 @@ describe('PersonalAgent onboarding', () => {
     const h = harness({ settingsWritable: false })
     await expect(h.service.start()).rejects.toThrow('设置存储为只读')
     expect(h.registerApp).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Codex batch-4 MAJOR-2: the GUI safety gate used to be an admin-service
+   * concern only, so a QR bind wrote `bots[]` straight past it and dropped
+   * the very user-layer statePath the purge had deliberately kept. The gate
+   * is now shared, and dynamic: cleaning the layer re-opens onboarding
+   * without a restart.
+   */
+  it('refuses to start while the settings layers are not provably clean', async () => {
+    let dirty = true
+    const h = harness({ guiGuard: () => (dirty ? { safe: false, reason: 'user_layer_dirty' } : { safe: true }) })
+    await expect(h.service.start()).rejects.toThrow('主机专属字段')
+    expect(h.registerApp).not.toHaveBeenCalled()
+    expect(await h.service.handleRpc('onboarding/start', {}, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'settings_unsafe', details: { retryable: false } })
+    expect(h.registerApp).not.toHaveBeenCalled()
+
+    dirty = false
+    await h.service.start()
+    await waitForPhase(h.service, 'qr_ready')
+    expect(h.registerApp).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to commit a scan when the settings layers turn unsafe mid-flight', async () => {
+    let safe = true
+    const h = harness({ guiGuard: () => ({ safe }) })
+    await h.service.start()
+    safe = false
+    h.resolveRegistration({ client_id: 'cli_new', client_secret: 'secret-value', user_info: { open_id: 'ou_owner' } })
+    await waitForPhase(h.service, 'failed')
+    expect(h.service.status().error?.code).toBe('settings_unsafe')
+    expect(h.credentials.set).not.toHaveBeenCalled()
+    expect(h.settings.update).not.toHaveBeenCalled()
   })
 
   it('refuses a non-writable credential provider before creating a Feishu app', async () => {

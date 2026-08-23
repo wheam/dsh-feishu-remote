@@ -21,7 +21,7 @@ import * as QRCode from 'qrcode'
 import { pluginRpcFailure, type PluginRpcFailure } from './admin.js'
 import { validateMultiBotConfig } from './config.js'
 import { bounded, redactSecrets } from './security.js'
-import { SETTINGS_NAMESPACE, type FlatSettings } from './settings.js'
+import { SETTINGS_NAMESPACE, type FlatSettings, type SettingsGuard } from './settings.js'
 import type { LarkBrand } from './types.js'
 
 export const ONBOARDING_RPC_CHANNEL = '/dsh-feishu-remote'
@@ -190,6 +190,13 @@ export interface OnboardingDependencies {
   probeApp: (appId: string, appSecret: string, brand: LarkBrand) => Promise<AppProbe>
   getBridgeHealth: (appId?: string) => BridgeHealth | undefined
   waitForBridge: (appId: string, signal?: AbortSignal) => Promise<BridgeHealth>
+  /**
+   * The same dynamic GUI safety gate the admin service uses (Codex batch-4
+   * MAJOR-2). Onboarding writes `bots[]` and the legacy root binding, so a
+   * settings layer that still carries an unresolved host-only path must stop
+   * it too — previously onboarding bypassed the gate entirely.
+   */
+  guiGuard: SettingsGuard
 }
 
 class OnboardingError extends Error {
@@ -469,6 +476,7 @@ function defaultDependencies(overrides: Partial<OnboardingDependencies>): Onboar
     waitForBridge: async () => {
       throw new OnboardingError('connection_timeout', '机器人已创建，但长连接尚未就绪。请稍后重试连接。')
     },
+    guiGuard: () => ({ safe: true }),
     ...overrides,
   }
 }
@@ -535,6 +543,23 @@ export class PersonalAgentOnboardingService {
     if (!this.isCurrent(session)) throw new OnboardingError('abort', '本次扫码已取消。')
   }
 
+  /**
+   * The dynamic GUI safety gate (Codex batch-4 MAJOR-2), checked BOTH when a
+   * scan starts and again right before the commit writes anything: a QR bind
+   * rewrites `bots[]` wholesale, which would drop a legitimate user-layer
+   * statePath the purge deliberately kept. Re-scanning means an admin who
+   * cleans the layer mid-session can start onboarding without a restart.
+   */
+  private assertSettingsSafe(): void {
+    const gui = this.deps.guiGuard()
+    if (gui.safe) return
+    throw new OnboardingError(
+      'settings_unsafe',
+      '设置存储中仍有需要人工处理的主机专属字段，暂时不能通过扫码修改配置。',
+      false,
+    )
+  }
+
   private settingsRevision(): number | undefined {
     if (typeof this.ctx.settings.describe !== 'function') return undefined
     const descriptor = this.ctx.settings.describe({ redactSecrets: true })
@@ -550,6 +575,7 @@ export class PersonalAgentOnboardingService {
     if (this.ctx.settings.writable === false) {
       throw new OnboardingError('read_only', '当前部署的设置存储为只读，无法保存扫码结果。', false)
     }
+    this.assertSettingsSafe()
     const multi = this.settings.get().bots.length > 0
     if (multi && destination !== 'new-bot') {
       throw new OnboardingError('destination_required', '多机器人模式扫码时必须明确添加为新机器人。', false)
@@ -807,6 +833,10 @@ export class PersonalAgentOnboardingService {
         this.statusAppId = undefined
         throw new OnboardingError('duplicate_app', '这个机器人已经在列表里了，无需重复添加。', false)
       }
+
+      // Re-checked at the commit boundary: the layer may have turned dirty
+      // while the operator was scanning, and everything below writes.
+      this.assertSettingsSafe()
 
       const refName = onboardingCredentialRef(appId, session.id)
       const ref = credentialRef(refName)

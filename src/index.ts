@@ -33,6 +33,7 @@ import {
   settingsPurgePlan,
   unflatten,
   type FlatSettings,
+  type SettingsGuard,
   type SettingsGuiState,
 } from './settings.js'
 
@@ -93,6 +94,54 @@ function settingsDescriptor(ctx: Context): { revision: number; base?: unknown; v
 }
 
 /**
+ * Every forbidden key still reachable through the LIVE settings descriptor,
+ * or `undefined` when the descriptor cannot be read at all. In-memory only —
+ * cheap enough to run on every editor-snapshot and before every write.
+ */
+function scanSettingsLayers(ctx: Context): string[] | undefined {
+  try {
+    const descriptor = settingsDescriptor(ctx)
+    if (descriptor === undefined) return undefined
+    return [...new Set([
+      ...findForbiddenSettingsKeys(descriptor.base),
+      ...findForbiddenSettingsKeys(descriptor.value),
+      ...findForbiddenSettingsKeys(descriptor.user),
+    ])]
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The DYNAMIC GUI safety gate (Codex batch-4 MAJOR-2).
+ *
+ * The verdict used to be computed once at startup and cached: an admin who
+ * fixed the offending value had to restart the whole profile before the GUI
+ * unlocked, and the onboarding service — which never received the cached
+ * value — wrote past the gate entirely. The returned {@link SettingsGuard}
+ * re-scans the descriptor on demand, so a clean layer unlocks on the very
+ * next request and a layer that turns dirty locks again immediately.
+ *
+ * `purgeFailed` seeds the reason reported by the startup purge; it is
+ * forgotten as soon as one scan comes back clean.
+ */
+export function createSettingsGuard(ctx: Context, options: { purgeFailed?: boolean } = {}): SettingsGuard {
+  let purgeFailed = options.purgeFailed === true
+  return () => {
+    const offending = scanSettingsLayers(ctx)
+    if (offending === undefined) return { safe: false, reason: 'purge_failed' }
+    if (offending.length === 0) {
+      purgeFailed = false
+      return { safe: true }
+    }
+    return {
+      safe: false,
+      reason: purgeFailed ? 'purge_failed' : ctx.settings?.writable === true ? 'user_layer_dirty' : 'read_only_dirty',
+    }
+  }
+}
+
+/**
  * Drop the stale secret value and the REDUNDANT host-only keys from the
  * persisted settings user layer, then VERIFY the result (Codex batch-3 B2).
  *
@@ -149,28 +198,18 @@ export async function purgeForbiddenSettingsKeys(
     return { safe: false, reason: 'purge_failed' }
   }
 
-  // Verification pass: only a clean descriptor may unlock the GUI.
-  let offending: string[]
-  try {
-    const descriptor = settingsDescriptor(ctx)
-    if (descriptor === undefined) return { safe: false, reason: 'purge_failed' }
-    offending = [...new Set([
-      ...findForbiddenSettingsKeys(descriptor.base),
-      ...findForbiddenSettingsKeys(descriptor.value),
-      ...findForbiddenSettingsKeys(descriptor.user),
-    ])]
-  } catch {
-    return { safe: false, reason: 'purge_failed' }
+  // Verification pass: only a clean descriptor may unlock the GUI. The very
+  // same scan runs on every later request through createSettingsGuard().
+  const offending = scanSettingsLayers(ctx)
+  if (offending === undefined) return { safe: false, reason: 'purge_failed' }
+  if (offending.length > 0) {
+    ctx.logger?.warn?.(
+      'dsh-feishu-remote: 设置层仍包含主机专属字段 %s，设置界面将保持只读（fail-closed）；'
+      + '清理后无需重启，下一次请求即可恢复编辑。',
+      offending.join('、'),
+    )
   }
-  if (offending.length === 0) return { safe: true }
-  ctx.logger?.warn?.(
-    'dsh-feishu-remote: 设置层仍包含主机专属字段 %s，设置界面将保持只读（fail-closed）',
-    offending.join('、'),
-  )
-  return {
-    safe: false,
-    reason: purgeFailed ? 'purge_failed' : writable ? 'user_layer_dirty' : 'read_only_dirty',
-  }
+  return createSettingsGuard(ctx, { purgeFailed })()
 }
 
 export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
@@ -211,6 +250,12 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
    * read-only provider or a racing write must never take the plugin down.
    */
   const guiState = await purgeForbiddenSettingsKeys(ctx, config)
+  /**
+   * From here on the gate is DYNAMIC (batch-4 MAJOR-2): both services re-scan
+   * the descriptor per request, so cleaning the offending value unlocks the
+   * GUI without a restart — and onboarding is gated by the very same check.
+   */
+  const guiGuard = createSettingsGuard(ctx, { purgeFailed: guiState.reason === 'purge_failed' })
 
   /**
    * One commit. The generation is allocated by sync() BEFORE the mutex
@@ -287,8 +332,9 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
   const onboarding = new PersonalAgentOnboardingService(ctx, settings, {
     getBridgeHealth: appId => manager.healthForApp(appId),
     waitForBridge,
+    guiGuard,
   })
-  const admin = new FeishuAdminService(ctx, settings, manager, config, guiState)
+  const admin = new FeishuAdminService(ctx, settings, manager, config, guiGuard)
   ctx.effect(() => () => onboarding.stop(), 'dsh-feishu-remote onboarding lifecycle')
   try {
     ctx.connection.rpc.handle(

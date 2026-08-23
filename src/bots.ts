@@ -54,8 +54,12 @@ const REASON_DETAIL: Record<BotStatusReasonCode, string> = {
   credential_missing: 'App Secret 凭据尚未配置或为空',
   duplicate_bot_id: '机器人标识与另一个机器人重复',
   duplicate_app_id: '与另一个机器人使用了同一个飞书应用',
-  duplicate_state_path: '与另一个机器人共用同一份会话状态文件',
-  duplicate_inbound_dir: '与另一个机器人共用同一个接收目录',
+  // The session state file and the inbox directory are HOST-ONLY: they exist
+  // only in cordis.patch.yml, so the sentence has to send the admin there —
+  // the GUI has no such field to fix. The field NAMES are deliberately not
+  // spelled out: `bots/status` must stay free of host topology vocabulary.
+  duplicate_state_path: '与另一个机器人共用同一份会话状态文件，请在 cordis.patch.yml 中为它单独配置',
+  duplicate_inbound_dir: '与另一个机器人共用同一个接收目录，请在 cordis.patch.yml 中为它单独配置',
   duplicate_session_namespace: '只能有一个机器人继续使用原有会话身份',
   invalid_bot_id: '机器人标识不合法',
   workspace_unavailable: '默认工作区不可用',

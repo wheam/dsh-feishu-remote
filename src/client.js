@@ -204,16 +204,30 @@ window.__ModuleLoader__.load({
 		 * still redacts implementation vocabulary and filesystem paths so nothing
 		 * a user cannot act on ever reaches the screen.
 		 */
-		const BANNED_OUTPUT_PATTERNS = [
-			/legacy/giu, /namespace/giu, /loopback/giu, /revision/giu, /wire/giu,
-			/主机器人/gu, /凭据引用/gu, /内部名称/gu
-		];
+		// ASCII vocabulary is matched as WHOLE words only: 「wireless」 is an ordinary
+		// word and must survive, while a bare 「wire」 is implementation vocabulary.
+		const BANNED_OUTPUT_WORDS = /\b(?:legacy|namespace|loopback|revision|wire)\b/giu;
+		// CJK has no word boundaries, so these stay substring matches.
+		const BANNED_OUTPUT_TERMS = [/主机器人/gu, /凭据引用/gu, /内部名称/gu];
+		// A web link is something the user can follow, not a local path. Only
+		// http(s) is exempt: `file://…` IS a local path and stays redacted.
+		const OUTPUT_URL_PATTERN = /https?:\/\/[^\s]+/giu;
 		function safeText(value) {
 			if (typeof value !== "string") return void 0;
 			let text = value.trim();
 			if (text === "") return void 0;
+			// URLs are parked while filesystem paths are redacted, so the `/help` in
+			// `https://example.com/help` is never mistaken for a local path.
+			const urls = [];
+			text = text.replace(/\u0000/gu, "");
+			text = text.replace(OUTPUT_URL_PATTERN, (match) => {
+				urls.push(match);
+				return "\u0000" + (urls.length - 1) + "\u0000";
+			});
 			text = text.replace(/[A-Za-z]:\\[^\s]+/gu, "…").replace(/(?:\/[\w.@-]+){2,}\/?/gu, "…");
-			for (const pattern of BANNED_OUTPUT_PATTERNS) text = text.replace(pattern, "…");
+			text = text.replace(/\u0000(\d+)\u0000/gu, (_match, index) => urls[Number(index)] ?? "");
+			text = text.replace(BANNED_OUTPUT_WORDS, "…");
+			for (const pattern of BANNED_OUTPUT_TERMS) text = text.replace(pattern, "…");
 			text = text.replace(/…{2,}/gu, "…").replace(/\s{2,}/gu, " ").trim();
 			return text === "" || text === "…" ? void 0 : text;
 		}
@@ -674,7 +688,15 @@ window.__ModuleLoader__.load({
 			], key);
 		}
 
-		/** GUI fail-closed banner (`guiSafe === false`): one sentence, no editors. */
+		/**
+		 * Fail closed: the editor unlocks ONLY on an explicit `guiSafe === true`.
+		 * A snapshot that says nothing about it (an older Host, a truncated
+		 * response) is treated as unsafe and gets the generic message.
+		 */
+		function guiBlocked(admin) {
+			return admin?.loaded === true && admin.mode !== "unavailable" && admin.guiSafe !== true;
+		}
+		/** GUI fail-closed banner: one sentence, no editors. */
 		function guiBlockedKey(reason) {
 			if (reason === "purge_failed") return "gui.blocked.purgeFailed";
 			if (reason === "read_only_dirty") return "gui.blocked.readOnlyDirty";
@@ -1150,7 +1172,6 @@ window.__ModuleLoader__.load({
 			const [manage, setManage] = react.useState(false);
 			const admin = props.useFeishuBotAdmin?.((value) => value);
 			const onboarding = props.usePersonalAgentOnboarding?.((value) => value);
-			const scope = props.useFeishuRemoteSettingsCard?.((value) => value);
 			const onboardingStatus = onboarding?.status;
 			const finishedRevision = onboardingStatus?.phase === "ready" ? onboardingStatus.revision ?? -1 : -1;
 			react.useEffect(() => {
@@ -1169,15 +1190,15 @@ window.__ModuleLoader__.load({
 			if (!admin.loaded) return h("p", { className: cx.intro }, t("page.loading"));
 			// Fail closed: the Host says the settings file cannot be edited safely,
 			// so the section renders one sentence and NO editor or action at all.
-			if (admin.guiSafe === false) {
+			if (guiBlocked(admin)) {
 				return h("div", { className: cx.page }, [
 					h("h2", { className: cx.h1 }, t("settings.title"), "title"),
 					h("p", { className: cx.blocked, role: "alert" }, t(guiBlockedKey(admin.guiReason)), "blocked")
 				]);
 			}
-			// The Host-side `writable` flag wins, but a read-only settings scope
-			// (deployment-level lock) must not be editable either.
-			const view = { ...admin, writable: admin.writable === true && scope?.writable !== false };
+			// `writable` comes from the sanitized editor snapshot and NOTHING else:
+			// the raw settings descriptor never crosses into the browser (review B1).
+			const view = { ...admin, writable: admin.writable === true };
 			const busy = admin.saving === true || onboardingActive(onboardingStatus) || onboarding?.acting === true;
 			const statuses = new Map((admin.statuses ?? []).map((item) => [item.id, item]));
 			const destination = admin.mode === "legacy" ? "legacy" : "new-bot";
@@ -1250,7 +1271,7 @@ window.__ModuleLoader__.load({
 			const remote = admin?.mode === "unavailable";
 			const statuses = new Map((admin?.statuses ?? []).map((item) => [item.id, item]));
 			const bots = admin?.bots ?? [];
-			if (admin?.guiSafe === false) {
+			if (guiBlocked(admin)) {
 				return h("li", { className: cx.summary }, [
 					h("span", { className: cx.summaryName }, t("settings.title"), "title"),
 					h("span", { className: cx.summaryDesc, role: "alert" }, t(guiBlockedKey(admin.guiReason)), "blocked")
@@ -1293,32 +1314,23 @@ window.__ModuleLoader__.load({
 		}
 
 		// ------------------------------------------------------------ controllers
-		/** Deployment-level availability (read-only hosts) from the settings scope. */
-		var SettingsScopeController = class {
-			constructor(scope) {
-				this.scope = scope;
-				this.store = runtime.createSnapshotStore(this.projection());
-			}
-			projection() {
-				return { writable: this.scope.getSnapshot().writable === true };
-			}
-			/** Subscription lives inside `ctx.effect`, so it is torn down with the plugin. */
-			mount() {
-				const stop = this.scope.subscribe(() => this.store.set(this.projection()));
-				this.store.set(this.projection());
-				return () => { if (typeof stop === "function") stop(); };
-			}
-			inject() {
-				return { hooks: { feishuRemoteSettingsCard: this.store } };
-			}
-		};
+		/**
+		 * Does an RPC result look like the editor snapshot the Host answers writes
+		 * with? Only this sanitized shape is ever adopted (review B1).
+		 */
+		function isEditorSnapshot(value) {
+			return typeof value === "object" && value !== null
+				&& (value.mode === "legacy" || value.mode === "multi")
+				&& typeof value.config === "object" && value.config !== null;
+		}
 
 		var FeishuBotAdminController = class {
 			constructor(connection) {
 				this.connection = connection;
 				this.snapshot = {
 					loaded: false, writable: false, mode: "loading", revision: 0,
-					guiSafe: true, guiReason: void 0,
+					// Unsafe until a snapshot positively reports otherwise (review m2).
+					guiSafe: false, guiReason: void 0,
 					bots: [], originalBots: [], statuses: [],
 					maxTotalLiveAgents: 0, originalMax: 0,
 					dirty: false, issues: [], saving: false, error: void 0, conflictNotice: void 0
@@ -1330,6 +1342,9 @@ window.__ModuleLoader__.load({
 				// refresh may publish, and an older snapshot never overwrites a newer one.
 				this.requestSequence = 0;
 				this.adoptedRevision = -1;
+				// How many forced (user-triggered) reads are in flight. A regular poll
+				// never runs alongside one (review major-3).
+				this.forcedReads = 0;
 			}
 			publish(patch) {
 				this.snapshot = { ...this.snapshot, ...patch };
@@ -1354,9 +1369,10 @@ window.__ModuleLoader__.load({
 				this.adoptedRevision = toCount(editor.revision);
 				this.publish({
 					loaded: true, writable: editor.writable === true, mode: editor.mode, revision: editor.revision,
-					// Tolerate a Host that does not report it yet: absent means safe.
-					guiSafe: editor.guiSafe !== false,
-					guiReason: editor.guiSafe === false ? editor.guiReason : void 0,
+					// Fail closed: a Host that does not report `guiSafe` cannot be taken
+					// as safe, and an absent reason renders the generic sentence.
+					guiSafe: editor.guiSafe === true,
+					guiReason: editor.guiSafe === true ? void 0 : editor.guiReason,
 					bots, originalBots: bots.map((bot) => ({ ...bot })),
 					maxTotalLiveAgents: max, originalMax: max,
 					dirty: false, issues: validateBotRows(bots, max, editor.mode),
@@ -1389,25 +1405,44 @@ window.__ModuleLoader__.load({
 						: rebased.dropped.length > 0 ? "conflict.dropped" : void 0
 				});
 			}
+			/** Adopt a snapshot a write answered with, unless it is older than the screen. */
+			adoptIfNewer(editor) {
+				if (!isEditorSnapshot(editor) || toCount(editor.revision) < this.adoptedRevision) return false;
+				this.adopt(editor);
+				return true;
+			}
+			/**
+			 * `force` marks a read the user's own action triggered (a save, 「刷新」).
+			 * Forced reads are authoritative and single-flight: while one is in flight
+			 * every regular poll is skipped, so a poll can neither publish an older
+			 * snapshot over a just-saved one nor refuse the new one because the draft
+			 * still looks dirty (review major-3).
+			 */
 			async refresh(force = false) {
 				if (this.stopped || this.connection.isLoopback === false) return;
+				if (!force && this.forcedReads > 0) return;
+				if (force) this.forcedReads += 1;
 				const requestId = ++this.requestSequence;
 				try {
 					const [editor, runtimeStatus] = await Promise.all([
 						this.request("settings/editor-snapshot"),
 						this.request("bots/status")
 					]);
-					// A poll that started before a save must never undo it.
-					if (requestId !== this.requestSequence || this.stopped) return;
+					if (this.stopped) return;
+					// A poll that started before a newer read must never undo it. A forced
+					// read is never superseded — only the revision guard below can stop it.
+					if (!force && requestId !== this.requestSequence) return;
 					if (toCount(editor.revision) >= this.adoptedRevision && (!this.snapshot.dirty || force)) this.adopt(editor);
 					this.publish({ statuses: runtimeStatus.bots ?? [] });
 				} catch (error) {
-					if (requestId !== this.requestSequence || this.stopped) return;
+					if (this.stopped || (!force && requestId !== this.requestSequence)) return;
 					this.publish({
 						loaded: true,
 						...(this.snapshot.mode === "loading" ? { mode: "unavailable", writable: false } : {}),
 						error: error instanceof Error ? error : new Error(String(error))
 					});
+				} finally {
+					if (force) this.forcedReads -= 1;
 				}
 			}
 			mount() {
@@ -1427,7 +1462,7 @@ window.__ModuleLoader__.load({
 				if (this.snapshot.saving || !this.snapshot.writable) return false;
 				this.publish({ saving: true, error: void 0 });
 				try {
-					await this.request("settings/convert-legacy");
+					this.adoptIfNewer(await this.request("settings/convert-legacy"));
 					await this.refresh(true);
 					return true;
 				} catch (error) {
@@ -1440,12 +1475,18 @@ window.__ModuleLoader__.load({
 			async commit(bots, max) {
 				this.publish({ saving: true, error: void 0 });
 				try {
+					let saved;
 					if (this.snapshot.mode === "legacy") {
 						const payload = buildLegacyPayload(this.snapshot.originalBots[0], bots[0], this.snapshot.revision);
-						if (payload !== void 0) await this.request("settings/save-legacy", payload);
+						if (payload !== void 0) saved = await this.request("settings/save-legacy", payload);
 					} else {
-						await this.request("settings/save-bots", buildBotsPayload(bots, max, this.snapshot.revision));
+						saved = await this.request("settings/save-bots", buildBotsPayload(bots, max, this.snapshot.revision));
 					}
+					// The write answers with the post-write snapshot, so the saved state is
+					// adopted right here instead of through a follow-up read another poll
+					// could supersede (review major-3). The read that follows only tops up
+					// the runtime statuses.
+					this.adoptIfNewer(saved);
 					await this.refresh(true);
 					return true;
 				} catch (error) {
@@ -1570,7 +1611,10 @@ window.__ModuleLoader__.load({
 		// -------------------------------------------------------------- apply
 		const NS = "dsh-feishu-remote";
 		const SETTINGS_NS = "feishu-remote";
-		const inject = ["slots", "settingsScope", "locale", "connection", "remote"];
+		// `settingsScope` is deliberately absent: the raw settings descriptor (app
+		// secret, host-only paths, …) must never reach the browser, so the GUI reads
+		// only the sanitized `settings/editor-snapshot` over the loopback RPC.
+		const inject = ["slots", "locale", "connection", "remote"];
 
 		const en = {
 			"settings.title": "Feishu Remote",
@@ -1595,8 +1639,8 @@ window.__ModuleLoader__.load({
 			"status.failed": "Connection failed", "status.failedDetail": "The bot could not stay connected to Feishu.",
 			"status.misconfigured": "Configuration problem",
 			"status.reason.credentialMissing": "The stored secret for this bot is missing — scan again to bind it.",
-			"status.reason.duplicateStatePath": "Two bots are set to share one data folder; give this one its own.",
-			"status.reason.duplicateInboundDir": "Two bots are set to share one incoming-message folder; give this one its own.",
+			"status.reason.duplicateStatePath": "Two bots are set to share one data folder; give this one its own folder in cordis.patch.yml on this machine.",
+			"status.reason.duplicateInboundDir": "Two bots are set to share one incoming-message folder; give this one its own folder in cordis.patch.yml on this machine.",
 			"status.reason.duplicateAppId": "Another bot already uses this Feishu app.",
 			"status.reason.profileUnreadable": "The role description file could not be read — check the path below.",
 			"status.reason.duplicateBotId": "This bot is a duplicate of another one; remove one of them.",
@@ -1738,8 +1782,8 @@ window.__ModuleLoader__.load({
 			"status.failed": "连接失败", "status.failedDetail": "机器人没能保持与飞书的连接。",
 			"status.misconfigured": "配置有问题",
 			"status.reason.credentialMissing": "这个机器人的 Secret 没有保存在本机，请重新扫码绑定。",
-			"status.reason.duplicateStatePath": "有两个机器人用了同一个数据目录，请给这一个单独设置。",
-			"status.reason.duplicateInboundDir": "有两个机器人用了同一个收信目录，请给这一个单独设置。",
+			"status.reason.duplicateStatePath": "有两个机器人用了同一个数据目录，请在本机的 cordis.patch.yml 里给这一个改成单独的目录。",
+			"status.reason.duplicateInboundDir": "有两个机器人用了同一个收信目录，请在本机的 cordis.patch.yml 里给这一个改成单独的目录。",
 			"status.reason.duplicateAppId": "这个飞书应用已经被另一个机器人使用了。",
 			"status.reason.profileUnreadable": "角色说明文件读不到，请检查下面填写的路径。",
 			"status.reason.duplicateBotId": "这个机器人和另一个重复了，请移除其中一个。",
@@ -1953,22 +1997,17 @@ window.__ModuleLoader__.load({
 			// 绝不拖垮宿主界面。keyed-slot 契约已在 dsh 0.1.1-rc.2 复核。
 			try {
 				ctx.effect(() => ctx.locale.register(NS, { en, zh }), "dsh-feishu-remote: dictionaries");
-				const settingsScope = ctx.settingsScope.bind({ namespace: SETTINGS_NS });
-				const settingsController = new SettingsScopeController(settingsScope);
 				const onboardingController = new PersonalAgentOnboardingController(ctx.connection);
 				const botAdminController = new FeishuBotAdminController(ctx.connection);
-				ctx.effect(() => settingsController.mount(), "dsh-feishu-remote: settings scope subscription");
 				ctx.effect(() => onboardingController.mount(), "dsh-feishu-remote: PersonalAgent onboarding polling");
 				ctx.effect(() => botAdminController.mount(), "dsh-feishu-remote: multi-bot admin polling");
 				const injection = () => {
-					const settings = settingsController.inject();
 					const onboarding = onboardingController.inject();
 					const bots = botAdminController.inject();
 					return {
-						...settings,
 						...onboarding,
 						...bots,
-						hooks: { ...settings.hooks, ...onboarding.hooks, ...bots.hooks }
+						hooks: { ...onboarding.hooks, ...bots.hooks }
 					};
 				};
 				// 两处 slot 注册各自独立 try/catch（docs/11 防线）：任何一处契约失效
@@ -2005,6 +2044,7 @@ window.__ModuleLoader__.load({
 		exports.apply = apply;
 		exports.inject = inject;
 		exports.BotDetailPage = BotDetailPage;
+		exports.FeishuBotAdminController = FeishuBotAdminController;
 		exports.FeishuRemoteSection = FeishuRemoteSection;
 		exports.FeishuRemoteSummaryCard = FeishuRemoteSummaryCard;
 		exports.botIdentity = botIdentity;
@@ -2016,6 +2056,7 @@ window.__ModuleLoader__.load({
 		exports.changedBotKeys = changedBotKeys;
 		exports.draftChangeCount = draftChangeCount;
 		exports.formatClock = formatClock;
+		exports.guiBlocked = guiBlocked;
 		exports.guiBlockedKey = guiBlockedKey;
 		exports.friendlyError = friendlyError;
 		exports.maskId = maskId;

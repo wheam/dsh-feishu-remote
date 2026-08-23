@@ -44,6 +44,9 @@ const changedBotKeys = client.changedBotKeys as (original: Row | undefined, draf
 const draftChangeCount = client.draftChangeCount as (originals: Row[], drafts: Row[], originalMax: number, max: number) => number
 const validateBotRows = client.validateBotRows as (rows: Row[], max: number, mode: string) => Issue[]
 const friendlyError = client.friendlyError as (error: unknown) => { key: string; detail?: string } | undefined
+const safeText = client.safeText as (value: unknown) => string | undefined
+const guiBlocked = client.guiBlocked as (admin: unknown) => boolean
+const guiBlockedKey = client.guiBlockedKey as (reason: unknown) => string
 const maskId = client.maskId as (value: string) => string
 const formatClock = client.formatClock as (ts: number, now?: number) => { sameDay: boolean; clock: string; date: string } | undefined
 
@@ -378,6 +381,20 @@ describe('backend error copy', () => {
 
 const BANNED_WORDS = ['legacy', '主机器人', 'namespace', '凭据引用', 'loopback', 'revision', '内部名称', 'wire']
 
+describe('redacting Host text before it reaches the screen', () => {
+  it('redacts a whole implementation word, never a longer word that contains one', () => {
+    expect(safeText('wireless 连接不稳定')).toBe('wireless 连接不稳定')
+    expect(safeText('revision 12 冲突')).toBe('… 12 冲突')
+  })
+
+  it('keeps a link the user can follow, and still redacts a local path', () => {
+    expect(safeText('详见 https://example.com/help 页面')).toBe('详见 https://example.com/help 页面')
+    expect(safeText('读取 /Users/me/.dsh/settings.json 失败')).toBe('读取 … 失败')
+    // `file://…` is a local path wearing a scheme, so it stays redacted.
+    expect(safeText('读取 file:///Users/me/.dsh/settings.json 失败')).not.toContain('/Users/')
+  })
+})
+
 describe('settings copy rules', () => {
   const dictionaries = source.slice(source.indexOf('const en = {'), source.indexOf('// ------------------------------------------------ legacy transcript display'))
 
@@ -418,6 +435,15 @@ describe('settings copy rules', () => {
     const tokens = [...source.matchAll(/var\((--[\w-]+)/gu)].map(match => match[1]!)
     expect(tokens.length).toBeGreaterThan(20)
     for (const token of new Set(tokens)) expect(token, token).toMatch(/^--dsw-alias-/u)
+  })
+
+  it('sends a shared data folder to the file the user can actually edit, not to a field that does not exist', () => {
+    for (const key of ['status.reason.duplicateStatePath', 'status.reason.duplicateInboundDir']) {
+      expect(enDictionary[key], key).toContain('cordis.patch.yml')
+      expect(zhDictionary[key], key).toContain('cordis.patch.yml')
+    }
+    // 「单独设置」 promised a per-bot field the redesigned GUI never had.
+    expect(dictionaries).not.toContain('单独设置')
   })
 
   it('drops the retired flat form, staged writes, and nested disclosures', () => {
@@ -547,7 +573,6 @@ describe('GUI fail-closed rendering', () => {
     t: (key: string) => key,
     useFeishuBotAdmin: (select: (value: unknown) => unknown) => select(snapshot),
     usePersonalAgentOnboarding: () => undefined,
-    useFeishuRemoteSettingsCard: () => ({ writable: true }),
   })
 
   it('names one explanatory message per reason, in both locales', () => {
@@ -687,6 +712,9 @@ describe('save routing through the admin controller', () => {
 
   async function mountAdmin(initialEditor: Record<string, unknown>, handler?: Handler) {
     const calls: Call[] = []
+    // The raw settings scope carries appSecret/statePath/…: binding it would put
+    // the unsanitized descriptor in the browser (review B1). It must stay unused.
+    let scopeBinds = 0
     const disposers: (() => void)[] = []
     let editor = initialEditor
     const store = <T,>(initial: T) => {
@@ -701,7 +729,12 @@ describe('save routing through the admin controller', () => {
     apply({
       effect: (setup: () => unknown) => { const stop = setup(); if (typeof stop === 'function') disposers.push(stop as () => void) },
       locale: { register: () => undefined, bind: () => (key: string) => key },
-      settingsScope: { bind: () => ({ subscribe: () => () => undefined, getSnapshot: () => ({ status: 'ready', writable: true }) }) },
+      settingsScope: {
+        bind: () => {
+          scopeBinds += 1
+          throw new Error('the raw settings scope must never be bound in the browser')
+        },
+      },
       connection: {
         isLoopback: true,
         rpc: {
@@ -725,6 +758,7 @@ describe('save routing through the admin controller', () => {
     return {
       calls,
       api,
+      scopeBinds: () => scopeBinds,
       setEditor: (next: Record<string, unknown>) => { editor = next },
       state: () => (api.hooks as { feishuBotAdmin: { get: () => Record<string, unknown> } }).feishuBotAdmin.get(),
       stop: () => { for (const dispose of disposers) dispose() },
@@ -745,7 +779,7 @@ describe('save routing through the admin controller', () => {
 
   it('routes a single-bot edit to settings/save-legacy with only the changed root key', async () => {
     const mounted = await mountAdmin({
-      revision: 9, writable: true, mode: 'legacy',
+      revision: 9, writable: true, mode: 'legacy', guiSafe: true,
       config: { appId: 'cli_a', appSecretRef: 'REF', allowedOpenIds: 'ou_a', defaultWorkspace: '/a', bots: [] },
     })
     editBot(mounted.api)('legacy', 'allowedOpenIds', ['ou_a', 'ou_b'])
@@ -772,7 +806,7 @@ describe('save routing through the admin controller', () => {
 
   it('refuses to remove the only bot and never converts the config shape on a plain save', async () => {
     const mounted = await mountAdmin({
-      revision: 1, writable: true, mode: 'legacy',
+      revision: 1, writable: true, mode: 'legacy', guiSafe: true,
       config: { appId: 'cli_a', appSecretRef: 'REF', bots: [] },
     })
     expect(await remove(mounted.api)('legacy')).toBe(false)
@@ -867,6 +901,113 @@ describe('save routing through the admin controller', () => {
     })
   })
 
+  describe('a save is never undone by a poll racing its forced read (review major-3)', () => {
+    interface AdminController {
+      snapshot: Record<string, unknown>
+      mount: () => () => void
+      refresh: (force?: boolean) => Promise<void>
+      save: () => Promise<boolean>
+      inject: () => Record<string, unknown>
+    }
+
+    /** The controller on its own, so BOTH read paths can be driven by hand. */
+    function makeController(handler: Handler): AdminController {
+      const store = <T,>(initial: T) => {
+        let value = initial
+        return { get: () => value, set: (next: T) => { value = next }, subscribe: () => () => undefined }
+      }
+      const loaded = loadClientExports(name => name === '@deepseek-ai/dsh-client-runtime/client'
+        ? { createSnapshotStore: store }
+        : {})
+      const Controller = loaded.FeishuBotAdminController as new (connection: unknown) => AdminController
+      return new Controller({
+        isLoopback: true,
+        rpc: {
+          call: async (_channel: string, endpoint: string, payload: Record<string, unknown>) => handler(endpoint, payload),
+        },
+      })
+    }
+
+    const stale = multiEditor(4, [botA, botB])
+    const fresh = multiEditor(5, [botA, { ...botB, model: 'saved-model' }])
+
+    /** `held` is the 1-based editor read the scenario keeps in flight. */
+    function scenario(held: number) {
+      let release: ((value: unknown) => void) | undefined
+      let reads = 0
+      const controller = makeController((endpoint) => {
+        if (endpoint === 'bots/status') return { ok: true, value: { bots: [] } }
+        if (endpoint === 'settings/save-bots') return { ok: true, value: fresh }
+        reads += 1
+        if (reads === held) return new Promise(resolve => { release = resolve })
+        // Every other read still serves the OLD content, so a snapshot that
+        // lands out of order shows up as the revision going backwards.
+        return { ok: true, value: stale }
+      })
+      return { controller, release: (value: unknown) => release?.(value) }
+    }
+
+    async function saveEdit(controller: AdminController) {
+      const api = controller.inject()
+      ;(api.editBot as (id: string, field: string, value: unknown) => void)('bot-b', 'model', 'saved-model')
+      expect(controller.snapshot.dirty).toBe(true)
+      return controller.save()
+    }
+
+    it('keeps the saved revision when a poll starts during the forced read and resolves first', async () => {
+      // Reads: 1 = mount, 2 = the save's own forced read (held open here).
+      const { controller, release } = scenario(2)
+      const stop = controller.mount()
+      await settle()
+      expect(controller.snapshot.revision).toBe(4)
+      const saving = saveEdit(controller)
+      await settle()
+      // A regular poll starts while the forced read is still in flight…
+      await controller.refresh(false)
+      await settle()
+      // …and lands BEFORE it. It must not roll the page back to revision 4.
+      release({ ok: true, value: fresh })
+      expect(await saving).toBe(true)
+      await settle()
+      expect(controller.snapshot.revision).toBe(5)
+      expect(controller.snapshot.dirty).toBe(false)
+      expect((controller.snapshot.bots as Row[])[1]!.model).toBe('saved-model')
+      stop()
+    })
+
+    it('keeps the saved revision when a poll started before the save resolves after it', async () => {
+      // Reads: 1 = mount, 2 = the poll held open here, 3 = the save's forced read.
+      const { controller, release } = scenario(2)
+      const stop = controller.mount()
+      await settle()
+      const stalePoll = controller.refresh(false)
+      await settle()
+      expect(await saveEdit(controller)).toBe(true)
+      expect(controller.snapshot.revision).toBe(5)
+      // The old poll lands last, carrying the pre-save content.
+      release({ ok: true, value: stale })
+      await stalePoll
+      await settle()
+      expect(controller.snapshot.revision).toBe(5)
+      expect(controller.snapshot.dirty).toBe(false)
+      expect((controller.snapshot.bots as Row[])[1]!.model).toBe('saved-model')
+      stop()
+    })
+
+    it('adopts the snapshot the save itself returned, without waiting for another read', async () => {
+      // Every editor read after the mount hangs: only the save's own answer can
+      // move the page forward.
+      const { controller } = scenario(2)
+      const stop = controller.mount()
+      await settle()
+      void saveEdit(controller)
+      await settle()
+      expect(controller.snapshot.revision).toBe(5)
+      expect(controller.snapshot.dirty).toBe(false)
+      stop()
+    })
+  })
+
   it('ignores a poll that started before a save and resolves after it (review M3)', async () => {
     let release: ((value: unknown) => void) | undefined
     let reads = 0
@@ -933,11 +1074,27 @@ describe('save routing through the admin controller', () => {
     mounted.stop()
   })
 
-  it('treats a Host that does not report guiSafe yet as safe', async () => {
-    const mounted = await mountAdmin(multiEditor(1, [botA]))
-    expect(mounted.state().guiSafe).toBe(true)
+  it('fails closed, with the generic reason, when the Host does not report guiSafe at all', async () => {
+    const { guiSafe: _omitted, ...withoutFlag } = multiEditor(1, [botA])
+    const mounted = await mountAdmin(withoutFlag)
+    expect(mounted.state().guiSafe).toBe(false)
+    // No reason to name → the section renders the generic sentence.
     expect(mounted.state().guiReason).toBeUndefined()
+    expect(guiBlocked(mounted.state())).toBe(true)
+    expect(guiBlockedKey(mounted.state().guiReason)).toBe('gui.blocked.generic')
     mounted.stop()
+  })
+
+  it('never binds the raw settings scope, and takes writable from the sanitized snapshot (review B1)', async () => {
+    const mounted = await mountAdmin(multiEditor(1, [botA]))
+    expect(mounted.scopeBinds()).toBe(0)
+    expect(mounted.state().writable).toBe(true)
+    expect(mounted.calls.some(item => item.endpoint === 'settings/editor-snapshot')).toBe(true)
+    mounted.stop()
+    const readOnly = await mountAdmin({ ...multiEditor(1, [botA]), writable: false })
+    expect(readOnly.scopeBinds()).toBe(0)
+    expect(readOnly.state().writable).toBe(false)
+    readOnly.stop()
   })
 })
 
@@ -961,16 +1118,13 @@ describe('settings slot registration isolation', () => {
         }
       : {}
     const apply = loadClientExports(requireModule, sandboxConsole).apply as (ctx: unknown) => void
-    const scope = {
-      subscribe: () => () => undefined,
-      getSnapshot: () => ({ status: 'ready', writable: true, value: {}, base: {}, user: {}, secrets: [] }),
-      set: async () => undefined,
-      unset: async () => undefined,
-    }
     const ctx = {
       effect: (setup: () => unknown) => { setup(); return () => undefined },
       locale: { register: () => undefined, bind: () => (key: string) => key },
-      settingsScope: { bind: () => scope },
+      // Touching it at all is the bug (review B1); throwing proves nothing does.
+      settingsScope: {
+        bind: () => { throw new Error('the raw settings scope must never be bound in the browser') },
+      },
       // isLoopback:false keeps both controllers' mount() off their polling timers.
       connection: { isLoopback: false, rpc: { call: async () => ({ ok: false, error: { message: 'offline' } }) } },
       slots: {

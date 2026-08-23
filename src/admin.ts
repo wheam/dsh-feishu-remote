@@ -8,6 +8,7 @@ import {
   SETTINGS_NAMESPACE,
   flatSchema,
   type FlatSettings,
+  type SettingsGuard,
   type SettingsGuiState,
 } from './settings.js'
 import type { BotRuntimeStatus, BotStatusReasonCode } from './types.js'
@@ -316,13 +317,16 @@ export class FeishuAdminService {
     private readonly manager: FeishuBotManager,
     private readonly entry: Config,
     /**
-     * Outcome of the startup purge (Codex batch-3 B2). `safe: false` means a
-     * host-only key or a stale secret still sits in a layer the browser
-     * receives, so the GUI must fail closed — and so must every write here:
-     * a `bots[]` rewrite would otherwise silently drop a legitimate
-     * user-layer statePath along with it.
+     * The GUI safety gate (Codex batch-3 B2), re-evaluated on every request
+     * (batch-4 MAJOR-2). `safe: false` means a host-only key or a stale
+     * secret still sits in a layer the browser receives, so the GUI must fail
+     * closed — and so must every write here: a `bots[]` rewrite would
+     * otherwise silently drop a legitimate user-layer statePath along with
+     * it. Because the guard re-scans the live descriptor instead of reading a
+     * value cached at startup, cleaning the offending field unlocks the GUI
+     * on the next request, with no restart.
      */
-    private readonly guiState: SettingsGuiState = { safe: true },
+    private readonly guiGuard: SettingsGuard = () => ({ safe: true }),
   ) {}
 
   private descriptor() {
@@ -337,17 +341,19 @@ export class FeishuAdminService {
     if (this.ctx.settings.writable === false) {
       throw new AdminError('read_only', '当前部署的设置存储为只读，无法保存修改。')
     }
-    if (!this.guiState.safe) {
+    const gui = this.guiStateValue()
+    if (!gui.safe) {
       throw new AdminError(
         'settings_unsafe',
         '设置存储中仍有需要人工处理的主机专属字段，暂时不能在界面上修改配置。',
-        this.guiState.reason === undefined ? undefined : { reason: this.guiState.reason },
+        gui.reason === undefined ? undefined : { reason: gui.reason },
       )
     }
   }
 
   private snapshot(): ClientEditorSnapshot {
     const descriptor = this.descriptor()
+    const gui = this.guiStateValue()
     const current = this.settings.get()
     const config = {} as ClientEditorSnapshot['config']
     for (const key of ROOT_WIRE_KEYS) {
@@ -362,8 +368,10 @@ export class FeishuAdminService {
       revision: descriptor.revision,
       writable: this.ctx.settings.writable,
       mode: current.bots.length > 0 ? 'multi' : 'legacy',
-      guiSafe: this.guiState.safe,
-      ...(this.guiState.reason === undefined ? {} : { guiReason: this.guiState.reason }),
+      // Always an explicit boolean: the client contract keys its fail-closed
+      // banner off `guiSafe === false`, never off a missing field.
+      guiSafe: gui.safe,
+      ...(gui.reason === undefined ? {} : { guiReason: gui.reason }),
       config,
     }
   }
@@ -566,10 +574,13 @@ export class FeishuAdminService {
     }
   }
 
-  /** Exposed as `settings/gui-state`; also inlined into the editor snapshot. */
+  /**
+   * Exposed as `settings/gui-state`; also inlined into the editor snapshot and
+   * consulted before every mutating endpoint. Re-scans on each call, so the
+   * three can never disagree and a cleaned layer unlocks without a restart.
+   */
   private guiStateValue(): SettingsGuiState {
-    return this.guiState.reason === undefined
-      ? { safe: this.guiState.safe }
-      : { safe: this.guiState.safe, reason: this.guiState.reason }
+    const state = this.guiGuard()
+    return state.reason === undefined ? { safe: state.safe } : { safe: state.safe, reason: state.reason }
   }
 }
