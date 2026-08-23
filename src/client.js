@@ -225,9 +225,12 @@ window.__ModuleLoader__.load({
 				return "\u0000" + (urls.length - 1) + "\u0000";
 			});
 			text = text.replace(/[A-Za-z]:\\[^\s]+/gu, "…").replace(/(?:\/[\w.@-]+){2,}\/?/gu, "…");
-			text = text.replace(/\u0000(\d+)\u0000/gu, (_match, index) => urls[Number(index)] ?? "");
 			text = text.replace(BANNED_OUTPUT_WORDS, "…");
 			for (const pattern of BANNED_OUTPUT_TERMS) text = text.replace(pattern, "…");
+			// Parked URLs come back LAST, after every path AND vocabulary pass, so a
+			// link whose host or path merely contains an ordinary banned word — say
+			// `https://wire.example.com/revision/12` — stays intact and followable.
+			text = text.replace(/\u0000(\d+)\u0000/gu, (_match, index) => urls[Number(index)] ?? "");
 			text = text.replace(/…{2,}/gu, "…").replace(/\s{2,}/gu, " ").trim();
 			return text === "" || text === "…" ? void 0 : text;
 		}
@@ -1324,6 +1327,13 @@ window.__ModuleLoader__.load({
 				&& typeof value.config === "object" && value.config !== null;
 		}
 
+		/**
+		 * How long a forced read may hold the single-flight slot. A Host RPC that
+		 * never answers must not freeze regular polling for the rest of the session
+		 * (review major-4), so the slot is released once this bound elapses.
+		 */
+		const FORCED_READ_TIMEOUT_MS = 10000;
+
 		var FeishuBotAdminController = class {
 			constructor(connection) {
 				this.connection = connection;
@@ -1342,9 +1352,11 @@ window.__ModuleLoader__.load({
 				// refresh may publish, and an older snapshot never overwrites a newer one.
 				this.requestSequence = 0;
 				this.adoptedRevision = -1;
-				// How many forced (user-triggered) reads are in flight. A regular poll
-				// never runs alongside one (review major-3).
-				this.forcedReads = 0;
+				// The single forced (user-triggered) read in flight, if any. A regular
+				// poll never runs alongside one (review major-3), and a second forced
+				// read joins this one instead of stacking another RPC (review major-4).
+				this.forcedRead = void 0;
+				this.forcedReadTimer = void 0;
 			}
 			publish(patch) {
 				this.snapshot = { ...this.snapshot, ...patch };
@@ -1416,12 +1428,46 @@ window.__ModuleLoader__.load({
 			 * Forced reads are authoritative and single-flight: while one is in flight
 			 * every regular poll is skipped, so a poll can neither publish an older
 			 * snapshot over a just-saved one nor refuse the new one because the draft
-			 * still looks dirty (review major-3).
+			 * still looks dirty (review major-3). No caller ever WAITS on one to finish
+			 * a user action, and the slot it holds is time-bounded, so a Host RPC that
+			 * hangs can delay a poll but never freeze the page (review major-4).
 			 */
 			async refresh(force = false) {
 				if (this.stopped || this.connection.isLoopback === false) return;
-				if (!force && this.forcedReads > 0) return;
-				if (force) this.forcedReads += 1;
+				if (!force) {
+					// Only ever POSTPONED, never dropped: the mount timer polls again
+					// once the forced read settles or hits its bound (review major-4).
+					if (this.forcedRead !== void 0) return;
+					return this.read(false);
+				}
+				// Single-flight: a second forced read joins the pending one.
+				if (this.forcedRead !== void 0) return this.forcedRead;
+				const pending = this.read(true);
+				this.forcedRead = pending;
+				const release = () => {
+					if (this.forcedReadTimer !== void 0) {
+						clearTimeout(this.forcedReadTimer);
+						this.forcedReadTimer = void 0;
+					}
+					if (this.forcedRead === pending) this.forcedRead = void 0;
+				};
+				pending.then(release, release);
+				// A Host that never answers must not freeze the page: past the bound the
+				// slot is released and regular polls resume, even though the RPC is
+				// still out. Whatever it eventually publishes is still revision-guarded.
+				return Promise.race([pending, new Promise((resolve) => {
+					this.forcedReadTimer = setTimeout(() => { this.forcedReadTimer = void 0; release(); resolve(); }, FORCED_READ_TIMEOUT_MS);
+				})]);
+			}
+			/**
+			 * Start the post-write top-up read without waiting for it: a write is
+			 * complete the moment the Host answered it (review major-4).
+			 */
+			fireForcedRead() {
+				void Promise.resolve(this.refresh(true)).catch(() => void 0);
+			}
+			/** One read of the editor snapshot plus the runtime statuses. */
+			async read(force) {
 				const requestId = ++this.requestSequence;
 				try {
 					const [editor, runtimeStatus] = await Promise.all([
@@ -1441,8 +1487,6 @@ window.__ModuleLoader__.load({
 						...(this.snapshot.mode === "loading" ? { mode: "unavailable", writable: false } : {}),
 						error: error instanceof Error ? error : new Error(String(error))
 					});
-				} finally {
-					if (force) this.forcedReads -= 1;
 				}
 			}
 			mount() {
@@ -1456,14 +1500,21 @@ window.__ModuleLoader__.load({
 					if (!this.stopped) this.timer = setTimeout(tick, 2500);
 				};
 				void tick();
-				return () => { this.stopped = true; if (this.timer !== void 0) clearTimeout(this.timer); };
+				return () => {
+					this.stopped = true;
+					if (this.timer !== void 0) clearTimeout(this.timer);
+					if (this.forcedReadTimer !== void 0) { clearTimeout(this.forcedReadTimer); this.forcedReadTimer = void 0; }
+					this.forcedRead = void 0;
+				};
 			}
 			async convertLegacy() {
 				if (this.snapshot.saving || !this.snapshot.writable) return false;
 				this.publish({ saving: true, error: void 0 });
 				try {
 					this.adoptIfNewer(await this.request("settings/convert-legacy"));
-					await this.refresh(true);
+					// The write's own answer is the authoritative state; the follow-up
+					// read only tops up runtime statuses, so it is never awaited.
+					this.fireForcedRead();
 					return true;
 				} catch (error) {
 					this.publish({ error: error instanceof Error ? error : new Error(String(error)) });
@@ -1485,9 +1536,11 @@ window.__ModuleLoader__.load({
 					// The write answers with the post-write snapshot, so the saved state is
 					// adopted right here instead of through a follow-up read another poll
 					// could supersede (review major-3). The read that follows only tops up
-					// the runtime statuses.
+					// the runtime statuses, so the save is DONE without it: awaiting it
+					// would leave the page 「保存中」 for as long as the Host stays silent
+					// (review major-4).
 					this.adoptIfNewer(saved);
-					await this.refresh(true);
+					this.fireForcedRead();
 					return true;
 				} catch (error) {
 					const latest = error?.code === "conflict" ? error?.details?.latest : void 0;

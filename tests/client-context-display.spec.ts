@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 function loadClientExports(
   requireModule: (name: string) => unknown = () => ({}),
@@ -389,6 +389,8 @@ describe('redacting Host text before it reaches the screen', () => {
 
   it('keeps a link the user can follow, and still redacts a local path', () => {
     expect(safeText('详见 https://example.com/help 页面')).toBe('详见 https://example.com/help 页面')
+    // The banned vocabulary pass must not chew up a link's own host or path.
+    expect(safeText('详见 https://wire.example.com/revision/12')).toBe('详见 https://wire.example.com/revision/12')
     expect(safeText('读取 /Users/me/.dsh/settings.json 失败')).toBe('读取 … 失败')
     // `file://…` is a local path wearing a scheme, so it stays redacted.
     expect(safeText('读取 file:///Users/me/.dsh/settings.json 失败')).not.toContain('/Users/')
@@ -1005,6 +1007,44 @@ describe('save routing through the admin controller', () => {
       expect(controller.snapshot.revision).toBe(5)
       expect(controller.snapshot.dirty).toBe(false)
       stop()
+    })
+
+    it('finishes the save and resumes polling when the post-save read never answers', async () => {
+      // The Host takes the write but then goes silent: every editor read after
+      // the mount hangs forever (review major-4).
+      vi.useFakeTimers()
+      try {
+        let reads = 0
+        const controller = makeController((endpoint) => {
+          if (endpoint === 'bots/status') return { ok: true, value: { bots: [] } }
+          if (endpoint === 'settings/save-bots') return { ok: true, value: fresh }
+          reads += 1
+          return reads === 1 ? { ok: true, value: stale } : new Promise(() => undefined)
+        })
+        const stop = controller.mount()
+        await settle()
+        // The save completes on the write's own answer — it never waits for the read.
+        expect(await saveEdit(controller)).toBe(true)
+        await settle()
+        expect(controller.snapshot.revision).toBe(5)
+        expect(controller.snapshot.saving).toBe(false)
+        expect(reads).toBe(2)
+        // While that read holds the single-flight slot a poll is postponed, and a
+        // second forced read joins it instead of stacking another RPC.
+        void controller.refresh(false)
+        void controller.refresh(true)
+        await settle()
+        expect(reads).toBe(2)
+        // Past the bound the slot is released and ordinary polling reads again.
+        await vi.advanceTimersByTimeAsync(10_000)
+        const before = reads
+        void controller.refresh(false)
+        await settle()
+        expect(reads).toBe(before + 1)
+        stop()
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

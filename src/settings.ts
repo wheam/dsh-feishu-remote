@@ -326,25 +326,63 @@ interface BotIdentityLike {
   sessionNamespace?: unknown
 }
 
+/** A node that may carry the root Feishu app identity (flat value or user layer). */
+interface RootIdentityLike {
+  appId?: unknown
+}
+
+/**
+ * The app identity the ROOT host-only paths belong to (Codex audit, root
+ * attribution #2). The settings value is authoritative for `appId` —
+ * `unflatten()` projects `value.appId`, not `entry.appId` — so a rebound
+ * install whose entry still names the OLD app must not lend the retained root
+ * path back to that obsolete app. The entry value is only the fallback for
+ * callers that see a partial user layer (the purge planner).
+ */
+function effectiveRootAppId(root: RootIdentityLike | undefined, entry: Config): string {
+  const fromValue = typeof root?.appId === 'string' ? root.appId.trim() : ''
+  return fromValue !== '' ? fromValue : (entry.appId ?? '').trim()
+}
+
+function indicesWhere(bots: readonly BotIdentityLike[], match: (bot: BotIdentityLike) => boolean): number[] {
+  const found: number[] = []
+  bots.forEach((bot, index) => { if (match(bot)) found.push(index) })
+  return found
+}
+
 /**
  * Index of the ONE settings bot that continues the legacy (root-level)
  * identity, or -1.
  *
- * A config that is still legacy at the entry level (no `bots[]`) but has been
- * converted to multi-bot in the GUI lends its ROOT host-only paths to exactly
- * one bot: the one stamped `sessionNamespace: 'legacy'` (what
- * `settings/convert-legacy` writes), or failing that the one carrying the
- * legacy appId. That bot is the same Feishu app as before, so it must keep
- * reading the same state file. Shared by the runtime projection and the purge
- * planner so the two can never disagree about who owns a root path.
+ * A config converted to multi-bot in the GUI lends its ROOT host-only paths to
+ * exactly one bot, in this order (Codex audit, root attribution #1/#2):
+ *   1. the bot stamped `sessionNamespace: 'legacy'` (what
+ *      `settings/convert-legacy` writes) when exactly one carries the marker.
+ *      This holds REGARDLESS of `entry.bots`: once the entry has been rewritten
+ *      to multi-bot shape the marked bot is still the same Feishu app, and the
+ *      retained user-layer root path may be the only copy of its state file
+ *      location that exists;
+ *   2. failing that, the bot carrying the EFFECTIVE root appId (see
+ *      {@link effectiveRootAppId}) — never the stale entry app when the
+ *      settings value has moved on;
+ *   3. failing that, nobody. Ambiguity (two legacy markers, two bots on the
+ *      same appId — both rejected by `validateMultiBotConfig`) also lends to
+ *      nobody rather than to a guess.
+ *
+ * Shared by the runtime projection and the purge planner so the two can never
+ * disagree about who owns a root path.
  */
-function legacyContinuationIndex(bots: readonly BotIdentityLike[], entry: Config): number {
-  if ((entry.bots ?? []).length > 0) return -1
-  const byNamespace = bots.findIndex(bot => bot.sessionNamespace === 'legacy')
-  if (byNamespace >= 0) return byNamespace
-  const legacyAppId = (entry.appId ?? '').trim()
-  if (legacyAppId === '') return -1
-  return bots.findIndex(bot => typeof bot.appId === 'string' && bot.appId.trim() === legacyAppId)
+function legacyContinuationIndex(
+  bots: readonly BotIdentityLike[],
+  entry: Config,
+  root?: RootIdentityLike,
+): number {
+  const marked = indicesWhere(bots, bot => bot.sessionNamespace === 'legacy')
+  if (marked.length > 0) return marked.length === 1 ? marked[0]! : -1
+  const rootAppId = effectiveRootAppId(root, entry)
+  if (rootAppId === '') return -1
+  const matched = indicesWhere(bots, bot => typeof bot.appId === 'string' && bot.appId.trim() === rootAppId)
+  return matched.length === 1 ? matched[0]! : -1
 }
 
 /**
@@ -374,9 +412,13 @@ function overlayHostOnlyBots(
   root: Partial<FlatSettings>,
 ): BotConfig[] {
   const entryBots = new Map((entry.bots ?? []).map(bot => [bot.id, bot]))
+  // A multi-bot ENTRY declares each bot's paths itself, so its root paths are
+  // inert. The RETAINED user-layer root is different: it may be the only copy
+  // of the continuation bot's state location, so it is lent whatever shape the
+  // entry has now (Codex audit, root attribution #1).
   const legacyEntryRoot = entryBots.size === 0 ? hostOnlyFields(entry) : {}
-  const legacyUserRoot = entryBots.size === 0 ? hostOnlyFields(root as HostOnlyBotFields) : {}
-  const legacyIndex = legacyContinuationIndex(bots, entry)
+  const legacyUserRoot = hostOnlyFields(root as HostOnlyBotFields)
+  const legacyIndex = legacyContinuationIndex(bots, entry, root)
   return bots.map((bot, index) => {
     const carried = structuredClone(bot) as Record<string, unknown>
     // What a stale user layer still carries — kept only as the LAST fallback.
@@ -466,7 +508,7 @@ export function settingsPurgePlan(user: unknown, entry: Config = {}): SettingsPu
   const identities: BotIdentityLike[] = bots.map(bot => (
     typeof bot === 'object' && bot !== null && !Array.isArray(bot) ? bot as BotIdentityLike : {}
   ))
-  const legacyIndex = legacyContinuationIndex(identities, entry)
+  const legacyIndex = legacyContinuationIndex(identities, entry, section)
   const entryRoot: HostOnlyBotFields = entryBots.size === 0 ? entry : {}
   let dirty = false
   const cleaned = bots.map((bot, index) => {

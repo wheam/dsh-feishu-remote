@@ -233,6 +233,39 @@ describe('settings namespace (flat ↔ nested)', () => {
       .toMatchObject({ statePath: '/host/root-state.json' })
   })
 
+  /**
+   * Codex audit, root attribution. The settings value owns `appId`, so the
+   * effective root app is the one the GUI last saved — lending the retained
+   * root path back to the entry's obsolete app would hand one bot's state file
+   * to another.
+   */
+  it('lends a retained root path to the effective root app, not the obsolete entry app', () => {
+    const flat = flatten({
+      appId: 'cli_current',
+      bots: [
+        { id: 'bot-old', appId: 'cli_entry_old', appSecretRef: 'REF_OLD', sessionNamespace: 'app' },
+        { id: 'bot-current', appId: 'cli_current', appSecretRef: 'REF_CURRENT', sessionNamespace: 'app' },
+      ],
+    })
+    Object.assign(flat, { statePath: '/retained/root.json' })
+    const projected = unflatten(flat, { appId: 'cli_entry_old' })
+    expect(projected.bots?.find(bot => bot.id === 'bot-old')).not.toHaveProperty('statePath')
+    expect(projected.bots?.find(bot => bot.id === 'bot-current')).toMatchObject({ statePath: '/retained/root.json' })
+  })
+
+  /**
+   * …and the marker still wins once the entry itself has been rewritten to
+   * multi-bot shape: the retained root path is that bot's only copy.
+   */
+  it('keeps a retained root path on a marked continuation bot after the entry moves to bots[]', () => {
+    const bots = [
+      { id: 'primary-bot', appId: 'cli_current', appSecretRef: 'REF_CURRENT', sessionNamespace: 'legacy' as const },
+    ]
+    const flat = flatten({ appId: 'cli_current', bots })
+    Object.assign(flat, { statePath: '/retained/root.json' })
+    expect(unflatten(flat, { bots }).bots?.[0]).toMatchObject({ statePath: '/retained/root.json' })
+  })
+
   it('round-trips bots[] and process capacity without carrying secret values', () => {
     const flat = flatten({
       maxTotalLiveAgents: 9,
