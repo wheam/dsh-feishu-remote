@@ -37,9 +37,15 @@ export const flatSchema: Schema<FlatSettings> = Schema.object({
   commandAllowlist: Schema.string().default(''),
   contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
   contextBackend: Schema.union(['auto', 'cli', 'sdk'] as const).default('auto'),
-  // NOTE (docs/15 F-09): feishuCliPath is deliberately NOT in the GUI schema —
-  // an arbitrary executable path is equivalent to local code execution and
-  // stays a trusted-admin setting (cordis.patch.yml / DSH_FEISHU_CLI_PATH).
+  // NOTE (docs/15 F-09, docs/17 §10.2): feishuCliPath is deliberately NOT in
+  // the GUI schema — neither at the root NOR inside `bots[]`. An arbitrary
+  // executable path is equivalent to local code execution and stays a
+  // trusted-admin setting (cordis.patch.yml / DSH_FEISHU_CLI_PATH). A value
+  // configured there still reaches the bridge: it rides in through
+  // `flatten()` → the registration `base` layer, and the settings schema
+  // resolves non-strictly, so an undeclared key is preserved rather than
+  // dropped (see tests/settings.spec.ts). Declaring it would instead publish
+  // an editable field to the browser.
   contextP2pMaxMessages: Schema.number().step(1).min(1).max(500).default(80),
   contextP2pMaxChars: Schema.number().step(1).min(1000).max(500000).default(50000),
   contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
@@ -58,7 +64,7 @@ export const flatSchema: Schema<FlatSettings> = Schema.object({
     brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
     statePath: Schema.string().default(''),
     inboundDir: Schema.string().default(''),
-    feishuCliPath: Schema.string().default(''),
+    // feishuCliPath: see the NOTE above — host-only, never in the GUI schema.
     allowedOpenIds: Schema.array(Schema.string()).default([]),
     allowedChatIds: Schema.array(Schema.string()).default([]),
     allowAllUsers: Schema.boolean().default(false),
@@ -129,7 +135,8 @@ export interface FlatSettings {
     brand: 'feishu' | 'lark' | 'larkoffice'
     statePath: string
     inboundDir: string
-    feishuCliPath: string
+    /** Host-only (patch.yml): carried through the schema as an undeclared key. */
+    feishuCliPath?: string
     allowedOpenIds: string[]
     allowedChatIds: string[]
     allowAllUsers: boolean

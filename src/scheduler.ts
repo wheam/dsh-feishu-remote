@@ -222,18 +222,19 @@ export class OutboundScheduler {
     this.lastDispatch = Date.now()
   }
 
-  private classifyDelay(error: unknown, attempts: number): { retry: boolean; delayMs: number } {
+  private classifyDelay(error: unknown, attempts: number): { retry: boolean; delayMs: number; rateLimited: boolean } {
     const classification = classifyOutboundError(error)
-    if (classification.kind === 'permanent') return { retry: false, delayMs: 0 }
-    if (classification.kind === 'rate-limit') {
+    if (classification.kind === 'permanent') return { retry: false, delayMs: 0, rateLimited: false }
+    const rateLimited = classification.kind === 'rate-limit'
+    if (rateLimited) {
       // 429/限流码：等待 reset 或指数退避，加抖动（docs/05 §1.3 验收）。
       const resetMs = classification.resetMs
       if (resetMs !== undefined && Number.isFinite(resetMs)) {
-        return { retry: true, delayMs: Math.min(resetMs + jitter(300), this.options.backoffMaxMs) }
+        return { retry: true, delayMs: Math.min(resetMs + jitter(300), this.options.backoffMaxMs), rateLimited }
       }
     }
     const exponential = this.options.backoffBaseMs * 2 ** attempts
-    return { retry: true, delayMs: Math.min(exponential + jitter(this.options.backoffBaseMs), this.options.backoffMaxMs) }
+    return { retry: true, delayMs: Math.min(exponential + jitter(this.options.backoffBaseMs), this.options.backoffMaxMs), rateLimited }
   }
 
   private async dispatch(pending: PendingTask): Promise<void> {
@@ -259,7 +260,7 @@ export class OutboundScheduler {
         pending.resolve('closed')
         return
       }
-      const { retry, delayMs } = this.classifyDelay(error, pending.attempts)
+      const { retry, delayMs, rateLimited } = this.classifyDelay(error, pending.attempts)
       if (!retry || pending.attempts >= this.options.maxRetries) {
         const wrapped = error instanceof Error ? error : new Error(String(error))
         this.logger.warn?.(
@@ -273,7 +274,11 @@ export class OutboundScheduler {
       }
       pending.attempts += 1
       pending.notBefore = Date.now() + delayMs
-      if (delayMs > 0) this.pausedUntil = pending.notBefore
+      // M6: only a RATE LIMIT is a channel-wide signal — a single task's
+      // transient failure must not stall every other outbound task. And the
+      // global pause only ever moves FORWARD: a short reset window arriving
+      // after a long one must never shorten the pause already in effect.
+      if (rateLimited && delayMs > 0) this.pausedUntil = Math.max(this.pausedUntil, pending.notBefore)
       this.logger.warn?.('dsh-feishu-remote: outbound task "%s" backing off %dms (attempt %d)',
         task.label, delayMs, pending.attempts + 1)
       this.insert(pending)

@@ -76,6 +76,18 @@ describe('settings namespace (flat ↔ nested)', () => {
     expect(json).not.toContain('"appSecret"')
   })
 
+  it('keeps feishuCliPath out of the GUI schema while patch.yml values still reach the bridge', () => {
+    const json = JSON.stringify(flatSchema.toJSON?.() ?? flatSchema)
+    expect(json).not.toContain('feishuCliPath')
+    // Undeclared keys survive the (non-strict) schema resolve, so the
+    // trusted-admin YAML value is preserved instead of silently dropped.
+    const resolved = flatSchema(flatten({
+      bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', feishuCliPath: '/trusted/lark' }],
+    }))
+    expect(resolved.bots[0]?.feishuCliPath).toBe('/trusted/lark')
+    expect(unflatten(resolved, {}).bots?.[0]?.feishuCliPath).toBe('/trusted/lark')
+  })
+
   it('round-trips bots[] and process capacity without carrying secret values', () => {
     const flat = flatten({
       maxTotalLiveAgents: 9,

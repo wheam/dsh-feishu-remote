@@ -2,15 +2,18 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
 
-function loadClientExports(): Record<string, unknown> {
+function loadClientExports(
+  requireModule: (name: string) => unknown = () => ({}),
+  sandboxConsole: unknown = console,
+): Record<string, unknown> {
   const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
   let loaded: Record<string, unknown> | undefined
   const sandbox = {
-    console,
+    console: sandboxConsole,
     window: {
       __ModuleLoader__: {
         load: (definition: { factory: (require: (name: string) => unknown) => Record<string, unknown> }) => {
-          loaded = definition.factory(() => ({}))
+          loaded = definition.factory(requireModule)
         },
       },
     },
@@ -140,5 +143,82 @@ describe('PersonalAgent onboarding presentation', () => {
     expect(source).toContain('title: "访问控制"')
     expect(source).toContain('title: "角色与模型"')
     expect(source).toContain('title: "连接与高级配置"')
+  })
+})
+
+describe('settings slot registration isolation', () => {
+  type SlotOptions = Record<string, unknown>
+
+  function runApply(throwingSlot: string | undefined) {
+    const registered: SlotOptions[] = []
+    const errors: string[] = []
+    const sandboxConsole = {
+      ...console,
+      error: (...args: unknown[]) => { errors.push(args.map(String).join(' ')) },
+    }
+    // Only createSnapshotStore is reached during apply(); react is never rendered here.
+    const requireModule = (name: string) => name === '@deepseek-ai/dsh-client-runtime/client'
+      ? {
+          createSnapshotStore: (initial: unknown) => {
+            let value = initial
+            return { get: () => value, set: (next: unknown) => { value = next }, subscribe: () => () => undefined }
+          },
+        }
+      : {}
+    const apply = loadClientExports(requireModule, sandboxConsole).apply as (ctx: unknown) => void
+    const scope = {
+      subscribe: () => () => undefined,
+      getSnapshot: () => ({ status: 'ready', writable: true, value: {}, base: {}, user: {}, secrets: [] }),
+      set: async () => undefined,
+      unset: async () => undefined,
+    }
+    const ctx = {
+      effect: (setup: () => unknown) => { setup(); return () => undefined },
+      locale: { register: () => undefined, bind: () => (key: string) => key },
+      settingsScope: { bind: () => scope },
+      // isLoopback:false keeps both controllers' mount() off their polling timers.
+      connection: { isLoopback: false, rpc: { call: async () => ({ ok: false, error: { message: 'offline' } }) } },
+      slots: {
+        inject: (name: string, register: () => unknown) => {
+          if (name === throwingSlot) throw new Error(`slot "${name}" is unavailable`)
+          return register()
+        },
+        register: (options: SlotOptions) => { registered.push(options); return () => undefined },
+      },
+    }
+    apply(ctx)
+    return { registered, errors, names: registered.map(options => options.name) }
+  }
+
+  it('registers both settings slots with their required keyed/list identifiers', () => {
+    const { registered, names, errors } = runApply(undefined)
+    expect(names).toEqual(['settings.plugin.item', 'settings.section'])
+    // rc.7+ keyed slot contract (docs/11): the plugin item must carry options.key.
+    expect(registered[0]).toMatchObject({ name: 'settings.plugin.item', key: 'feishu-remote' })
+    expect(registered[1]).toMatchObject({ name: 'settings.section', id: 'feishu-remote', order: 18 })
+    expect(errors).toEqual([])
+  })
+
+  it('still registers settings.section when the plugin item slot throws', () => {
+    const { names, errors } = runApply('settings.plugin.item')
+    expect(names).toEqual(['settings.section'])
+    expect(errors.some(line => line.includes('settings.plugin.item'))).toBe(true)
+  })
+
+  it('still registers settings.plugin.item when the section slot throws', () => {
+    const { names, errors } = runApply('settings.section')
+    expect(names).toEqual(['settings.plugin.item'])
+    expect(errors.some(line => line.includes('settings.section'))).toBe(true)
+  })
+
+  it('uses a short nav label for the section so the 800px dialog does not truncate it', () => {
+    const { registered } = runApply(undefined)
+    const label = registered[1]!.label as () => string
+    expect(label()).toBe('settings.navLabel')
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('"settings.navLabel": "飞书遥控"')
+    expect(source).toContain('"settings.navLabel": "Feishu Remote"')
+    // The in-page heading keeps the long title.
+    expect(source).toContain('children: t("settings.title")')
   })
 })

@@ -119,6 +119,19 @@ const WORKING_REACTION_EMOJI = 'Typing'
 /** Bound Feishu group-name lookups while still converging after a rename. */
 const SESSION_GROUP_METADATA_TTL_MS = 60_000
 
+/**
+ * H2 idle-session eviction: a live Feishu session pins a live Agent, and
+ * `maxLiveAgents` / `maxTotalLiveAgents` count those pins. Without eviction the
+ * count only ever grows and the cap turns into a permanent lock. Sessions that
+ * have been idle this long — no running turn, no queued/claimed work, no
+ * pending approval or Workspace flow — are retired; the `originKey → workspace`
+ * binding lives in the persisted state, so the next message rebuilds the
+ * session transparently.
+ */
+const IDLE_SESSION_TTL_MS = 30 * 60_000
+/** Upper bound on how coarse the idle sweep may get (also its default cadence). */
+const IDLE_SWEEP_MAX_INTERVAL_MS = 60_000
+
 /** Slash commands that must remain usable while a Workspace prompt is open. */
 const BRIDGE_COMMAND_NAMES = new Set([
   'start', 'help', 'workspace', 'new', 'stop', 'approve', 'reject',
@@ -175,8 +188,17 @@ interface BridgeSession {
   activeReply?: { replyTo?: string; replyInThread: boolean }
   /** In-flight turn finalizer (terminal card + archive). Switches await it so old work never crosses a swap. */
   pendingFinalize?: Promise<void>
+  /**
+   * Number of finalizers still running. `pendingFinalize` is a CHAIN that is
+   * never cleared once set, so it cannot answer "is anything in flight right
+   * now?" — the idle evictor needs that answer and this counter gives it
+   * without changing the chain's switch-guard semantics (H2).
+   */
+  pendingFinalizeCount: number
   /** Immutable profile loaded for this live handle. */
   profile?: ProfileSnapshot
+  /** Wall clock of the last observed activity — the idle-eviction watermark (H2). */
+  lastActiveAt: number
 }
 
 interface PendingApproval {
@@ -337,6 +359,10 @@ export class FeishuRemoteBridge {
       profileLoader?: ProfileLoader
       reserveGlobalAgent?: (options: { replacing: boolean }) => { release(): void }
       globalAgentStatus?: () => { live: number; provisional: number; max: number }
+      /** Idle-session eviction TTL (H2). <= 0 disables eviction; short in tests. */
+      idleSessionTtlMs?: number
+      /** Sweep cadence; defaults to min(ttl, 60s). Short in tests. */
+      idleSweepIntervalMs?: number
     } = {},
   ) {
     this.channelFactory = options.channelFactory ?? DEFAULT_CHANNEL_FACTORY
@@ -346,6 +372,11 @@ export class FeishuRemoteBridge {
     this.injectedContextProvider = options.contextProvider
     this.sessionGroupMetadataTtlMs = Math.max(0, options.sessionGroupMetadataTtlMs ?? SESSION_GROUP_METADATA_TTL_MS)
     this.sessionGroupMetadataNow = options.sessionGroupMetadataNow ?? Date.now
+    this.idleSessionTtlMs = options.idleSessionTtlMs ?? IDLE_SESSION_TTL_MS
+    this.idleSweepIntervalMs = Math.max(
+      1,
+      options.idleSweepIntervalMs ?? Math.min(this.idleSessionTtlMs, IDLE_SWEEP_MAX_INTERVAL_MS),
+    )
     this.profileLoader = options.profileLoader ?? new ProfileLoader()
     this.reserveGlobalAgent = options.reserveGlobalAgent ?? (() => ({ release() {} }))
     this.globalAgentStatus = options.globalAgentStatus ?? (() => ({ live: this.agents.size, provisional: this.liveReservations, max: 0 }))
@@ -369,6 +400,9 @@ export class FeishuRemoteBridge {
   private readonly injectedContextProvider?: FeishuContextProvider
   private readonly sessionGroupMetadataTtlMs: number
   private readonly sessionGroupMetadataNow: () => number
+  private readonly idleSessionTtlMs: number
+  private readonly idleSweepIntervalMs: number
+  private idleSweepTimer?: ReturnType<typeof setInterval>
 
   // ---------------------------------------------------------------- guards
 
@@ -436,7 +470,9 @@ export class FeishuRemoteBridge {
         // 「敲键盘」reaction：agent 开始工作即给用户消息一个即时反馈
         // （装饰性，失败静默——绝不能影响回合本体）。
         if (this.config.workingReaction) {
-          void this.addWorkingReaction(entry.progress, reply.triggerMessageId)
+          void this.addWorkingReaction(entry.progress, reply.triggerMessageId).catch(error => {
+            this.logger.warn('添加「敲键盘」表情回复失败（装饰性，忽略）：%s', errorMessage(error))
+          })
         }
       }
     }))
@@ -455,7 +491,14 @@ export class FeishuRemoteBridge {
       return this.askApproval(entry, request)
     }, { prepend: true }))
 
-    void this.connectLoop()
+    this.startIdleSweep()
+
+    // connectLoop never rejects by contract; the catch is the belt-and-braces
+    // guard that keeps an unforeseen throw off the process-wide unhandled
+    // rejection path (D1: the plugin may never take down `dsh web`).
+    void this.connectLoop().catch(error => {
+      this.logger.error('飞书连接循环异常退出：%s', errorMessage(error))
+    })
   }
 
   /** Secret-free lifecycle snapshot for the local onboarding health check. */
@@ -566,6 +609,85 @@ export class FeishuRemoteBridge {
   /** Provisional probes acquired before a commit decision — teardown owns their disposal (review #8 finding 1). */
   private readonly provisionalHandles = new Set<AgentHandle>()
 
+  // ------------------------------------------------------- idle eviction (H2)
+
+  /** Refresh a session's idle watermark; unknown keys are ignored. */
+  private touchSession(key: string): void {
+    const entry = this.sessions.get(key)
+    if (entry !== undefined) entry.lastActiveAt = Date.now()
+  }
+
+  private startIdleSweep(): void {
+    if (this.idleSessionTtlMs <= 0 || this.idleSweepTimer !== undefined) return
+    const timer = setInterval(() => {
+      // A sweep must never escape as an unhandled throw on the timer stack.
+      try {
+        this.sweepIdleSessions()
+      } catch (error) {
+        this.logger.warn('空闲会话回收失败（不影响现有会话）：%s', errorMessage(error))
+      }
+    }, this.idleSweepIntervalMs)
+    // Never keep the host process alive just for the sweep.
+    ;(timer as { unref?: () => void }).unref?.()
+    this.idleSweepTimer = timer
+  }
+
+  /**
+   * A session is evictable only when nothing at all is riding on it: the agent
+   * is idle with an empty inbox, we hold no unclaimed messages, no turn card is
+   * open, no finalizer is in flight, no approval or Workspace card is pending,
+   * no creation is racing, and its origin queue is drained.
+   */
+  private isEvictable(entry: BridgeSession, now: number): boolean {
+    if (now - entry.lastActiveAt < this.idleSessionTtlMs) return false
+    if (entry.handle.agent.status !== 'idle') return false
+    if (entry.handle.agent.inbox?.hasPending === true) return false
+    if (entry.pendingClaims.size > 0) return false
+    // A finished turn leaves its terminal progress snapshot in place; only a
+    // turn still in flight (or a finalizer still writing cards) blocks eviction.
+    if (entry.progress !== undefined && !entry.progress.terminal) return false
+    if (entry.pendingFinalizeCount > 0) return false
+    if (this.creating.has(entry.key) || this.originQueues.has(entry.key)) return false
+    if (this.pendingWorkspaces.has(entry.key)) return false
+    for (const pending of this.pendingApprovals.values()) {
+      if (pending.sessionId === entry.sessionId || pending.entry === entry) return false
+    }
+    return true
+  }
+
+  /**
+   * Retire sessions idle past the TTL so the live-agent cap can never become a
+   * permanent lock. Only the in-memory pin is dropped — the persisted
+   * `originKey → workspaceId` binding stays, so the next Feishu message
+   * transparently resumes the same DSH Session.
+   */
+  private sweepIdleSessions(): void {
+    if (this.stopped || this.idleSessionTtlMs <= 0) return
+    const now = Date.now()
+    for (const entry of [...this.sessions.values()]) {
+      if (this.sessions.get(entry.key) !== entry) continue
+      if (!this.isEvictable(entry, now)) continue
+      this.evictSession(entry)
+    }
+  }
+
+  private evictSession(entry: BridgeSession): void {
+    if (entry.progressTimer !== undefined) {
+      clearTimeout(entry.progressTimer)
+      entry.progressTimer = undefined
+    }
+    this.sessions.delete(entry.key)
+    if (this.agents.get(entry.sessionId) === entry) this.agents.delete(entry.sessionId)
+    this.logger.info('回收空闲飞书会话（超过 %dms 无活动）：origin=%s session=%s', this.idleSessionTtlMs, entry.key, entry.sessionId)
+    // Same retire/dispose path a /new or /workspace swap uses: teardown can
+    // still drain the raw disposal promise through retiringHandles.
+    try {
+      this.retireHandle(entry.handle)
+    } catch (error) {
+      this.logger.warn('空闲会话释放失败：%s', errorMessage(error))
+    }
+  }
+
   private wireChannel(channel: LarkChannelLike): () => void {
     const off: Array<() => void> = []
     off.push(channel.on('message', message => {
@@ -584,7 +706,13 @@ export class FeishuRemoteBridge {
         this.logger.error('卡片回调处理失败：%s', errorMessage(error))
       })
     }))
-    off.push(channel.on('reaction', event => this.onReaction(event)))
+    off.push(channel.on('reaction', event => {
+      try {
+        this.onReaction(event)
+      } catch (error) {
+        this.logger.error('表情回复处理失败：%s', errorMessage(error))
+      }
+    }))
     off.push(channel.on('reconnecting', () => {
       this.connected = false
       this.logger.warn('飞书长连接正在重连')
@@ -611,13 +739,20 @@ export class FeishuRemoteBridge {
   private async connectLoop(): Promise<void> {
     let attempt = 0
     while (!this.stopped) {
-      const raw = this.channelFactory(this.config)
-      const channel = this.wrapChannel(raw, this.lifetimeAbort?.signal ?? new AbortController().signal)
+      // Construction is INSIDE the try: a synchronous throw from the SDK
+      // channel constructor (bad credentials, missing optional dependency)
+      // must degrade to the normal backoff, never reject connectLoop() and
+      // take down the whole dsh web process through Node's
+      // --unhandled-rejections=throw default (D1 hard line (a)).
       const connectionAbort = new AbortController()
       this.connectionAbort = connectionAbort
-      const unwire = this.wireChannel(channel)
-      this.channel = channel
+      let channel: LarkChannelLike | undefined
+      let unwire: (() => void) | undefined
       try {
+        const raw = this.channelFactory(this.config)
+        channel = this.wrapChannel(raw, this.lifetimeAbort?.signal ?? new AbortController().signal)
+        unwire = this.wireChannel(channel)
+        this.channel = channel
         await channel.connect()
         this.connected = true
         this.terminalFailure = false
@@ -628,8 +763,10 @@ export class FeishuRemoteBridge {
         this.logger.warn('飞书长连接失败：%s', errorMessage(error))
       } finally {
         this.connected = false
-        unwire()
-        if (this.channel === channel) this.channel = undefined
+        // Skip unwire/disconnect for the stages that never ran: a channel
+        // that was never constructed has nothing to unwire or disconnect.
+        unwire?.()
+        if (channel !== undefined && this.channel === channel) this.channel = undefined
         connectionAbort.abort()
         await this.disconnectBounded(channel)
       }
@@ -685,6 +822,10 @@ export class FeishuRemoteBridge {
   private async teardown(): Promise<void> {
     this.stopped = true
     this.started = false
+    if (this.idleSweepTimer !== undefined) {
+      clearInterval(this.idleSweepTimer)
+      this.idleSweepTimer = undefined
+    }
     this.lifetimeAbort?.abort()
     this.connectionAbort?.abort()
     this.connected = false
@@ -845,13 +986,17 @@ export class FeishuRemoteBridge {
       && !this.config.allowedChatIds.includes(message.chatId)
     ) {
       this.logger.warn('已拒绝群聊（不在显式 allowedChatIds 中）：chat=%s sender=%s', message.chatId, diagnosticId(message.senderId))
-      void this.safeSend(message.chatId, { markdown: '该群不在本机器人的限定群列表中。' }, message)
+      void this.safeSend(message.chatId, { markdown: '该群不在本机器人的限定群列表中。' }, message).catch(error => {
+        this.logger.warn('发送群限定提示失败：%s', errorMessage(error))
+      })
       return
     }
     // Chat-mode lookup is asynchronous, so route it outside the SDK callback
     // budget. The actual per-origin queue is chosen only after Feishu tells us
     // whether this chat is an ordinary group or a topic chat.
-    void this.routeMessage(message)
+    void this.routeMessage(message).catch(error => {
+      this.logger.error('消息路由失败：%s', errorMessage(error))
+    })
   }
 
   private async routeMessage(message: NormalizedMessage): Promise<void> {
@@ -863,7 +1008,9 @@ export class FeishuRemoteBridge {
       // topic traffic; only an explicit @ outside a topic gets the usage hint.
       if (!message.mentionedBot) return
       this.logger.warn('已拒绝话题群内未归属话题的消息：chat=%s message=%s', message.chatId, message.messageId)
-      void this.safeSend(message.chatId, { markdown: '请在话题内 @我 发送任务。' }, message)
+      void this.safeSend(message.chatId, { markdown: '请在话题内 @我 发送任务。' }, message).catch(error => {
+        this.logger.warn('发送话题使用提示失败：%s', errorMessage(error))
+      })
       return
     }
     // Ordinary groups are deliberately mention-only on EVERY turn. Their
@@ -1033,12 +1180,23 @@ export class FeishuRemoteBridge {
   /** Per-origin serial control queue (docs/05 §2.8): FIFO messages + same-lock commands/card actions. */
   private enqueueOrigin(key: string, work: () => Promise<void>): void {
     const previous = this.originQueues.get(key) ?? Promise.resolve()
+    this.touchSession(key)
     const next = previous.catch(() => undefined).then(work).catch(error => {
       this.logger.error('控制队列任务失败（origin=%s）：%s', key, errorMessage(error))
     })
     this.originQueues.set(key, next)
     void next.then(() => {
       if (this.originQueues.get(key) === next) this.originQueues.delete(key)
+      // The unit of work just finished: refresh THIS origin's watermark, then
+      // reclaim anything that has been idle past the TTL (H2).
+      this.touchSession(key)
+      try {
+        this.sweepIdleSessions()
+      } catch (error) {
+        this.logger.warn('空闲会话回收失败（不影响现有会话）：%s', errorMessage(error))
+      }
+    }).catch(error => {
+      this.logger.error('控制队列收尾失败（origin=%s）：%s', key, errorMessage(error))
     })
   }
 
@@ -1584,6 +1742,7 @@ export class FeishuRemoteBridge {
         entry.progress = undefined
         entry.pendingPrompt = '飞书任务'
         entry.lastSeq = -1
+        entry.lastActiveAt = Date.now()
         entry.activeTurnOrigin = undefined
         entry.activeReply = undefined
         entry.pendingClaims.clear()
@@ -1849,6 +2008,7 @@ export class FeishuRemoteBridge {
         entry.sessionId = String(probe.agent.id)
         entry.progress = undefined
         entry.lastSeq = -1
+        entry.lastActiveAt = Date.now()
         entry.activeTurnOrigin = undefined
         entry.activeReply = undefined
         entry.pendingClaims.clear()
@@ -1914,6 +2074,7 @@ export class FeishuRemoteBridge {
         entry.progress = undefined
         entry.pendingPrompt = '飞书任务'
         entry.lastSeq = -1
+        entry.lastActiveAt = Date.now()
         entry.activeTurnOrigin = undefined
         entry.activeReply = undefined
         entry.pendingClaims.clear()
@@ -2055,6 +2216,8 @@ export class FeishuRemoteBridge {
         sessionId: String(handle.agent.id),
         pendingPrompt: '飞书任务',
         lastSeq: -1,
+        lastActiveAt: Date.now(),
+        pendingFinalizeCount: 0,
         pendingClaims: new Map(),
         turnOrigin: new Map(),
         turnReply: new Map(),
@@ -2363,6 +2526,9 @@ export class FeishuRemoteBridge {
     if (entry === undefined) return
     if (event.seq <= entry.lastSeq) return // watermark dedup
     entry.lastSeq = event.seq
+    // GUI-driven turns never touch an origin queue; session events keep their
+    // Feishu mirror alive so the idle sweep cannot retire an active session.
+    entry.lastActiveAt = Date.now()
     switch (event.type) {
       case 'turn/start': {
         // Exact ledger: the claim event may arrive AFTER turn/start (rc.6 emits
@@ -2447,14 +2613,21 @@ export class FeishuRemoteBridge {
         progress.outcomeDetail = terminal.detail
         progress.terminalText = this.terminalText(progress, terminal.outcome)
         // 移除「敲键盘」reaction（装饰性，失败静默；残留无害）。
-        void this.removeWorkingReaction(progress)
+        void this.removeWorkingReaction(progress).catch(error => {
+          this.logger.warn('移除「敲键盘」表情回复失败（装饰性，忽略）：%s', errorMessage(error))
+        })
         // Track the finalizer as a CHAIN so switches/stop await every
         // predecessor too: the old turn's card work must never read a swapped
         // session (review #4 F1 + review #5 F1: no replaceable slot).
+        entry.pendingFinalizeCount += 1
         const chain = (entry.pendingFinalize ?? Promise.resolve()).then(() => (
           this.finalizeTurn(entry, progress)
         )).catch(error => {
           this.logger.error('发送完成卡片失败：%s', errorMessage(error))
+        }).finally(() => {
+          entry.pendingFinalizeCount = Math.max(0, entry.pendingFinalizeCount - 1)
+          // The finalizer is the true end of the turn: start the idle clock here.
+          entry.lastActiveAt = Date.now()
         })
         entry.pendingFinalize = chain
         break
@@ -2834,6 +3007,8 @@ export class FeishuRemoteBridge {
           // 发卡失败 → 立即 unavailable（docs/05 §2.3 断线状态机）。
           this.settleApproval(pending, 'unavailable')
         }
+      }).catch(error => {
+        this.logger.error('审批卡投递失败：%s', errorMessage(error))
       })
     })
   }
@@ -2856,8 +3031,12 @@ export class FeishuRemoteBridge {
           // Terminal card update failed permanently → fall back to a fresh text notice.
           void this.enqueueSend(pending.entry, {
             markdown: outcome === 'allowed-once' ? '✅ 审批已允许（原卡片更新失败）。' : `⏹️ 审批已结算：${outcome}`,
-          }, true, this.replyFor(pending.entry))
+          }, true, this.replyFor(pending.entry)).catch(error => {
+            this.logger.warn('审批结算文字兜底发送失败：%s', errorMessage(error))
+          })
         }
+      }).catch(error => {
+        this.logger.error('审批终态卡更新失败：%s', errorMessage(error))
       })
     }
     pending.resolve(outcome)

@@ -1137,6 +1137,7 @@ window.__ModuleLoader__.load({
 
 		const en = {
 			"settings.title": "Feishu Remote (dsh-feishu-remote)",
+			"settings.navLabel": "Feishu Remote",
 			"settings.description": "Control the running DeepSeek Harness from a Feishu bot — thread-per-session, approval cards, fail-closed sender allowlist.",
 			"settings.expand": "Expand", "settings.collapse": "Collapse", "settings.unsaved": "Unsaved changes",
 			"settings.readOnly": "This deployment is read-only: settings cannot be changed from the GUI.",
@@ -1207,6 +1208,7 @@ window.__ModuleLoader__.load({
 
 		const zh = {
 			"settings.title": "飞书遥控（dsh-feishu-remote）",
+			"settings.navLabel": "飞书遥控",
 			"settings.description": "用飞书机器人操控正在运行的 DeepSeek Harness：话题级会话、审批卡片、fail-closed 发送者白名单。",
 			"settings.expand": "展开", "settings.collapse": "收起", "settings.unsaved": "有未保存的修改",
 			"settings.readOnly": "当前部署为只读：GUI 无法修改设置。",
@@ -1434,12 +1436,18 @@ window.__ModuleLoader__.load({
 						hooks: { ...settings.hooks, ...onboarding.hooks, ...bots.hooks }
 					};
 				};
-				ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
-					name: "settings.plugin.item",
-					key: SETTINGS_NS,
-					locale: NS,
-					inject: injection
-				}, FeishuRemoteSettingsCard));
+				// 两处 slot 注册各自独立 try/catch（docs/11 防线）：任何一处契约失效
+				// 都只影响它自己的入口，既不连累另一处，也不拖垮宿主界面。
+				try {
+					ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
+						name: "settings.plugin.item",
+						key: SETTINGS_NS,
+						locale: NS,
+						inject: injection
+					}, FeishuRemoteSettingsCard));
+				} catch (error) {
+					console.error("[dsh-feishu-remote] slot \"settings.plugin.item\" 注册失败（折叠卡片不显示，不影响设置页分区与宿主界面）：", error);
+				}
 				// 设置页顶层分区（左侧栏独立一项，与「文件提及」同级）
 				try {
 					const t = ctx.locale.bind(NS);
@@ -1447,12 +1455,13 @@ window.__ModuleLoader__.load({
 						name: "settings.section",
 						id: "feishu-remote",
 						order: 18,
-						label: () => t("settings.title"),
+						// 左栏导航用短标签，避免 800px 设置弹窗把长标题截成「飞书遥控（dsh-…」。
+						label: () => t("settings.navLabel"),
 						locale: NS,
 						inject: injection
 					}, FeishuRemoteSection));
 				} catch (error) {
-					console.error("[dsh-feishu-remote] 设置页分区注册失败（不影响折叠卡片）：", error);
+					console.error("[dsh-feishu-remote] slot \"settings.section\" 注册失败（左栏分区不显示，不影响折叠卡片与宿主界面）：", error);
 				}
 			} catch (error) {
 				console.error("[dsh-feishu-remote] 设置卡注册失败（卡片将不显示，宿主界面不受影响）：", error);

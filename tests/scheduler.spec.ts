@@ -351,3 +351,93 @@ describe('OutboundScheduler shutdown grace (Codex review #5 F2)', () => {
     expect(elapsed).toBeLessThan(2_000)         // but did not hang forever
   })
 })
+
+/**
+ * M6: the channel-wide pause is a RATE-LIMIT signal, not a per-task backoff,
+ * and it may only ever move forward. Before the fix a single transient socket
+ * error stalled every other outbound task, and a short 429 window arriving
+ * after a long one shortened the pause already in effect.
+ */
+describe('OutboundScheduler rate-limit pause (M6)', () => {
+  /** The channel-wide pause is private state; this invariant is exactly what M6 is about. */
+  const pausedUntil = (scheduler: OutboundScheduler): number =>
+    (scheduler as unknown as { pausedUntil: number }).pausedUntil
+
+  it('does not pause the whole channel for a non-rate-limit transient failure', async () => {
+    const scheduler = new OutboundScheduler({
+      concurrency: 1, minIntervalMs: 0, backoffBaseMs: 40, backoffMaxMs: 200, maxRetries: 3,
+    })
+    let flakyCalls = 0
+    const flaky = scheduler.enqueue({
+      kind: 'send', chatId: 'oc_1', label: 'flaky-socket',
+      run: async () => {
+        flakyCalls += 1
+        if (flakyCalls === 1) throw new Error('socket hang up') // transient, not 429
+      },
+    })
+    // A healthy task queued behind the failure must not inherit its backoff.
+    const startedAt = Date.now()
+    let healthyAt = 0
+    const healthy = scheduler.enqueue({
+      kind: 'send', chatId: 'oc_2', label: 'healthy',
+      run: async () => { healthyAt = Date.now() },
+    })
+
+    expect(await healthy).toBe('sent')
+    expect(healthyAt - startedAt).toBeLessThan(40) // never waited out the flaky task's backoff
+    expect(pausedUntil(scheduler)).toBe(0) // no channel-wide pause was armed
+    expect(await flaky).toBe('sent')
+    expect(flakyCalls).toBe(2)
+    scheduler.close()
+    await scheduler.shutdown()
+  })
+
+  it('arms the channel-wide pause for a rate limit', async () => {
+    const scheduler = new OutboundScheduler({
+      concurrency: 1, minIntervalMs: 0, backoffBaseMs: 20, backoffMaxMs: 60, maxRetries: 3,
+    })
+    let calls = 0
+    const result = await scheduler.enqueue({
+      kind: 'send', chatId: 'oc_1', label: 'rate-limited',
+      run: async () => {
+        calls += 1
+        if (calls === 1) throw feishuError(0, 429)
+      },
+    })
+    expect(result).toBe('sent')
+    expect(pausedUntil(scheduler)).toBeGreaterThan(0)
+    scheduler.close()
+    await scheduler.shutdown()
+  })
+
+  it('never shortens a rate-limit pause that is already in effect', async () => {
+    const scheduler = new OutboundScheduler({
+      concurrency: 1, minIntervalMs: 0, backoffBaseMs: 5, backoffMaxMs: 50, maxRetries: 3,
+    })
+    let calls = 0
+    let seeded = 0
+    let observed = -1
+    let secondAttemptAt = 0
+    const result = await scheduler.enqueue({
+      kind: 'send', chatId: 'oc_1', label: 'short-429-after-long-429',
+      run: async () => {
+        calls += 1
+        if (calls === 1) {
+          // Stand in for a long 429 window an earlier task already armed.
+          seeded = Date.now() + 300
+          ;(scheduler as unknown as { pausedUntil: number }).pausedUntil = seeded
+          // A SHORT backoff (no reset header) must not roll the pause back.
+          throw feishuError(0, 429)
+        }
+        secondAttemptAt = Date.now()
+        observed = pausedUntil(scheduler)
+      },
+    })
+    expect(result).toBe('sent')
+    expect(calls).toBe(2)
+    expect(observed).toBe(seeded) // Math.max kept the longer window
+    expect(secondAttemptAt).toBeGreaterThanOrEqual(seeded) // and it was honored
+    scheduler.close()
+    await scheduler.shutdown()
+  })
+})
