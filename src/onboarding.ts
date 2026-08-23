@@ -18,6 +18,7 @@ import {
   type AppAddons,
 } from '@larksuiteoapi/node-sdk'
 import * as QRCode from 'qrcode'
+import { pluginRpcFailure, type PluginRpcFailure } from './admin.js'
 import { validateMultiBotConfig } from './config.js'
 import { bounded, redactSecrets } from './security.js'
 import { SETTINGS_NAMESPACE, type FlatSettings } from './settings.js'
@@ -135,12 +136,39 @@ interface RpcSuccess<T> {
   value: T
 }
 
-type RpcFailure =
-  | { ok: false; error: { code: 'bad-request'; message: string; details: { issues: [] } } }
-  | { ok: false; error: { code: 'cancelled'; message: string; details: Record<string, never> } }
-  | { ok: false; error: { code: 'internal'; message: string; details: Record<string, never> } }
+/**
+ * Onboarding shares the admin RPC failure body (see `PluginRpcFailure`): a
+ * STABLE `code` the browser maps to its own copy, plus secondary `message`
+ * text, carried both flat and inside the Host error envelope. `failure.code`
+ * is passed through as-is (audit M5) — collapsing `read_only` / `busy` /
+ * `duplicate_app` / … into `internal` left the GUI unable to tell the user
+ * what to do next. Only a genuinely unknown exception becomes `internal`.
+ */
+type RpcResult<T> = RpcSuccess<T> | PluginRpcFailure
 
-type RpcResult<T> = RpcSuccess<T> | RpcFailure
+/** External (SDK/host) error codes `failureFor()` recognises and re-labels. */
+const KNOWN_EXTERNAL_CODES = new Set([
+  'access_denied', 'expired_token', 'abort', 'connection_failed', 'connection_timeout',
+])
+
+/**
+ * RPC-boundary aliases: the internal status codes stay untouched (they also
+ * drive `OnboardingStatus.phase`), while the wire uses the vocabulary the
+ * client maps (docs/18 §5 / batch-3 contract).
+ */
+const RPC_CODE_ALIASES: Record<string, string> = {
+  abort: 'cancelled',
+  expired_token: 'expired',
+  bad_request: 'bad_request',
+}
+
+function rpcFailure(error: unknown, failure: OnboardingFailure): PluginRpcFailure {
+  const external = externalErrorCode(error)
+  const known = error instanceof OnboardingError
+    || (external !== undefined && KNOWN_EXTERNAL_CODES.has(external))
+  const code = known ? RPC_CODE_ALIASES[failure.code] ?? failure.code : 'internal'
+  return pluginRpcFailure(code, failure.message, { retryable: failure.retryable })
+}
 
 type RegisterResult = Awaited<ReturnType<typeof registerApp>>
 
@@ -656,7 +684,7 @@ export class PersonalAgentOnboardingService {
 
   async handleRpc(endpoint: string, payload: unknown, signal: AbortSignal): Promise<RpcResult<OnboardingStatus>> {
     if (signal.aborted) {
-      return { ok: false, error: { code: 'cancelled', message: 'request cancelled', details: {} } }
+      return pluginRpcFailure('cancelled', '请求已取消。', { retryable: true })
     }
     try {
       switch (endpoint) {
@@ -681,27 +709,10 @@ export class PersonalAgentOnboardingService {
         case 'onboarding/retry':
           return { ok: true, value: await this.retryConnection() }
         default:
-          return {
-            ok: false,
-            error: { code: 'bad-request', message: `unknown endpoint ${endpoint}`, details: { issues: [] } },
-          }
+          return pluginRpcFailure('bad_request', `unknown endpoint ${endpoint}`)
       }
     } catch (error) {
-      const failure = failureFor(error)
-      if (error instanceof OnboardingError && error.code === 'bad_request') {
-        return {
-          ok: false,
-          error: { code: 'bad-request', message: failure.message, details: { issues: [] } },
-        }
-      }
-      return {
-        ok: false,
-        error: {
-          code: 'internal',
-          message: failure.message,
-          details: {},
-        },
-      }
+      return rpcFailure(error, failureFor(error))
     }
   }
 

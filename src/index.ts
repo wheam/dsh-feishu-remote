@@ -27,11 +27,13 @@ import {
 } from './onboarding.js'
 import {
   SETTINGS_NAMESPACE,
+  findForbiddenSettingsKeys,
   flatSchema,
   flatten,
-  settingsPurgeOps,
+  settingsPurgePlan,
   unflatten,
   type FlatSettings,
+  type SettingsGuiState,
 } from './settings.js'
 
 export * from './bridge.js'
@@ -84,26 +86,90 @@ export const inject = [
 
 export const Config = ConfigSchema
 
+function settingsDescriptor(ctx: Context): { revision: number; base?: unknown; value?: unknown; user?: unknown } | undefined {
+  if (typeof ctx.settings?.describe !== 'function') return undefined
+  return ctx.settings.describe({ redactSecrets: true })
+    .find(item => String(item.ns) === String(SETTINGS_NAMESPACE)) as never
+}
+
 /**
- * Drop host-only keys and any stale secret value from the persisted settings
- * user layer. Exported for tests; safe to call repeatedly — it writes only
- * when the layer actually carries one of those keys.
+ * Drop the stale secret value and the REDUNDANT host-only keys from the
+ * persisted settings user layer, then VERIFY the result (Codex batch-3 B2).
+ *
+ * Three things changed against the previous best-effort version:
+ *
+ * 1. A read-only provider or a failed write no longer passes silently: the
+ *    returned {@link SettingsGuiState} tells the GUI to fail closed, because
+ *    the descriptor the browser receives still carries the offending keys.
+ * 2. An ACK is not proof — the descriptor is re-read and re-scanned.
+ * 3. A host-only path the trusted entry config does NOT declare is KEPT, not
+ *    deleted (audit M1): on a pre-f774159 install it is the only copy of that
+ *    bot's state-file location. The operator is told to move it into
+ *    cordis.patch.yml, and until then the GUI stays fail-closed.
+ *
+ * The bridge is never blocked by any of this. Exported for tests; safe to
+ * call repeatedly — it writes only when the layer actually carries a key it
+ * is allowed to remove.
  */
-export async function purgeForbiddenSettingsKeys(ctx: Context): Promise<void> {
+export async function purgeForbiddenSettingsKeys(
+  ctx: Context,
+  entry: BridgeConfig = {},
+): Promise<SettingsGuiState> {
+  const writable = ctx.settings?.writable === true
+  let purgeFailed = false
   try {
-    if (!ctx.settings.writable) return
-    const descriptor = ctx.settings.describe({ redactSecrets: true })
-      .find(item => String(item.ns) === String(SETTINGS_NAMESPACE))
-    if (descriptor === undefined) return
-    const ops = settingsPurgeOps((descriptor as { user?: unknown }).user)
-    if (ops.length === 0) return
-    await ctx.settings.mutate(SETTINGS_NAMESPACE, ops, descriptor.revision)
-    ctx.logger?.info?.('dsh-feishu-remote: 已从设置用户层清除主机专属字段（statePath/inboundDir/feishuCliPath/appSecret）')
+    const descriptor = settingsDescriptor(ctx)
+    if (descriptor === undefined) return { safe: false, reason: 'purge_failed' }
+    const plan = settingsPurgePlan(descriptor.user, entry)
+    for (const item of plan.retained) {
+      ctx.logger?.warn?.(
+        'dsh-feishu-remote: 设置用户层仍保留主机专属字段 %s（%s），未自动删除以免丢失该值。'
+        + '请把它写进 cordis.patch.yml 后再从设置里删除；在此之前设置界面将保持只读。',
+        item.key,
+        item.scope,
+      )
+    }
+    if (writable && plan.ops.length > 0) {
+      try {
+        await ctx.settings.mutate(SETTINGS_NAMESPACE, plan.ops, descriptor.revision)
+        ctx.logger?.info?.('dsh-feishu-remote: 已从设置用户层清除可安全清除的主机专属字段与遗留 appSecret')
+      } catch (error) {
+        purgeFailed = true
+        ctx.logger?.warn?.(
+          'dsh-feishu-remote: 清除设置用户层的主机专属字段失败（不影响运行，设置界面将保持只读）：%s',
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    }
   } catch (error) {
     ctx.logger?.warn?.(
-      'dsh-feishu-remote: 清除设置用户层的主机专属字段失败（不影响运行）：%s',
+      'dsh-feishu-remote: 检查设置用户层失败（不影响运行，设置界面将保持只读）：%s',
       error instanceof Error ? error.message : String(error),
     )
+    return { safe: false, reason: 'purge_failed' }
+  }
+
+  // Verification pass: only a clean descriptor may unlock the GUI.
+  let offending: string[]
+  try {
+    const descriptor = settingsDescriptor(ctx)
+    if (descriptor === undefined) return { safe: false, reason: 'purge_failed' }
+    offending = [...new Set([
+      ...findForbiddenSettingsKeys(descriptor.base),
+      ...findForbiddenSettingsKeys(descriptor.value),
+      ...findForbiddenSettingsKeys(descriptor.user),
+    ])]
+  } catch {
+    return { safe: false, reason: 'purge_failed' }
+  }
+  if (offending.length === 0) return { safe: true }
+  ctx.logger?.warn?.(
+    'dsh-feishu-remote: 设置层仍包含主机专属字段 %s，设置界面将保持只读（fail-closed）',
+    offending.join('、'),
+  )
+  return {
+    safe: false,
+    reason: purgeFailed ? 'purge_failed' : writable ? 'user_layer_dirty' : 'read_only_dirty',
   }
 }
 
@@ -144,7 +210,7 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
    * straight to the browser. Purge them once at startup. Best-effort: a
    * read-only provider or a racing write must never take the plugin down.
    */
-  await purgeForbiddenSettingsKeys(ctx)
+  const guiState = await purgeForbiddenSettingsKeys(ctx, config)
 
   /**
    * One commit. The generation is allocated by sync() BEFORE the mutex
@@ -222,7 +288,7 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
     getBridgeHealth: appId => manager.healthForApp(appId),
     waitForBridge,
   })
-  const admin = new FeishuAdminService(ctx, settings, manager, config)
+  const admin = new FeishuAdminService(ctx, settings, manager, config, guiState)
   ctx.effect(() => () => onboarding.stop(), 'dsh-feishu-remote onboarding lifecycle')
   try {
     ctx.connection.rpc.handle(

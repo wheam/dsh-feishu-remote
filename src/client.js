@@ -28,9 +28,9 @@ window.__ModuleLoader__.load({
 			+ ".fr_secTitle{margin:6px 0 -6px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}"
 			+ ".fr_note{margin:0;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}"
 			+ ".fr_error{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-error-primary)}"
-			+ ".fr_raw{margin:4px 0 0;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-tertiary)}"
-			+ ".fr_rawWrap{font-size:11px;color:var(--dsw-alias-label-tertiary)}"
-			+ ".fr_rawWrap>summary{cursor:pointer}";
+			+ ".fr_raw{margin:2px 0 0;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-tertiary)}"
+			+ ".fr_notice{margin:4px 0 0;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-warn-primary)}"
+			+ ".fr_blocked{margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary)}";
 		const listCss = ".fr_row{display:grid;grid-template-columns:36px minmax(0,1fr) auto auto;align-items:center;gap:12px;width:100%;padding:12px 14px;border:0;border-top:1px solid var(--dsw-alias-border-l2);background:0 0;font:inherit;text-align:left;color:var(--dsw-alias-label-primary);cursor:pointer}"
 			+ ".fr_row:first-child{border-top:0}"
 			+ ".fr_row:hover{background:var(--dsw-alias-interactive-bg-hover)}"
@@ -62,7 +62,7 @@ window.__ModuleLoader__.load({
 			+ ".fr_hint{margin:0;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary)}"
 			+ ".fr_fieldError{margin:2px 0 0;font-size:11px;line-height:1.5;color:var(--dsw-alias-state-error-primary)}"
 			+ ".fr_ctl{display:flex;align-items:center;gap:8px;flex-shrink:0}"
-			+ ".fr_input{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:5px 8px;min-height:30px;width:228px;box-sizing:border-box}"
+			+ ".fr_input{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:5px 8px;min-height:30px;width:228px;box-sizing:border-box}"
 			+ ".fr_inputSm{width:80px}"
 			+ ".fr_input:disabled{opacity:.6}"
 			+ ".fr_input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}"
@@ -132,7 +132,7 @@ window.__ModuleLoader__.load({
 		const cx = {
 			page: "fr_page", head: "fr_head", headText: "fr_headText", h1: "fr_h1", intro: "fr_intro",
 			card: "fr_card", secTitle: "fr_secTitle", note: "fr_note", error: "fr_error",
-			raw: "fr_raw", rawWrap: "fr_rawWrap",
+			raw: "fr_raw", notice: "fr_notice", blocked: "fr_blocked",
 			row: "fr_row", rowOff: "fr_rowOff", avatar: "fr_avatar", avatarLg: "fr_avatarLg",
 			rowText: "fr_rowText", rowTitle: "fr_rowTitle", name: "fr_name", nameLg: "fr_nameLg",
 			pill: "fr_pill", sub: "fr_sub", state: "fr_state", dot: "fr_dot", chev: "fr_chev",
@@ -198,6 +198,26 @@ window.__ModuleLoader__.load({
 			if (typeof value !== "string") return [];
 			return value.split(/[\s,]+/).filter(Boolean);
 		}
+		/**
+		 * Last line of defence for any text the Host supplies (docs/18 §2.4): the
+		 * structured `detail`/`message` are meant to be safe already, but the GUI
+		 * still redacts implementation vocabulary and filesystem paths so nothing
+		 * a user cannot act on ever reaches the screen.
+		 */
+		const BANNED_OUTPUT_PATTERNS = [
+			/legacy/giu, /namespace/giu, /loopback/giu, /revision/giu, /wire/giu,
+			/主机器人/gu, /凭据引用/gu, /内部名称/gu
+		];
+		function safeText(value) {
+			if (typeof value !== "string") return void 0;
+			let text = value.trim();
+			if (text === "") return void 0;
+			text = text.replace(/[A-Za-z]:\\[^\s]+/gu, "…").replace(/(?:\/[\w.@-]+){2,}\/?/gu, "…");
+			for (const pattern of BANNED_OUTPUT_PATTERNS) text = text.replace(pattern, "…");
+			text = text.replace(/…{2,}/gu, "…").replace(/\s{2,}/gu, " ").trim();
+			return text === "" || text === "…" ? void 0 : text;
+		}
+
 		function toCount(value) {
 			const parsed = typeof value === "number" ? value : Number(String(value ?? "").trim());
 			return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
@@ -271,6 +291,34 @@ window.__ModuleLoader__.load({
 			return count;
 		}
 
+		/**
+		 * Replay the pending draft onto a NEWER snapshot after a CAS conflict.
+		 * `previous` is the state at the moment of the rejected save. Returns the
+		 * latest rows with the user's changed keys reapplied, plus the ids whose
+		 * edits had to be dropped because the bot is gone.
+		 */
+		function rebaseDraft(previous, latestEditor) {
+			const bots = botRowsFrom(latestEditor);
+			const latestMax = toCount(latestEditor.config?.maxTotalLiveAgents);
+			// A shape change (single-bot ↔ multi-bot) invalidates the whole draft.
+			if (latestEditor.mode !== previous.mode) return { bots, max: latestMax, dropped: [], modeChanged: true };
+			const originals = new Map((previous.originalBots ?? []).map((bot) => [bot.id, bot]));
+			const byId = new Map(bots.map((bot) => [bot.id, bot]));
+			const dropped = [];
+			for (const draft of previous.bots ?? []) {
+				const changed = changedBotKeys(originals.get(draft.id), draft);
+				if (changed.length === 0) continue;
+				const target = byId.get(draft.id);
+				if (target === void 0) {
+					dropped.push(draft.id);
+					continue;
+				}
+				for (const key of changed) target[key] = draft[key];
+			}
+			const max = previous.originalMax === previous.maxTotalLiveAgents ? latestMax : previous.maxTotalLiveAgents;
+			return { bots, max, dropped, modeChanged: false };
+		}
+
 		/** `settings/save-bots` payload — list fields are ARRAYS in bots[]. */
 		function buildBotsPayload(rows, max, revision) {
 			return {
@@ -330,10 +378,33 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * Reason codes the Host reports on `bots/status`. A misconfiguration is a
+		 * different conversation from a connection problem: the first is fixed in
+		 * this page (or by scanning again), the second by retrying.
+		 */
+		const REASON_DETAIL_KEYS = {
+			credential_missing: "status.reason.credentialMissing",
+			duplicate_state_path: "status.reason.duplicateStatePath",
+			duplicate_inbound_dir: "status.reason.duplicateInboundDir",
+			duplicate_app_id: "status.reason.duplicateAppId",
+			duplicate_bot_id: "status.reason.duplicateBotId",
+			duplicate_session_namespace: "status.reason.duplicateSession",
+			invalid_bot_id: "status.reason.invalidBotId",
+			workspace_unavailable: "status.reason.workspaceUnavailable",
+			preset_unavailable: "status.reason.presetUnavailable",
+			profile_unreadable: "status.reason.profileUnreadable",
+			config_invalid: "status.reason.configInvalid"
+		};
+		const CONFIG_REASON_CODES = Object.keys(REASON_DETAIL_KEYS);
+
+		/**
 		 * Status model (docs/18 §2.2). Priority: 已停用 → 配置不完整 → 读取中 →
-		 * 连接失败 → 已连接但无人可用 → 已连接 → 连接中 → 未连接.
+		 * 配置有问题 → 连接失败 → 限流 → 已连接但无人可用 → 已连接 → 连接中 → 未连接.
 		 * Permission-missing/providerStatus stay inside the scan card (P1).
-		 * `label`/`detail` are dictionary keys so every string stays translatable.
+		 * `label`/`detail` are dictionary keys so every string stays translatable;
+		 * `safeDetail` is the Host's already-safe sentence, run through `safeText`
+		 * once more so no implementation word or path can reach the screen.
+		 * `action` is emitted ONLY where the page actually renders a button.
 		 */
 		function botStatusModel(bot, status, mode) {
 			if (mode !== "legacy" && bot.enabled === false) {
@@ -343,12 +414,23 @@ window.__ModuleLoader__.load({
 				return { tone: "err", label: "status.incomplete", detail: "status.incompleteDetail" };
 			}
 			if (status === void 0) return { tone: "off", label: "status.loading", detail: "status.loadingDetail" };
-			if (typeof status.error === "string" || status.terminalFailure === true || status.status === "degraded") {
+			const reason = typeof status.reasonCode === "string" ? status.reasonCode : void 0;
+			const safe = safeText(status.detail);
+			const extra = safe === void 0 ? {} : { safeDetail: safe };
+			if (reason !== void 0 && CONFIG_REASON_CODES.includes(reason)) {
 				return {
-					tone: "err", label: "status.failed", detail: "status.failedDetail",
-					...(typeof status.error === "string" ? { raw: status.error } : {}),
-					action: "retry"
+					tone: "err", label: "status.misconfigured",
+					detail: REASON_DETAIL_KEYS[reason], ...extra
 				};
+			}
+			if (reason === "disabled") {
+				return { tone: "off", label: "status.disabled", detail: "status.disabledDetail", ...extra };
+			}
+			if (reason === "rate_limited") {
+				return { tone: "warn", label: "status.rateLimited", detail: "status.rateLimitedDetail", ...extra };
+			}
+			if (reason === "connect_failed" || status.terminalFailure === true || status.status === "degraded") {
+				return { tone: "err", label: "status.failed", detail: "status.failedDetail", ...extra, action: "retry" };
 			}
 			const live = Number.isFinite(status.liveAgents) ? status.liveAgents : 0;
 			if (status.connected === true && bot.allowAllUsers !== true && toList(bot.allowedOpenIds).length === 0) {
@@ -358,7 +440,7 @@ window.__ModuleLoader__.load({
 				return { tone: "ok", label: "status.connected", detail: "status.connectedDetail", params: { live } };
 			}
 			if (status.status === "starting") return { tone: "warn", label: "status.connecting", detail: "status.connectingDetail" };
-			return { tone: "err", label: "status.offline", detail: "status.offlineDetail", action: "retry" };
+			return { tone: "err", label: "status.offline", detail: "status.offlineDetail", ...extra };
 		}
 
 		/** One-line list summary: 工作区 · 谁能用 · 运行中任务. */
@@ -417,43 +499,70 @@ window.__ModuleLoader__.load({
 			return { sameDay, clock, date: (at.getMonth() + 1) + "-" + pad2(at.getDate()) };
 		}
 
+		/**
+		 * Structured backend codes → friendly copy. Admin RPC failures use the
+		 * `{ok:false, code, message}` envelope; onboarding failures carry their own
+		 * `error.code`. Anything unmapped falls back to a generic sentence.
+		 */
 		const ERROR_CODE_KEYS = {
+			// admin / settings RPC
+			bad_request: "err.generic",
+			conflict: "err.conflict",
 			read_only: "err.readOnly",
+			legacy_mode: "err.shapeChanged",
+			multi_mode: "err.shapeChanged",
+			unknown_bot_id: "err.unknownBot",
+			last_bot: "err.lastBot",
+			validation: "err.validation",
+			credential_missing: "err.credential",
+			settings_unsafe: "err.settingsUnsafe",
+			internal: "err.generic",
+			// onboarding
 			busy: "err.busy",
-			duplicate_app: "err.duplicateApp",
-			cancelled: "err.cancelled",
-			abort: "err.cancelled",
+			access_denied: "err.accessDenied",
 			connection_failed: "err.connectionFailed",
 			connection_timeout: "err.connectionTimeout",
-			invalid_state: "err.invalidState",
-			not_found: "err.notFound"
+			settings_changed: "err.conflict",
+			settings_write_failed: "err.settingsUnsafe",
+			credential_probe_failed: "err.credentialStore",
+			credential_write_failed: "err.credentialStore",
+			credential_write_unavailable: "err.credentialStore",
+			expired_token: "err.expired",
+			duplicate_app: "err.duplicateApp",
+			destination_required: "err.generic",
+			multi_bot_required: "err.shapeChanged",
+			settings_unavailable: "err.settingsUnsafe",
+			missing_app: "err.notFound",
+			expired: "err.expired",
+			cancelled: "err.cancelled",
+			abort: "err.cancelled"
 		};
+		/**
+		 * Transport-level fallbacks. These match on the raw text only to CLASSIFY
+		 * it — the raw text itself is never rendered (docs/18 §2.4).
+		 */
 		const ERROR_TEXT_KEYS = [
-			["设置已被其他操作更新", "err.conflict"],
-			["SETTINGS_CONFLICT", "err.conflict"],
-			["不能移除最后一个机器人", "err.lastBot"],
-			["尚未配置", "err.credential"],
-			["credential ref", "err.credential"],
-			["锁定工作区", "err.lockedWorkspace"],
-			["已经是多机器人配置", "err.shapeChanged"],
-			["不可编辑字段", "err.rejectedField"],
-			["loopback", "err.hostOnly"],
 			["Failed to fetch", "err.offline"],
 			["NetworkError", "err.offline"],
+			["ERR_CONNECTION", "err.offline"],
 			["网络", "err.offline"]
 		];
 
 		/**
-		 * Map a backend message/code to friendly copy. The raw text is preserved
-		 * for the collapsible「详情」 — it is never the primary line (docs/18 §2.4).
+		 * Map a backend failure to friendly copy. The result carries at most the
+		 * Host's own structured, already-safe sentence (`detail`) — never an
+		 * Error.message/stack from an unstructured throw (docs/18 §2.4).
 		 */
 		function friendlyError(error) {
 			if (error === void 0 || error === null || error === "") return void 0;
-			const raw = typeof error === "string" ? error : String(error.message ?? error);
-			const code = typeof error === "object" && error !== null ? error.code : void 0;
-			if (typeof code === "string" && ERROR_CODE_KEYS[code] !== void 0) return { key: ERROR_CODE_KEYS[code], raw };
-			for (const entry of ERROR_TEXT_KEYS) if (raw.includes(entry[0])) return { key: entry[1], raw };
-			return { key: "err.generic", raw };
+			const structured = typeof error === "object" && error !== null && typeof error.code === "string";
+			const code = structured ? error.code : void 0;
+			const raw = typeof error === "string" ? error : String(error?.message ?? "");
+			const detail = structured ? safeText(error.message) : void 0;
+			const supplement = detail === void 0 ? {} : { detail };
+			if (code !== void 0 && ERROR_CODE_KEYS[code] !== void 0) return { key: ERROR_CODE_KEYS[code], ...supplement };
+			for (const entry of ERROR_TEXT_KEYS) if (raw.includes(entry[0])) return { key: entry[1] };
+			return { key: "err.generic", ...supplement };
 		}
 
 		function onboardingStatusKey(status) {
@@ -543,7 +652,7 @@ window.__ModuleLoader__.load({
 
 		/** 宿主「通用设置」的 setting-row：标题 + 一句说明 + 右侧控件 + 行内错误。 */
 		function settingRow(options) {
-			return h("div", { className: options.column ? cx.setting + " " + cx.settingCol : cx.setting }, [
+			return h("div", { className: options.column ? cx.setting + " " + cx.settingCol : cx.setting, ref: options.ref }, [
 				h("div", { className: cx.settingText, style: options.column ? { width: "100%" } : void 0 }, [
 					h("span", { className: options.danger ? cx.label + " " + cx.labelDanger : cx.label }, options.label),
 					options.hint === void 0 ? null : h("p", { className: cx.hint }, options.hint),
@@ -553,15 +662,24 @@ window.__ModuleLoader__.load({
 			], options.key);
 		}
 
+		/**
+		 * Friendly line first; the Host's structured, already-safe sentence second.
+		 * Nothing else is rendered — no Error.message, no stack, no raw payload.
+		 */
 		function errorBlock(t, failure, key) {
 			if (failure === void 0) return null;
 			return h("div", {}, [
 				h("p", { className: cx.error, role: "alert" }, t(failure.key), "line"),
-				h("details", { className: cx.rawWrap }, [
-					h("summary", {}, t("err.details"), "summary"),
-					h("p", { className: cx.raw }, failure.raw, "raw")
-				], "raw")
+				failure.detail === void 0 ? null : h("p", { className: cx.raw }, failure.detail, "detail")
 			], key);
+		}
+
+		/** GUI fail-closed banner (`guiSafe === false`): one sentence, no editors. */
+		function guiBlockedKey(reason) {
+			if (reason === "purge_failed") return "gui.blocked.purgeFailed";
+			if (reason === "read_only_dirty") return "gui.blocked.readOnlyDirty";
+			if (reason === "user_layer_dirty") return "gui.blocked.userLayerDirty";
+			return "gui.blocked.generic";
 		}
 
 		// ----------------------------------------------------------- onboarding
@@ -746,6 +864,7 @@ window.__ModuleLoader__.load({
 					})
 				], "allCard") : null,
 				errorBlock(t, friendlyError(admin.error), "error"),
+				admin.conflictNotice === void 0 ? null : h("p", { className: cx.notice, role: "status" }, t(admin.conflictNotice), "conflict"),
 				pending === 0 ? null : h("div", { className: cx.saveBar }, [
 					h("span", { className: cx.saveCount }, "● " + tp(t, "save.count", { count: pending }), "count"),
 					h("div", { className: cx.actions }, [
@@ -777,6 +896,26 @@ window.__ModuleLoader__.load({
 			const changes = changedBotKeys(props.original, bot).length;
 			const isLegacy = admin.mode === "legacy";
 			const lastBot = admin.bots.length <= 1;
+			// 「已连接但无人可用」 jumps to the 允许的用户 row instead of describing it.
+			const usersRow = react.useRef(null);
+			const [retryHint, setRetryHint] = react.useState(false);
+			react.useEffect(() => { setRetryHint(false); }, [bot.id, model.label]);
+			const focusUsers = () => {
+				const node = usersRow.current;
+				if (node === null || node === void 0) return;
+				node.scrollIntoView?.({ block: "center", behavior: "smooth" });
+				node.querySelector?.("input")?.focus?.();
+			};
+			// Retry is a single-bot action only: multi-bot slots reconnect from the
+			// saved config, so the page says that instead of inventing an RPC.
+			const statusAction = model.action === "users"
+				? h("button", { type: "button", className: cx.secondary, onClick: focusUsers }, t("status.actionUsers"), "users")
+				: model.action === "retry"
+					? h("button", {
+						type: "button", className: cx.secondary, disabled,
+						onClick: () => { if (isLegacy) props.onboardingRetry(); else setRetryHint(true); }
+					}, t("status.actionRetry"), "retry")
+					: void 0;
 			return h("div", { className: cx.page }, [
 				h("div", { className: cx.crumbs }, [
 					h("button", { type: "button", className: cx.link, onClick: props.onBack }, t("settings.navLabel"), "back"),
@@ -809,10 +948,9 @@ window.__ModuleLoader__.load({
 					h("span", { className: toneClass(model.tone), "aria-hidden": true }, void 0, "dot"),
 					h("span", {}, t(model.label) + " · " + tp(t, model.detail, model.params), "text")
 				], "status"),
-				model.raw === void 0 ? null : h("details", { className: cx.rawWrap }, [
-					h("summary", {}, t("err.details"), "summary"),
-					h("p", { className: cx.raw }, model.raw, "raw")
-				], "statusRaw"),
+				model.safeDetail === void 0 ? null : h("p", { className: cx.raw }, model.safeDetail, "statusDetail"),
+				statusAction === void 0 ? null : h("div", { className: cx.actions }, [statusAction], "statusAction"),
+				retryHint ? h("p", { className: cx.note, role: "status" }, t("status.retryMultiHint"), "retryHint") : null,
 
 				h("p", { className: cx.secTitle }, t("group.workspace"), "gWorkspace"),
 				h("div", { className: cx.card }, [
@@ -838,7 +976,7 @@ window.__ModuleLoader__.load({
 				h("p", { className: cx.secTitle }, t("group.access"), "gAccess"),
 				h("div", { className: cx.card }, [
 					settingRow({
-						key: "allowedOpenIds", column: true,
+						key: "allowedOpenIds", column: true, ref: usersRow,
 						label: t("f.users"), hint: t("f.usersHint"),
 						control: h(ChipsControl, {
 							values: bot.allowedOpenIds, disabled, label: t("f.users"),
@@ -956,9 +1094,11 @@ window.__ModuleLoader__.load({
 						isLegacy ? null : settingRow({
 							key: "remove",
 							label: t("f.remove"),
-							hint: lastBot ? t("f.removeLastHint") : t("f.removeHint"),
+							// Removal writes the SAVED list minus this bot, so it must not
+							// silently commit the pending draft (review M2).
+							hint: lastBot ? t("f.removeLastHint") : admin.dirty ? t("f.removeDirtyHint") : t("f.removeHint"),
 							control: h("button", {
-								type: "button", className: cx.danger, disabled: disabled || lastBot,
+								type: "button", className: cx.danger, disabled: disabled || lastBot || admin.dirty === true,
 								onClick: () => {
 									if (typeof window !== "undefined" && !window.confirm(tp(t, "f.removeConfirm", { name }))) return;
 									props.onRemove();
@@ -982,6 +1122,7 @@ window.__ModuleLoader__.load({
 				}, void 0, "manage") : null,
 
 				errorBlock(t, friendlyError(admin.error), "error"),
+				admin.conflictNotice === void 0 ? null : h("p", { className: cx.notice, role: "status" }, t(admin.conflictNotice), "conflict"),
 
 				changes === 0 ? null : h("div", { className: cx.saveBar }, [
 					h("span", { className: cx.saveCount }, "● " + tp(t, "save.count", { count: changes }), "count"),
@@ -1026,6 +1167,14 @@ window.__ModuleLoader__.load({
 				]);
 			}
 			if (!admin.loaded) return h("p", { className: cx.intro }, t("page.loading"));
+			// Fail closed: the Host says the settings file cannot be edited safely,
+			// so the section renders one sentence and NO editor or action at all.
+			if (admin.guiSafe === false) {
+				return h("div", { className: cx.page }, [
+					h("h2", { className: cx.h1 }, t("settings.title"), "title"),
+					h("p", { className: cx.blocked, role: "alert" }, t(guiBlockedKey(admin.guiReason)), "blocked")
+				]);
+			}
 			// The Host-side `writable` flag wins, but a read-only settings scope
 			// (deployment-level lock) must not be editable either.
 			const view = { ...admin, writable: admin.writable === true && scope?.writable !== false };
@@ -1101,6 +1250,12 @@ window.__ModuleLoader__.load({
 			const remote = admin?.mode === "unavailable";
 			const statuses = new Map((admin?.statuses ?? []).map((item) => [item.id, item]));
 			const bots = admin?.bots ?? [];
+			if (admin?.guiSafe === false) {
+				return h("li", { className: cx.summary }, [
+					h("span", { className: cx.summaryName }, t("settings.title"), "title"),
+					h("span", { className: cx.summaryDesc, role: "alert" }, t(guiBlockedKey(admin.guiReason)), "blocked")
+				]);
+			}
 			return h("li", { className: cx.summary }, [
 				h("span", { className: cx.summaryName }, t("settings.title"), "title"),
 				h("span", { className: cx.summaryDesc }, t("settings.description"), "desc"),
@@ -1117,17 +1272,41 @@ window.__ModuleLoader__.load({
 			]);
 		}
 
+		/**
+		 * Turn an RPC rejection into an Error carrying the structured `code`.
+		 * Tolerates both the host envelope (`{ok:false, error:{…}}`) and a flat
+		 * `{ok:false, code, message, details}` failure.
+		 */
+		function rpcFailure(result) {
+			const envelope = result?.error ?? {};
+			const issues = envelope.details?.issues;
+			const issue = Array.isArray(issues) ? issues[0] : void 0;
+			// The plugin code travels twice (admin.ts): flat on the result AND inside
+			// `error.details.issues[0]`, which is the copy that survives the Host's
+			// response parsing. Prefer the issue, then the flat field, then the envelope.
+			const failure = typeof issue?.code === "string" ? issue
+				: typeof result?.code === "string" ? result
+					: envelope;
+			return Object.assign(new Error(str(failure.message) || str(envelope.message)), {
+				code: failure.code, details: failure.details
+			});
+		}
+
 		// ------------------------------------------------------------ controllers
 		/** Deployment-level availability (read-only hosts) from the settings scope. */
 		var SettingsScopeController = class {
 			constructor(scope) {
 				this.scope = scope;
 				this.store = runtime.createSnapshotStore(this.projection());
-				scope.subscribe(() => this.store.set(this.projection()));
 			}
 			projection() {
-				const snapshot = this.scope.getSnapshot();
-				return { available: snapshot.status === "ready", writable: snapshot.writable === true };
+				return { writable: this.scope.getSnapshot().writable === true };
+			}
+			/** Subscription lives inside `ctx.effect`, so it is torn down with the plugin. */
+			mount() {
+				const stop = this.scope.subscribe(() => this.store.set(this.projection()));
+				this.store.set(this.projection());
+				return () => { if (typeof stop === "function") stop(); };
 			}
 			inject() {
 				return { hooks: { feishuRemoteSettingsCard: this.store } };
@@ -1139,13 +1318,18 @@ window.__ModuleLoader__.load({
 				this.connection = connection;
 				this.snapshot = {
 					loaded: false, writable: false, mode: "loading", revision: 0,
+					guiSafe: true, guiReason: void 0,
 					bots: [], originalBots: [], statuses: [],
 					maxTotalLiveAgents: 0, originalMax: 0,
-					dirty: false, issues: [], saving: false, error: void 0
+					dirty: false, issues: [], saving: false, error: void 0, conflictNotice: void 0
 				};
 				this.store = runtime.createSnapshotStore(this.snapshot);
 				this.stopped = true;
 				this.timer = void 0;
+				// One serialized read path (review M3): only the most recently STARTED
+				// refresh may publish, and an older snapshot never overwrites a newer one.
+				this.requestSequence = 0;
+				this.adoptedRevision = -1;
 			}
 			publish(patch) {
 				this.snapshot = { ...this.snapshot, ...patch };
@@ -1153,7 +1337,7 @@ window.__ModuleLoader__.load({
 			}
 			async request(endpoint, payload = {}) {
 				const result = await this.connection.rpc.call("/dsh-feishu-remote", endpoint, payload);
-				if (!result.ok) throw Object.assign(new Error(result.error.message), { code: result.error.code, details: result.error.details });
+				if (result?.ok === false) throw rpcFailure(result);
 				return result.value;
 			}
 			stage(bots, max = this.snapshot.maxTotalLiveAgents) {
@@ -1161,29 +1345,64 @@ window.__ModuleLoader__.load({
 					bots, maxTotalLiveAgents: max,
 					dirty: draftChangeCount(this.snapshot.originalBots, bots, this.snapshot.originalMax, max) > 0,
 					issues: validateBotRows(bots, max, this.snapshot.mode),
-					error: void 0
+					error: void 0, conflictNotice: void 0
 				});
 			}
 			adopt(editor) {
 				const bots = botRowsFrom(editor);
 				const max = toCount(editor.config?.maxTotalLiveAgents);
+				this.adoptedRevision = toCount(editor.revision);
 				this.publish({
 					loaded: true, writable: editor.writable === true, mode: editor.mode, revision: editor.revision,
+					// Tolerate a Host that does not report it yet: absent means safe.
+					guiSafe: editor.guiSafe !== false,
+					guiReason: editor.guiSafe === false ? editor.guiReason : void 0,
 					bots, originalBots: bots.map((bot) => ({ ...bot })),
 					maxTotalLiveAgents: max, originalMax: max,
-					dirty: false, issues: validateBotRows(bots, max, editor.mode), error: void 0
+					dirty: false, issues: validateBotRows(bots, max, editor.mode),
+					error: void 0, conflictNotice: void 0
+				});
+			}
+			/**
+			 * Rebase the pending draft onto a newer snapshot after a CAS conflict
+			 * (review B4): the latest content becomes the base, then the user's own
+			 * changed keys are replayed on top of it. Edits aimed at a bot that no
+			 * longer exists — or at a list whose shape changed — are dropped, and the
+			 * page says so instead of silently resending a stale full list.
+			 */
+			rebase(latest) {
+				const previous = {
+					mode: this.snapshot.mode,
+					originalBots: this.snapshot.originalBots,
+					bots: this.snapshot.bots,
+					originalMax: this.snapshot.originalMax,
+					maxTotalLiveAgents: this.snapshot.maxTotalLiveAgents
+				};
+				this.adopt(latest);
+				const rebased = rebaseDraft(previous, latest);
+				this.publish({
+					bots: rebased.bots, maxTotalLiveAgents: rebased.max,
+					dirty: draftChangeCount(this.snapshot.originalBots, rebased.bots, this.snapshot.originalMax, rebased.max) > 0,
+					issues: validateBotRows(rebased.bots, rebased.max, this.snapshot.mode),
+					conflictNotice: rebased.modeChanged
+						? "conflict.modeChanged"
+						: rebased.dropped.length > 0 ? "conflict.dropped" : void 0
 				});
 			}
 			async refresh(force = false) {
 				if (this.stopped || this.connection.isLoopback === false) return;
+				const requestId = ++this.requestSequence;
 				try {
 					const [editor, runtimeStatus] = await Promise.all([
 						this.request("settings/editor-snapshot"),
 						this.request("bots/status")
 					]);
-					if (!this.snapshot.dirty || force) this.adopt(editor);
+					// A poll that started before a save must never undo it.
+					if (requestId !== this.requestSequence || this.stopped) return;
+					if (toCount(editor.revision) >= this.adoptedRevision && (!this.snapshot.dirty || force)) this.adopt(editor);
 					this.publish({ statuses: runtimeStatus.bots ?? [] });
 				} catch (error) {
+					if (requestId !== this.requestSequence || this.stopped) return;
 					this.publish({
 						loaded: true,
 						...(this.snapshot.mode === "loading" ? { mode: "unavailable", writable: false } : {}),
@@ -1230,11 +1449,9 @@ window.__ModuleLoader__.load({
 					await this.refresh(true);
 					return true;
 				} catch (error) {
-					const latest = error?.details?.latest;
-					this.publish({
-						...(latest?.revision === void 0 ? {} : { revision: latest.revision, writable: latest.writable === true }),
-						error: error instanceof Error ? error : new Error(String(error))
-					});
+					const latest = error?.code === "conflict" ? error?.details?.latest : void 0;
+					if (latest !== void 0 && latest !== null && typeof latest === "object") this.rebase(latest);
+					this.publish({ error: error instanceof Error ? error : new Error(String(error)) });
 					return false;
 				} finally {
 					this.publish({ saving: false });
@@ -1244,18 +1461,25 @@ window.__ModuleLoader__.load({
 				if (!this.snapshot.dirty || this.snapshot.issues.length > 0 || this.snapshot.saving || !this.snapshot.writable) return false;
 				return this.commit(this.snapshot.bots, this.snapshot.maxTotalLiveAgents);
 			}
-			/** Removal is an immediate, confirmed action; it saves the current draft. */
+			/**
+			 * Removal is an immediate, confirmed action, so it writes the SAVED list
+			 * minus this bot — never the pending draft (review M2). The page keeps the
+			 * button disabled while there are unsaved changes; this is the guard.
+			 */
 			async removeBot(botId) {
 				if (this.snapshot.saving || !this.snapshot.writable || this.snapshot.mode !== "multi") return false;
-				const bots = this.snapshot.bots.filter((bot) => bot.id !== botId);
-				if (bots.length === 0 || bots.length === this.snapshot.bots.length) return false;
-				return this.commit(bots, this.snapshot.maxTotalLiveAgents);
+				if (this.snapshot.dirty) return false;
+				const originals = (this.snapshot.originalBots ?? []).map((bot) => ({ ...bot }));
+				const bots = originals.filter((bot) => bot.id !== botId);
+				if (bots.length === 0 || bots.length === originals.length) return false;
+				return this.commit(bots, this.snapshot.originalMax);
 			}
 			discard() {
 				const bots = (this.snapshot.originalBots ?? []).map((bot) => ({ ...bot }));
 				this.publish({
 					bots, maxTotalLiveAgents: this.snapshot.originalMax, dirty: false,
-					issues: validateBotRows(bots, this.snapshot.originalMax, this.snapshot.mode), error: void 0
+					issues: validateBotRows(bots, this.snapshot.originalMax, this.snapshot.mode),
+					error: void 0, conflictNotice: void 0
 				});
 			}
 			inject() {
@@ -1290,7 +1514,7 @@ window.__ModuleLoader__.load({
 			}
 			async request(endpoint, payload = {}) {
 				const result = await this.connection.rpc.call("/dsh-feishu-remote", endpoint, payload);
-				if (!result.ok) throw Object.assign(new Error(result.error.message), { code: result.error.code });
+				if (result?.ok === false) throw rpcFailure(result);
 				return result.value;
 			}
 			async refresh() {
@@ -1368,7 +1592,22 @@ window.__ModuleLoader__.load({
 			"status.disabled": "Disabled", "status.disabledDetail": "This bot is turned off and ignores messages.",
 			"status.incomplete": "Incomplete", "status.incompleteDetail": "Connection details are missing — scan again to bind it.",
 			"status.loading": "Loading", "status.loadingDetail": "Reading the connection state…",
-			"status.failed": "Needs attention", "status.failedDetail": "The bot could not stay connected.",
+			"status.failed": "Connection failed", "status.failedDetail": "The bot could not stay connected to Feishu.",
+			"status.misconfigured": "Configuration problem",
+			"status.reason.credentialMissing": "The stored secret for this bot is missing — scan again to bind it.",
+			"status.reason.duplicateStatePath": "Two bots are set to share one data folder; give this one its own.",
+			"status.reason.duplicateInboundDir": "Two bots are set to share one incoming-message folder; give this one its own.",
+			"status.reason.duplicateAppId": "Another bot already uses this Feishu app.",
+			"status.reason.profileUnreadable": "The role description file could not be read — check the path below.",
+			"status.reason.duplicateBotId": "This bot is a duplicate of another one; remove one of them.",
+			"status.reason.duplicateSession": "Only one bot can keep the original chat identity.",
+			"status.reason.invalidBotId": "This bot could not be identified; scan again to bind it.",
+			"status.reason.workspaceUnavailable": "The default workspace is unavailable — check the directory below.",
+			"status.reason.presetUnavailable": "The agent preset is unavailable — pick another one or leave it empty.",
+			"status.reason.configInvalid": "Some settings are incomplete or not allowed — check the rows below.",
+			"status.rateLimited": "Slowed down by Feishu", "status.rateLimitedDetail": "Feishu is limiting requests; the bot keeps retrying on its own.",
+			"status.actionRetry": "Retry", "status.actionUsers": "Add a user",
+			"status.retryMultiHint": "Check the settings below and save — the bot reconnects on its own.",
 			"status.noUsers": "Nobody can use it", "status.noUsersDetail": "Connected, but no one is allowed to send it tasks yet.",
 			"status.connected": "Connected", "status.connectedDetail": "{live} task(s) running",
 			"status.connecting": "Connecting", "status.connectingDetail": "Establishing the connection…",
@@ -1408,6 +1647,7 @@ window.__ModuleLoader__.load({
 			"f.maxTotal": "Task limit across all bots", "f.maxTotalHint": "Total for every bot. 0 means unlimited.",
 			"f.remove": "Remove bot", "f.removeAction": "Remove…",
 			"f.removeHint": "Removes the DSH configuration only; the Feishu app and its secret stay.",
+			"f.removeDirtyHint": "Save or discard your current changes first.",
 			"f.removeLastHint": "Keep at least one bot — turn it off instead if you do not need it.",
 			"f.removeConfirm": "Remove “{name}” from DSH? The Feishu app itself is not deleted.",
 			"p.defaultWorkspace": "e.g. /Users/you/Projects/curio",
@@ -1418,29 +1658,36 @@ window.__ModuleLoader__.load({
 			"save.count": "{count} unsaved change(s)", "save.discard": "Discard", "save.save": "Save", "save.saving": "Saving…",
 			"invalid.appId": "Missing App ID — scan again to bind this bot.",
 			"invalid.appSecretRef": "Missing the stored secret name — scan again to bind this bot.",
-			"invalid.id": "This bot's internal name is unusable; scan again to bind it.",
-			"invalid.duplicateId": "Two bots share the same internal name.",
+			"invalid.id": "This bot could not be identified; scan again to bind it.",
+			"invalid.duplicateId": "The same bot appears twice; remove one of them before saving.",
 			"invalid.duplicateApp": "This Feishu app is already used by another bot.",
 			"invalid.lockedWorkspace": "Set a default workspace before turning off in-chat switching.",
 			"invalid.number": "Enter 0 or a larger whole number.",
-			"err.details": "Details",
 			"err.generic": "That did not go through. Please try again.",
-			"err.conflict": "The settings changed elsewhere just now; the latest version was loaded — check and save again.",
+			"err.conflict": "The settings changed elsewhere just now; the latest version was loaded with your edits kept — check and save again.",
 			"err.lastBot": "Keep at least one bot — turn it off instead of removing it.",
 			"err.credential": "This bot's secret is not stored on this machine yet; scan again to bind it.",
-			"err.lockedWorkspace": "Set a default workspace before turning off in-chat switching.",
-			"err.readOnly": "This deployment does not allow changing settings from the GUI.",
+			"err.readOnly": "This deployment does not allow changing settings from this page.",
 			"err.busy": "Another operation is running. Try again in a moment.",
 			"err.duplicateApp": "That Feishu app has already been added.",
 			"err.cancelled": "The operation was cancelled.",
+			"err.expired": "The QR code expired. Refresh it and scan again.",
+			"err.accessDenied": "The authorization was declined in Feishu. Scan again to approve it.",
 			"err.connectionFailed": "The bot could not connect to Feishu.",
-			"err.connectionTimeout": "Connecting to Feishu timed out.",
-			"err.invalidState": "That step is not available right now; start the scan again.",
-			"err.notFound": "That item no longer exists; reload the page.",
-			"err.shapeChanged": "The bot list changed elsewhere; reload the page and try again.",
-			"err.rejectedField": "The Host rejected one of the fields. Please report this.",
-			"err.hostOnly": "For safety this only works on the Host machine (localhost).",
+			"err.connectionTimeout": "Connecting to Feishu timed out. Check the network and try again.",
+			"err.credentialStore": "The secret could not be stored safely on this machine. Check that DSH can write its credential store, then scan again.",
+			"err.notFound": "That item no longer exists; reopen this page.",
+			"err.unknownBot": "That bot no longer exists on this machine; reopen this page.",
+			"err.validation": "Some fields were not accepted. Check the marked rows and try again.",
+			"err.settingsUnsafe": "The settings cannot be changed safely right now. Check the DSH settings file on this machine, then reopen this page.",
+			"err.shapeChanged": "The bot list changed elsewhere; reopen this page and try again.",
 			"err.offline": "Cannot reach the local DSH service. Check that it is still running.",
+			"conflict.dropped": "Bots were added or removed elsewhere just now, so your edits to a bot that no longer exists were dropped. Check the list and save again.",
+			"conflict.modeChanged": "The bot list was restructured elsewhere just now, so your unsaved changes were dropped. Check the list and save again.",
+			"gui.blocked.purgeFailed": "Old bot settings are still left in the settings file, so this page cannot edit them safely. Check the DSH settings file on this machine, then reopen this page.",
+			"gui.blocked.readOnlyDirty": "These settings come from a file this machine may not rewrite, and it still holds unsaved changes, so this page cannot edit them safely.",
+			"gui.blocked.userLayerDirty": "The settings file was changed outside this page. Editing is paused here so those changes are not overwritten.",
+			"gui.blocked.generic": "These settings cannot be edited safely from this page right now. Check the DSH settings file on this machine, then reopen this page.",
 			"onboarding.firstTitle": "Scan with Feishu to connect your first bot",
 			"onboarding.firstDescription": "Pick a bot you already own, or create a new one. Its secret is stored on this machine and your account becomes the first allowed user.",
 			"onboarding.addTitle": "Add a bot",
@@ -1488,7 +1735,22 @@ window.__ModuleLoader__.load({
 			"status.disabled": "已停用", "status.disabledDetail": "这个机器人已停用，不会接收消息。",
 			"status.incomplete": "待完成", "status.incompleteDetail": "还缺少连接信息，请重新扫码绑定。",
 			"status.loading": "读取中", "status.loadingDetail": "正在读取连接状态…",
-			"status.failed": "需要处理", "status.failedDetail": "机器人没能保持连接。",
+			"status.failed": "连接失败", "status.failedDetail": "机器人没能保持与飞书的连接。",
+			"status.misconfigured": "配置有问题",
+			"status.reason.credentialMissing": "这个机器人的 Secret 没有保存在本机，请重新扫码绑定。",
+			"status.reason.duplicateStatePath": "有两个机器人用了同一个数据目录，请给这一个单独设置。",
+			"status.reason.duplicateInboundDir": "有两个机器人用了同一个收信目录，请给这一个单独设置。",
+			"status.reason.duplicateAppId": "这个飞书应用已经被另一个机器人使用了。",
+			"status.reason.profileUnreadable": "角色说明文件读不到，请检查下面填写的路径。",
+			"status.reason.duplicateBotId": "这个机器人和另一个重复了，请移除其中一个。",
+			"status.reason.duplicateSession": "只能有一个机器人继续使用原来的会话身份。",
+			"status.reason.invalidBotId": "无法识别这个机器人，请重新扫码绑定。",
+			"status.reason.workspaceUnavailable": "默认工作区不可用，请检查下面填写的目录。",
+			"status.reason.presetUnavailable": "Agent 预设不可用，请换一个或留空。",
+			"status.reason.configInvalid": "有设置不完整或不被允许，请检查下面的项目。",
+			"status.rateLimited": "已被飞书限流", "status.rateLimitedDetail": "飞书正在限制请求频率，机器人会自动重试。",
+			"status.actionRetry": "重试", "status.actionUsers": "添加用户",
+			"status.retryMultiHint": "请检查配置后保存，机器人会自动重连",
 			"status.noUsers": "无人可用", "status.noUsersDetail": "已连接，但还没有人被允许给它发任务。",
 			"status.connected": "已连接", "status.connectedDetail": "正在运行 {live} 个任务",
 			"status.connecting": "连接中", "status.connectingDetail": "正在建立连接…",
@@ -1528,6 +1790,7 @@ window.__ModuleLoader__.load({
 			"f.maxTotal": "同时运行的任务上限", "f.maxTotalHint": "所有机器人合计。0 表示不限制。",
 			"f.remove": "移除机器人", "f.removeAction": "移除…",
 			"f.removeHint": "只从 DSH 移除配置，不会删除飞书里的应用和已保存的 Secret。",
+			"f.removeDirtyHint": "请先保存或放弃当前修改",
 			"f.removeLastHint": "至少要保留一个机器人；暂时不用可以先停用它。",
 			"f.removeConfirm": "从 DSH 移除「{name}」？飞书里的应用本身不会被删除。",
 			"p.defaultWorkspace": "例如：/Users/you/Projects/curio",
@@ -1538,29 +1801,36 @@ window.__ModuleLoader__.load({
 			"save.count": "{count} 处修改未保存", "save.discard": "放弃", "save.save": "保存", "save.saving": "保存中…",
 			"invalid.appId": "缺少 App ID，请重新扫码绑定这个机器人。",
 			"invalid.appSecretRef": "缺少已保存的 Secret 名称，请重新扫码绑定这个机器人。",
-			"invalid.id": "这个机器人的内部名称无法使用，请重新扫码绑定。",
-			"invalid.duplicateId": "有两个机器人使用了相同的内部名称。",
+			"invalid.id": "无法识别这个机器人，请重新扫码绑定。",
+			"invalid.duplicateId": "同一个机器人出现了两次，请先移除其中一个再保存。",
 			"invalid.duplicateApp": "这个飞书应用已经被另一个机器人使用了。",
 			"invalid.lockedWorkspace": "关闭「允许在聊天里切换工作区」时，必须填写默认工作区。",
 			"invalid.number": "请填写 0 或更大的整数。",
-			"err.details": "详情",
 			"err.generic": "这次操作没有完成，请重试。",
-			"err.conflict": "设置刚刚在别处被改动，已读取最新内容，请确认后重新保存。",
+			"err.conflict": "设置刚刚在别处被改动，已读取最新内容并保留你的修改，请确认后重新保存。",
 			"err.lastBot": "至少要保留一个机器人；暂时不用请把它停用。",
 			"err.credential": "这个机器人的 Secret 还没保存在本机，请重新扫码绑定。",
-			"err.lockedWorkspace": "关闭「允许在聊天里切换工作区」时，必须填写默认工作区。",
-			"err.readOnly": "当前部署不允许在界面里修改设置。",
+			"err.readOnly": "当前部署不允许在这个页面里修改设置。",
 			"err.busy": "另一个操作正在进行，请稍后再试。",
 			"err.duplicateApp": "这个飞书应用已经添加过了。",
 			"err.cancelled": "操作已取消。",
+			"err.expired": "二维码已过期，请刷新后重新扫码。",
+			"err.accessDenied": "飞书里拒绝了这次授权，请重新扫码并同意。",
 			"err.connectionFailed": "机器人没能连上飞书。",
-			"err.connectionTimeout": "连接飞书超时。",
-			"err.invalidState": "这一步现在不可用，请重新开始扫码。",
+			"err.connectionTimeout": "连接飞书超时，请检查网络后重试。",
+			"err.credentialStore": "无法在本机安全保存 Secret。请确认 DSH 可以写入它的凭据存储后重新扫码。",
 			"err.notFound": "对应的内容已不存在，请重新打开页面。",
+			"err.unknownBot": "这个机器人在本机已经不存在了，请重新打开页面。",
+			"err.validation": "有内容没有通过检查，请修改标出的项目后重试。",
+			"err.settingsUnsafe": "现在无法安全地修改设置。请在这台电脑上检查 DSH 设置文件后重新打开本页。",
 			"err.shapeChanged": "机器人列表在别处发生了变化，请重新打开页面再试。",
-			"err.rejectedField": "Host 拒绝了其中一个字段，请反馈这个问题。",
-			"err.hostOnly": "出于安全考虑，这一步只能在 Host 本机（localhost）完成。",
 			"err.offline": "连不上本机的 DSH 服务，请确认它仍在运行。",
+			"conflict.dropped": "刚才别处新增或移除了机器人，你对已不存在的机器人所做的修改已被丢弃，请检查后重新保存。",
+			"conflict.modeChanged": "机器人列表刚才在别处发生了结构变化，未保存的修改已被丢弃，请检查后重新保存。",
+			"gui.blocked.purgeFailed": "设置文件里还残留着上一次没有清理干净的机器人配置，界面暂时无法安全编辑。请在这台电脑上检查 DSH 设置文件后重新打开本页。",
+			"gui.blocked.readOnlyDirty": "当前设置来自一个本机不能改写的文件，并且还有未保存的改动，界面暂时无法安全编辑。",
+			"gui.blocked.userLayerDirty": "设置文件在本页之外被改动过，为避免覆盖这些改动，界面暂时停止编辑。",
+			"gui.blocked.generic": "当前设置无法在界面里安全编辑。请在这台电脑上检查 DSH 设置文件后重新打开本页。",
 			"onboarding.firstTitle": "用手机飞书扫码，连接第一个机器人",
 			"onboarding.firstDescription": "扫码后选择一个你已有的机器人，或创建一个新的。Secret 会保存在本机，你的账号会自动成为第一个允许的用户。",
 			"onboarding.addTitle": "添加机器人",
@@ -1687,6 +1957,7 @@ window.__ModuleLoader__.load({
 				const settingsController = new SettingsScopeController(settingsScope);
 				const onboardingController = new PersonalAgentOnboardingController(ctx.connection);
 				const botAdminController = new FeishuBotAdminController(ctx.connection);
+				ctx.effect(() => settingsController.mount(), "dsh-feishu-remote: settings scope subscription");
 				ctx.effect(() => onboardingController.mount(), "dsh-feishu-remote: PersonalAgent onboarding polling");
 				ctx.effect(() => botAdminController.mount(), "dsh-feishu-remote: multi-bot admin polling");
 				const injection = () => {
@@ -1733,6 +2004,9 @@ window.__ModuleLoader__.load({
 		}
 		exports.apply = apply;
 		exports.inject = inject;
+		exports.BotDetailPage = BotDetailPage;
+		exports.FeishuRemoteSection = FeishuRemoteSection;
+		exports.FeishuRemoteSummaryCard = FeishuRemoteSummaryCard;
 		exports.botIdentity = botIdentity;
 		exports.botRowsFrom = botRowsFrom;
 		exports.botRowSummary = botRowSummary;
@@ -1742,10 +2016,13 @@ window.__ModuleLoader__.load({
 		exports.changedBotKeys = changedBotKeys;
 		exports.draftChangeCount = draftChangeCount;
 		exports.formatClock = formatClock;
+		exports.guiBlockedKey = guiBlockedKey;
 		exports.friendlyError = friendlyError;
 		exports.maskId = maskId;
 		exports.normalizeBotRow = normalizeBotRow;
 		exports.projectLegacyRow = projectLegacyRow;
+		exports.rebaseDraft = rebaseDraft;
+		exports.safeText = safeText;
 		exports.splitLegacyFeishuMessageText = splitLegacyFeishuMessageText;
 		exports.validateBotRows = validateBotRows;
 		return module.exports;

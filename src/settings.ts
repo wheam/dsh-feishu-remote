@@ -10,7 +10,7 @@
  * and the host resolves it via `ctx.credentials.resolve(ref)`. `appSecret` is
  * therefore never produced by `flatten()`, never read by `unflatten()`, and a
  * stale one left in the user layer by an older build is purged at startup
- * (see {@link settingsPurgeOps}).
+ * (see {@link settingsPurgePlan}).
  *
  * Host-only keys (Codex batch-2 B1): `statePath`, `inboundDir` and
  * `feishuCliPath` are trusted-admin YAML settings — an arbitrary executable
@@ -35,9 +35,27 @@ export type HostOnlyBotKey = (typeof HOST_ONLY_BOT_KEYS)[number]
 
 /**
  * Keys an older build may have persisted into the settings USER layer and
- * that must be purged from it: the host-only paths plus the secret value.
+ * that must never survive there: the host-only paths plus the secret value.
+ * `appSecret` is ALWAYS purged; the paths are purged only when the trusted
+ * entry config already provides the same value (see {@link settingsPurgePlan}).
  */
-const FORBIDDEN_ROOT_KEYS = ['appSecret', ...HOST_ONLY_BOT_KEYS] as const
+export const FORBIDDEN_SETTINGS_KEYS = ['appSecret', ...HOST_ONLY_BOT_KEYS] as const
+export type ForbiddenSettingsKey = (typeof FORBIDDEN_SETTINGS_KEYS)[number]
+
+const FORBIDDEN_ROOT_KEYS = FORBIDDEN_SETTINGS_KEYS
+
+/**
+ * Whether the browser settings GUI may be used at all (Codex batch-3 B2).
+ *
+ * `safe: false` means a host-only key or a stale secret is still reachable
+ * through the settings descriptor the browser receives, so the GUI fails
+ * closed: it shows the reason and refuses to edit. The BRIDGE is never
+ * blocked by this — a dirty user layer degrades the GUI, not the channel.
+ */
+export interface SettingsGuiState {
+  safe: boolean
+  reason?: 'purge_failed' | 'read_only_dirty' | 'user_layer_dirty'
+}
 
 export const flatSchema: Schema<FlatSettings> = Schema.object({
   appId: Schema.string().default(''),
@@ -315,38 +333,119 @@ function overlayHostOnlyBots(bots: FlatSettings['bots'], entry: Config): BotConf
   })
 }
 
+export type SettingsPurgeOp =
+  | { op: 'set'; path: string[]; value: unknown }
+  | { op: 'unset'; path: string[] }
+
+export interface SettingsPurgePlan {
+  /** Ops that remove what is safe to remove. Empty = nothing to write. */
+  ops: SettingsPurgeOp[]
+  /**
+   * Host-only values the purge deliberately did NOT delete because the
+   * trusted entry config does not carry them (audit M1). Deleting these would
+   * silently move a pre-f774159 install's state file or inbox: the operator
+   * has to copy them into cordis.patch.yml first.
+   */
+  retained: Array<{ scope: string; key: HostOnlyBotKey; }>
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
 /**
- * Path ops that purge keys an older build may have written into the settings
- * USER layer: the secret value and the host-only paths, at the root and
- * inside every `bots[]` entry. Empty when there is nothing to purge — the
- * caller must not spend a revision bump on a no-op write.
+ * Decide, for ONE host-only key on one node, whether purging it is lossless.
+ *
+ * Lossless when the user layer holds nothing meaningful, or holds exactly
+ * what the trusted entry config already provides (the entry value wins in
+ * `unflatten()` anyway). Otherwise the value is the only copy that exists.
+ */
+function purgeIsLossless(userValue: unknown, entryValue: string | undefined): boolean {
+  if (!nonEmptyString(userValue)) return true
+  return nonEmptyString(entryValue) && entryValue.trim() === userValue.trim()
+}
+
+/**
+ * Plan the purge of keys an older build wrote into the settings USER layer:
+ * the secret value and the host-only paths, at the root and inside every
+ * `bots[]` entry. Empty ops when there is nothing to purge — the caller must
+ * not spend a revision bump on a no-op write.
  *
  * This matters beyond hygiene: the standard settings descriptor ships the raw
  * `user` section and the resolved `value` to the browser, and the flat schema
  * resolves non-strictly, so an undeclared leftover key would survive both.
+ *
+ * `appSecret` is always removed (the credential provider is the only secret
+ * source). A host-only PATH is removed only when it is redundant with the
+ * entry config — see {@link purgeIsLossless} and `retained`.
  */
-export function settingsPurgeOps(
-  user: unknown,
-): Array<{ op: 'set'; path: string[]; value: unknown } | { op: 'unset'; path: string[] }> {
-  if (typeof user !== 'object' || user === null || Array.isArray(user)) return []
+export function settingsPurgePlan(user: unknown, entry: Config = {}): SettingsPurgePlan {
+  const plan: SettingsPurgePlan = { ops: [], retained: [] }
+  if (typeof user !== 'object' || user === null || Array.isArray(user)) return plan
   const section = user as Record<string, unknown>
-  const ops: Array<{ op: 'set'; path: string[]; value: unknown } | { op: 'unset'; path: string[] }> = []
-  for (const key of FORBIDDEN_ROOT_KEYS) {
-    if (Object.hasOwn(section, key)) ops.push({ op: 'unset', path: [key] })
+  const entryBots = new Map((entry.bots ?? []).map(bot => [bot.id, bot]))
+  // A legacy entry (no bots[]) lends its ROOT host-only paths to the settings
+  // bots, exactly as overlayHostOnlyBots() does.
+  const entryFallback: HostOnlyBotFields = entryBots.size === 0 ? entry : {}
+
+  if (Object.hasOwn(section, 'appSecret')) plan.ops.push({ op: 'unset', path: ['appSecret'] })
+  for (const key of HOST_ONLY_BOT_KEYS) {
+    if (!Object.hasOwn(section, key)) continue
+    if (purgeIsLossless(section[key], entry[key])) plan.ops.push({ op: 'unset', path: [key] })
+    else plan.retained.push({ scope: 'root', key })
   }
+
   const bots = section.bots
-  if (Array.isArray(bots)) {
-    let dirty = false
-    const cleaned = bots.map(bot => {
-      if (typeof bot !== 'object' || bot === null || Array.isArray(bot)) return bot
-      const entries = Object.entries(bot as Record<string, unknown>)
-        .filter(([key]) => !(FORBIDDEN_ROOT_KEYS as readonly string[]).includes(key))
-      if (entries.length !== Object.keys(bot as object).length) dirty = true
-      return Object.fromEntries(entries)
-    })
-    if (dirty) ops.push({ op: 'set', path: ['bots'], value: cleaned })
+  if (!Array.isArray(bots)) return plan
+  let dirty = false
+  const cleaned = bots.map(bot => {
+    if (typeof bot !== 'object' || bot === null || Array.isArray(bot)) return bot
+    const value = bot as Record<string, unknown>
+    const id = typeof value.id === 'string' ? value.id : ''
+    const declared = entryBots.get(id) ?? entryFallback
+    const kept: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (key === 'appSecret') {
+        dirty = true
+        continue
+      }
+      if ((HOST_ONLY_BOT_KEYS as readonly string[]).includes(key)) {
+        const hostKey = key as HostOnlyBotKey
+        if (purgeIsLossless(item, declared[hostKey])) {
+          dirty = true
+          continue
+        }
+        plan.retained.push({ scope: `bots.${id || '?'}`, key: hostKey })
+      }
+      kept[key] = item
+    }
+    return kept
+  })
+  if (dirty) plan.ops.push({ op: 'set', path: ['bots'], value: cleaned })
+  return plan
+}
+
+/**
+ * Every forbidden key name still reachable in one settings layer (`base`,
+ * `value` or `user`), at any depth. The GUI fail-closed check (Codex batch-3
+ * B2) re-reads the descriptor through this after the purge: an ACK is not
+ * proof, only a clean descriptor is.
+ */
+export function findForbiddenSettingsKeys(layer: unknown): string[] {
+  const found = new Set<string>()
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item)
+      return
+    }
+    if (typeof node !== 'object' || node === null) return
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if ((FORBIDDEN_SETTINGS_KEYS as readonly string[]).includes(key)) found.add(key)
+      visit(value)
+    }
   }
-  return ops
+  visit(layer)
+  return [...found].sort()
 }
 
 /**

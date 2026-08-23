@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { FeishuBotManager } from '../src/bots.js'
+import { toClientBotStatus } from '../src/admin.js'
+import { FeishuBotManager, classifyBotFailure, safeStatusText } from '../src/bots.js'
 import type { Config } from '../src/config.js'
 
 class FakeBridge {
@@ -127,6 +128,75 @@ describe('FeishuBotManager', () => {
     await h.manager.reconcile(duplicate)
     expect(h.bridges).toHaveLength(0)
     expect(h.manager.status().every(item => item.status === 'disabled')).toBe(true)
+    expect(h.manager.status()[0]).toMatchObject({ reasonCode: 'duplicate_app_id' })
     await h.manager.stop()
+  })
+
+  /**
+   * Codex batch-3 B1. A duplicate statePath/inboundDir used to be reported as
+   * a raw error string containing the RESOLVED ABSOLUTE PATH, which
+   * `bots/status` forwarded verbatim to the browser.
+   */
+  it.each([
+    ['statePath', 'duplicate_state_path', '/tmp/dsh-feishu-dup/shared-state.json'],
+    ['inboundDir', 'duplicate_inbound_dir', '/tmp/dsh-feishu-dup/shared-inbox'],
+  ])('never leaks a duplicate %s to the browser DTO', async (key, reasonCode, path) => {
+    const h = harness()
+    const duplicate = config()
+    Object.assign(duplicate.bots![0]!, { [key]: path })
+    Object.assign(duplicate.bots![1]!, { [key]: path })
+    await h.manager.reconcile(duplicate)
+    expect(h.bridges).toHaveLength(0)
+    // The raw text stays host-side: it is logged and kept on the runtime status…
+    expect(h.ctx.logger.warn).toHaveBeenCalled()
+    expect(h.manager.status()[0]?.error).toContain(key)
+    // …but the wire DTO carries only a stable code and a fixed sentence.
+    const wire = JSON.stringify({ bots: h.manager.status().map(toClientBotStatus) })
+    for (const forbidden of ['statePath', 'inboundDir', 'feishuCliPath', 'error', path, '/tmp']) {
+      expect(wire, forbidden).not.toContain(forbidden)
+    }
+    expect(JSON.parse(wire).bots[0]).toMatchObject({ status: 'disabled', reasonCode })
+    await h.manager.stop()
+  })
+
+  it('reports an operator-disabled bot as such, with no error text at all', async () => {
+    const h = harness()
+    const disabled = config()
+    disabled.bots![1]!.enabled = false
+    await h.manager.reconcile(disabled)
+    const status = h.manager.status().find(item => item.id === 'bot-b')
+    expect(status).toMatchObject({ enabled: false, status: 'disabled', reasonCode: 'disabled' })
+    expect(status?.error).toBeUndefined()
+    await h.manager.stop()
+  })
+
+  it('classifies a missing credential and keeps the raw text host-side', async () => {
+    const h = harness({ REF_A: 'a' })
+    await h.manager.reconcile(config())
+    const failed = h.manager.status().find(item => item.id === 'bot-b')
+    expect(failed).toMatchObject({ reasonCode: 'credential_missing', status: 'disabled' })
+    expect(JSON.stringify(toClientBotStatus(failed!))).not.toContain('missing app secret')
+    await h.manager.stop()
+  })
+})
+
+describe('bot failure classification', () => {
+  it('collapses anything path-shaped and bounds the text', () => {
+    expect(safeStatusText('cannot read /Users/me/.dsh/feishu-remote/cli_a.json'))
+      .toBe('cannot read …')
+    expect(safeStatusText('C:\\Users\\me\\state.json failed')).not.toContain('Users')
+    expect(safeStatusText('x'.repeat(500)).length).toBeLessThanOrEqual(200)
+    expect(safeStatusText('app_secret: hunter2')).not.toContain('hunter2')
+  })
+
+  it('maps common runtime failures onto stable codes', () => {
+    expect(classifyBotFailure(new Error('missing app secret for credential REF_A')).reasonCode)
+      .toBe('credential_missing')
+    expect(classifyBotFailure(new Error('HTTP 429 too many requests')).reasonCode).toBe('rate_limited')
+    expect(classifyBotFailure(new Error('Profile a.md 文件不存在')).reasonCode).toBe('profile_unreadable')
+    expect(classifyBotFailure(new Error('websocket connect failed')).reasonCode).toBe('connect_failed')
+    const unknown = classifyBotFailure(new Error('weird failure at /var/db/x'))
+    expect(unknown.reasonCode).toBe('unknown')
+    expect(unknown.detail).not.toContain('/var/db/x')
   })
 })

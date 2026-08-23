@@ -13,8 +13,24 @@ import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import Schema from '@deepseek-ai/schemastery'
-import type { LarkBrand, ResolvedConfig, SessionNamespace, WorkspacePolicy } from './types.js'
+import type { BotStatusReasonCode, LarkBrand, ResolvedConfig, SessionNamespace, WorkspacePolicy } from './types.js'
 import { canonicalPath, isInside, parseBooleanEnv, parseCsv } from './security.js'
+
+/**
+ * A configuration rejection with a STABLE machine code (Codex batch-3 B1).
+ *
+ * The message stays host-side (logger only): it may name a bot and a field,
+ * but never an absolute path — `statePath`/`inboundDir` collisions used to
+ * embed the resolved absolute path, which then rode `bots/status` all the way
+ * into the browser. The browser gets `code` plus a fixed safe sentence
+ * instead (see `BotStatusReasonCode` / `src/bots.ts`).
+ */
+export class BotConfigError extends Error {
+  constructor(readonly code: BotStatusReasonCode, message: string) {
+    super(message)
+    this.name = 'BotConfigError'
+  }
+}
 
 export interface LegacySingleBotConfig {
   appId?: string
@@ -256,16 +272,26 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
 
 function validateBotShape(bot: BotConfig): void {
   if (!/^[a-z][a-z0-9-]{0,47}$/u.test(bot.id)) {
-    throw new Error(`dsh-feishu-remote: invalid bot id ${JSON.stringify(bot.id)}`)
+    throw new BotConfigError('invalid_bot_id', `dsh-feishu-remote: invalid bot id ${JSON.stringify(bot.id)}`)
   }
-  if (bot.appId.trim() === '') throw new Error(`dsh-feishu-remote [bot:${bot.id}]: appId cannot be empty`)
-  if (bot.appSecretRef.trim() === '') throw new Error(`dsh-feishu-remote [bot:${bot.id}]: appSecretRef cannot be empty`)
+  if (bot.appId.trim() === '') {
+    throw new BotConfigError('config_invalid', `dsh-feishu-remote [bot:${bot.id}]: appId cannot be empty`)
+  }
+  if (bot.appSecretRef.trim() === '') {
+    throw new BotConfigError('config_invalid', `dsh-feishu-remote [bot:${bot.id}]: appSecretRef cannot be empty`)
+  }
   credentialRef(bot.appSecretRef.trim())
   if ((bot.workspacePolicy ?? 'default') === 'locked' && (bot.defaultWorkspace ?? '').trim() === '') {
-    throw new Error(`dsh-feishu-remote [bot:${bot.id}]: locked workspace requires defaultWorkspace`)
+    throw new BotConfigError(
+      'workspace_unavailable',
+      `dsh-feishu-remote [bot:${bot.id}]: locked workspace requires defaultWorkspace`,
+    )
   }
   if ((bot.contextBackend ?? 'auto') === 'cli') {
-    throw new Error(`dsh-feishu-remote [bot:${bot.id}]: multi-bot mode requires contextBackend=sdk`)
+    throw new BotConfigError(
+      'config_invalid',
+      `dsh-feishu-remote [bot:${bot.id}]: multi-bot mode requires contextBackend=sdk`,
+    )
   }
 }
 
@@ -284,19 +310,33 @@ export function validateMultiBotRootInvariants(bots: readonly BotConfig[]): void
   const inboundDirs = new Set<string>()
   let legacy = 0
   for (const bot of bots) {
-    if (ids.has(bot.id)) throw new Error(`dsh-feishu-remote: duplicate bot id ${bot.id}`)
+    if (ids.has(bot.id)) {
+      throw new BotConfigError('duplicate_bot_id', `dsh-feishu-remote: duplicate bot id ${bot.id}`)
+    }
     ids.add(bot.id)
     const appId = bot.appId.trim()
-    if (appIds.has(appId)) throw new Error(`dsh-feishu-remote: duplicate appId ${appId}`)
+    if (appIds.has(appId)) {
+      throw new BotConfigError('duplicate_app_id', `dsh-feishu-remote: duplicate appId ${appId}`)
+    }
     appIds.add(appId)
     if ((bot.sessionNamespace ?? 'app') === 'legacy' && ++legacy > 1) {
-      throw new Error('dsh-feishu-remote: at most one bot may use the legacy session namespace')
+      throw new BotConfigError(
+        'duplicate_session_namespace',
+        'dsh-feishu-remote: at most one bot may use the legacy session namespace',
+      )
     }
+    // The resolved paths are deliberately NOT part of the message: this error
+    // reaches `bots/status`, and an absolute path is host topology the browser
+    // must never see (Codex batch-3 B1).
     const statePath = canonicalPath(resolve(bot.statePath || join(dshHome, 'feishu-remote', `${appId}.json`)))
-    if (statePaths.has(statePath)) throw new Error(`dsh-feishu-remote: duplicate statePath ${statePath}`)
+    if (statePaths.has(statePath)) {
+      throw new BotConfigError('duplicate_state_path', `dsh-feishu-remote: duplicate statePath for bot ${bot.id}`)
+    }
     statePaths.add(statePath)
     const inboundDir = canonicalPath(resolve(bot.inboundDir || join(dshHome, 'feishu-remote', 'inbox', appId)))
-    if (inboundDirs.has(inboundDir)) throw new Error(`dsh-feishu-remote: duplicate inboundDir ${inboundDir}`)
+    if (inboundDirs.has(inboundDir)) {
+      throw new BotConfigError('duplicate_inbound_dir', `dsh-feishu-remote: duplicate inboundDir for bot ${bot.id}`)
+    }
     inboundDirs.add(inboundDir)
   }
 }
@@ -311,7 +351,12 @@ export async function resolveBotRuntimeConfig(
   const ref = bot.appSecretRef.trim()
   const direct = (env[ref] ?? '').trim()
   const appSecret = direct === '' ? (await ctx.credentials.resolve(credentialRef(ref)))?.value ?? '' : direct
-  if (appSecret.trim() === '') throw new Error(`dsh-feishu-remote [bot:${bot.id}]: missing app secret for credential ${ref}`)
+  if (appSecret.trim() === '') {
+    throw new BotConfigError(
+      'credential_missing',
+      `dsh-feishu-remote [bot:${bot.id}]: missing app secret for credential ${ref}`,
+    )
+  }
   const dshHome = resolve(env.DSH_HOME?.trim() || join(homedir(), '.dsh'))
   const resolved = resolveConfig({
     ...bot,

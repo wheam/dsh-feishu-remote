@@ -484,9 +484,46 @@ describe('PersonalAgent onboarding', () => {
     const signal = new AbortController().signal
     const badMode = await h.service.handleRpc('onboarding/start', { mode: 'replace' }, signal)
     const unknown = await h.service.handleRpc('onboarding/nope', {}, signal)
-    expect(badMode).toMatchObject({ ok: false, error: { code: 'bad-request' } })
-    expect(unknown).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    expect(badMode).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(unknown).toMatchObject({ ok: false, code: 'bad_request' })
     expect(h.registerApp).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Audit M5: `handleRpc` used to collapse every structured failure into
+   * `internal`, so the GUI could not tell "settings are read-only" from
+   * "already added" and had nothing actionable to show.
+   */
+  it('passes structured onboarding failure codes through to the RPC result', async () => {
+    const readOnly = harness({ settingsWritable: false })
+    expect(await readOnly.service.handleRpc('onboarding/start', {}, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'read_only' })
+
+    const multi = harness({
+      initialSettings: flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] }),
+    })
+    expect(await multi.service.handleRpc('onboarding/start', { destination: 'legacy' }, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'destination_required' })
+
+    const noApp = harness()
+    expect(await noApp.service.handleRpc('onboarding/retry', {}, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'missing_app' })
+
+    const aborted = new AbortController()
+    aborted.abort()
+    expect(await harness().service.handleRpc('onboarding/status', {}, aborted.signal))
+      .toMatchObject({ ok: false, code: 'cancelled' })
+  })
+
+  it('wraps every failure in the Host RpcResult envelope the browser can parse', async () => {
+    const result = await harness().service.handleRpc('onboarding/nope', {}, new AbortController().signal)
+    // The browser re-parses the response with the Host's CLOSED RpcError
+    // schema, so `error.code` must be a Host code and the plugin code has to
+    // travel in the one free-form slot, `details.issues`.
+    const envelope = (result as { error: { code: string; message: string; details: { issues: unknown[] } } }).error
+    expect(envelope.code).toBe('bad-request')
+    expect(envelope.details.issues[0]).toMatchObject({ code: 'bad_request' })
+    expect(envelope.message).toContain('unknown endpoint')
   })
 })
 

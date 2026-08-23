@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { FeishuRemoteBridge } from './bridge.js'
 import {
+  BotConfigError,
   resolveBotRuntimeConfig,
   resolveRuntimeConfig,
   validateMultiBotRootInvariants,
@@ -11,8 +12,14 @@ import {
 } from './config.js'
 import { createMockChannel } from './mock.js'
 import { ProfileLoader, safeProfileError } from './profile.js'
+import { bounded, redactSecrets } from './security.js'
 import { resolveExistingWorkspacePath } from './workspace.js'
-import type { BotRuntimeStatus, ResolvedConfig, ResolvedWorkspaceDefault } from './types.js'
+import type {
+  BotRuntimeStatus,
+  BotStatusReasonCode,
+  ResolvedConfig,
+  ResolvedWorkspaceDefault,
+} from './types.js'
 
 interface BotSlot {
   id: string
@@ -21,10 +28,80 @@ interface BotSlot {
   fingerprint: string
   enabled: boolean
   status: BotRuntimeStatus['status']
+  /** RAW failure text — host logs only, never forwarded to the browser. */
   error?: string
+  reasonCode?: BotStatusReasonCode
+  detail?: string
   config?: ResolvedConfig
   bridge?: FeishuRemoteBridge
   lastConnectedAt?: number
+}
+
+/** One classified failure: a stable code, a safe sentence, and the raw text. */
+export interface BotFailure {
+  reasonCode: BotStatusReasonCode
+  detail: string
+  raw: string
+}
+
+/**
+ * Fixed, browser-safe sentence per reason code. These are deliberately
+ * CONSTANT: a rendered failure must never interpolate an absolute path, a
+ * credential value or an upstream error body (Codex batch-3 B1).
+ */
+const REASON_DETAIL: Record<BotStatusReasonCode, string> = {
+  disabled: '已停用',
+  credential_missing: 'App Secret 凭据尚未配置或为空',
+  duplicate_bot_id: '机器人标识与另一个机器人重复',
+  duplicate_app_id: '与另一个机器人使用了同一个飞书应用',
+  duplicate_state_path: '与另一个机器人共用同一份会话状态文件',
+  duplicate_inbound_dir: '与另一个机器人共用同一个接收目录',
+  duplicate_session_namespace: '只能有一个机器人继续使用原有会话身份',
+  invalid_bot_id: '机器人标识不合法',
+  workspace_unavailable: '默认工作区不可用',
+  profile_unreadable: '角色文件无法读取',
+  preset_unavailable: 'Agent 预设不可用',
+  config_invalid: '配置不完整或不合法',
+  connect_failed: '飞书长连接启动失败',
+  rate_limited: '被飞书限流，稍后会自动重试',
+  unknown: '出现未知错误',
+}
+
+const PATH_LIKE = /(?:~|[A-Za-z]:)?[/\\][^\s'"`，。；：)\]}]*/gu
+
+/**
+ * Bounded, secret-free, PATH-free text safe to hand to the browser. Anything
+ * that looks like a filesystem path collapses to `…`: host topology (state
+ * files, inbox directories, profile locations, the Feishu CLI binary) is not
+ * the browser's business, and `bots/status` used to leak exactly that.
+ */
+export function safeStatusText(value: unknown, max = 200): string {
+  const raw = value instanceof Error ? value.message : String(value ?? '')
+  return bounded(redactSecrets(raw).replace(PATH_LIKE, '…').trim(), max)
+}
+
+function inferReasonCode(raw: string): BotStatusReasonCode {
+  if (/missing app secret|credential|凭据/iu.test(raw)) return 'credential_missing'
+  if (/\b429\b|rate.?limit|too many requests|限流/iu.test(raw)) return 'rate_limited'
+  if (/profile/iu.test(raw)) return 'profile_unreadable'
+  if (/workspace|工作区/iu.test(raw)) return 'workspace_unavailable'
+  if (/preset|预设/iu.test(raw)) return 'preset_unavailable'
+  if (/connect|连接|websocket|socket|network|timeout|超时|ECONN|ETIMEDOUT|ENOTFOUND/iu.test(raw)) {
+    return 'connect_failed'
+  }
+  return 'unknown'
+}
+
+/** Map any thrown value onto a stable code plus a browser-safe sentence. */
+export function classifyBotFailure(error: unknown): BotFailure {
+  const raw = error instanceof Error ? error.message : String(error)
+  const reasonCode = error instanceof BotConfigError ? error.code : inferReasonCode(raw)
+  return {
+    reasonCode,
+    // Only the unclassified branch may echo (sanitized) upstream text.
+    detail: reasonCode === 'unknown' ? safeStatusText(raw) || REASON_DETAIL.unknown : REASON_DETAIL[reasonCode],
+    raw,
+  }
 }
 
 export interface BotManagerOptions {
@@ -108,7 +185,7 @@ export class FeishuBotManager {
         }]
       }
     } catch (error) {
-      await this.disableAllForRootError(config, message(error), generation)
+      await this.disableAllForRootError(config, classifyBotFailure(error), generation)
       return
     }
 
@@ -122,7 +199,7 @@ export class FeishuBotManager {
     await Promise.all(definitions.map(async definition => {
       if (generation !== this.reconcileGeneration || this.closed) return
       if (!definition.enabled) {
-        await this.disableSlot(definition.id, definition.appId, 'disabled', generation)
+        await this.disableSlot(definition.id, definition.appId, undefined, generation)
         return
       }
       try {
@@ -146,12 +223,16 @@ export class FeishuBotManager {
         if (current?.bridge !== undefined && current.fingerprint === nextFingerprint) return
         await this.replaceSlot(definition.id, resolved, nextFingerprint, generation)
       } catch (error) {
+        const failure = classifyBotFailure(error)
+        // The RAW text (which may name absolute paths) goes to the host log
+        // ONLY; the browser sees `failure.reasonCode` / `failure.detail`.
         this.ctx.logger?.warn?.(
-          'dsh-feishu-remote [bot:%s]: 配置无效，通道保持禁用（fail-closed）：%s',
+          'dsh-feishu-remote [bot:%s]: 配置无效，通道保持禁用（fail-closed）[%s]：%s',
           definition.id,
-          message(error),
+          failure.reasonCode,
+          failure.raw,
         )
-        await this.disableSlot(definition.id, definition.appId, message(error), generation)
+        await this.disableSlot(definition.id, definition.appId, failure, generation)
       }
     }))
   }
@@ -207,7 +288,13 @@ export class FeishuBotManager {
     slot.status = 'starting'
   }
 
-  private async disableSlot(id: string, appId: string | undefined, error: string, generation: number): Promise<void> {
+  /** `failure === undefined` means the operator turned this bot off. */
+  private async disableSlot(
+    id: string,
+    appId: string | undefined,
+    failure: BotFailure | undefined,
+    generation: number,
+  ): Promise<void> {
     const previous = this.slots.get(id)
     await previous?.bridge?.stop().catch(() => undefined)
     if (generation !== this.reconcileGeneration || this.closed) return
@@ -215,21 +302,36 @@ export class FeishuBotManager {
       id,
       generation: (previous?.generation ?? 0) + 1,
       fingerprint: '',
-      enabled: error === 'disabled' ? false : true,
+      enabled: failure !== undefined,
       status: 'disabled',
-      ...(error === 'disabled' ? {} : { error }),
+      ...(failure === undefined
+        ? { reasonCode: 'disabled' as const, detail: REASON_DETAIL.disabled }
+        : { error: failure.raw, reasonCode: failure.reasonCode, detail: failure.detail }),
       ...(appId === undefined ? {} : { appId }),
     })
   }
 
-  private async disableAllForRootError(config: Config, error: string, generation: number): Promise<void> {
-    this.ctx.logger?.warn?.('dsh-feishu-remote: 配置无效，所有冲突机器人保持禁用（fail-closed）：%s', error)
+  private async disableAllForRootError(config: Config, failure: BotFailure, generation: number): Promise<void> {
+    this.ctx.logger?.warn?.(
+      'dsh-feishu-remote: 配置无效，所有冲突机器人保持禁用（fail-closed）[%s]：%s',
+      failure.reasonCode,
+      failure.raw,
+    )
     const ids = (config.bots?.length ?? 0) > 0 ? config.bots!.map(bot => bot.id || '<invalid>') : ['legacy']
     await Promise.all([...this.slots.values()].map(slot => slot.bridge?.stop().catch(() => undefined)))
     if (generation !== this.reconcileGeneration || this.closed) return
     this.slots.clear()
     for (const id of new Set(ids)) {
-      this.slots.set(id, { id, generation: 1, fingerprint: '', enabled: true, status: 'disabled', error })
+      this.slots.set(id, {
+        id,
+        generation: 1,
+        fingerprint: '',
+        enabled: true,
+        status: 'disabled',
+        error: failure.raw,
+        reasonCode: failure.reasonCode,
+        detail: failure.detail,
+      })
     }
   }
 
@@ -266,6 +368,13 @@ export class FeishuBotManager {
       const runtimeError = slot.bridge?.runtimeError()
       if (health?.connected && slot.lastConnectedAt === undefined) slot.lastConnectedAt = Date.now()
       const profile = slot.bridge?.profileStatus()
+      const runtimeFailure = slot.error !== undefined
+        ? { reasonCode: slot.reasonCode ?? 'unknown', detail: slot.detail ?? REASON_DETAIL.unknown, raw: slot.error }
+        : runtimeError !== undefined
+          ? classifyBotFailure(runtimeError)
+          : health?.terminalFailure === true
+            ? { reasonCode: 'connect_failed' as const, detail: REASON_DETAIL.connect_failed, raw: 'terminal failure' }
+            : undefined
       return {
         id: slot.id,
         ...((slot.config?.appId ?? slot.appId) === undefined ? {} : { appId: slot.config?.appId ?? slot.appId }),
@@ -275,7 +384,10 @@ export class FeishuBotManager {
           : health?.terminalFailure || runtimeError !== undefined
             ? 'degraded'
             : health?.connected ? 'connected' : slot.status,
-        ...(slot.error === undefined && runtimeError === undefined ? {} : { error: slot.error ?? runtimeError }),
+        ...(runtimeFailure === undefined ? {} : { error: runtimeFailure.raw }),
+        ...(runtimeFailure === undefined
+          ? (slot.reasonCode === undefined ? {} : { reasonCode: slot.reasonCode, detail: slot.detail })
+          : { reasonCode: runtimeFailure.reasonCode, detail: runtimeFailure.detail }),
         connected: health?.connected ?? false,
         terminalFailure: health?.terminalFailure ?? false,
         ...(health?.botName === undefined ? {} : { botName: health.botName }),

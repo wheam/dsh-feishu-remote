@@ -6,8 +6,10 @@ import { purgeForbiddenSettingsKeys } from '../src/index.js'
 import {
   HOST_ONLY_BOT_KEYS,
   SETTINGS_NAMESPACE,
+  findForbiddenSettingsKeys,
   flatSchema,
   flatten,
+  settingsPurgePlan,
   unflatten,
   type FlatSettings,
 } from '../src/settings.js'
@@ -275,7 +277,9 @@ describe('settings descriptor (the layers the browser actually receives)', () =>
     // Before the migration the raw user layer really does leak (this is the
     // bug Codex found); after it, all three layers are clean.
     expect(JSON.stringify(settings.describe({ redactSecrets: true })[0]?.user)).toContain('super-secret')
-    await purgeForbiddenSettingsKeys(ctx as never)
+    // Every stale path here is REDUNDANT with the trusted entry config, so the
+    // purge is lossless and the GUI ends up provably safe.
+    expect(await purgeForbiddenSettingsKeys(ctx as never, HOST_CONFIG)).toEqual({ safe: true })
     const descriptor = settings.describe({ redactSecrets: true })
       .find(item => String(item.ns) === String(SETTINGS_NAMESPACE))!
     for (const layer of ['base', 'value', 'user'] as const) {
@@ -295,7 +299,116 @@ describe('settings descriptor (the layers the browser actually receives)', () =>
     })
     // A second run is a no-op (no revision bump, no write).
     const revision = descriptor.revision
-    await purgeForbiddenSettingsKeys(ctx as never)
+    expect(await purgeForbiddenSettingsKeys(ctx as never, HOST_CONFIG)).toEqual({ safe: true })
     expect(settings.describe({ redactSecrets: true })[0]?.revision).toBe(revision)
+  })
+
+  /**
+   * Audit M1: a pre-f774159 install could legitimately hold `statePath` /
+   * `inboundDir` / `feishuCliPath` in the USER layer, and the trusted entry
+   * config may know nothing about them. Deleting such a value silently moves
+   * a bot's session state, so the purge keeps it, tells the admin to move it
+   * into cordis.patch.yml, and fails the GUI closed until they do. The stale
+   * SECRET is purged either way.
+   */
+  it('keeps a user-layer host-only value the entry config does not declare, and fails the GUI closed', async () => {
+    const entry: Config = { bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] }
+    const ctx = await bootSettings({
+      appSecret: 'super-secret',
+      model: 'kept-model',
+      bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', statePath: '/legacy/only-here.json' }],
+    })
+    const settings = (ctx as unknown as { settings: SettingsSurface }).settings
+    const scope = settings.register(SETTINGS_NAMESPACE, flatSchema, { base: flatten(entry) })
+    const warnings: string[] = []
+    ;(ctx as unknown as { logger?: unknown }).logger = {
+      warn: (text: string, ...args: unknown[]) => warnings.push([text, ...args.map(String)].join(' ')),
+      info: () => undefined,
+    }
+    expect(await purgeForbiddenSettingsKeys(ctx as never, entry))
+      .toEqual({ safe: false, reason: 'user_layer_dirty' })
+    // The operator's only copy of that path survives …
+    expect(JSON.stringify(scope.get().bots[0])).toContain('/legacy/only-here.json')
+    // … the stale secret does not …
+    expect(JSON.stringify(settings.describe({ redactSecrets: true })[0]?.user)).not.toContain('super-secret')
+    expect(scope.get().model).toBe('kept-model')
+    // … and the admin is told exactly what to do about it.
+    expect(warnings.some(line => line.includes('cordis.patch.yml') && line.includes('statePath'))).toBe(true)
+  })
+
+  it('purges a user-layer host-only value the entry config already provides', async () => {
+    const entry: Config = { bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', statePath: '/hidden/a.json' }] }
+    const plan = settingsPurgePlan({
+      bots: [{ id: 'bot-a', statePath: '/hidden/a.json', inboundDir: '' }],
+    }, entry)
+    expect(plan.retained).toEqual([])
+    expect(plan.ops).toEqual([{ op: 'set', path: ['bots'], value: [{ id: 'bot-a' }] }])
+  })
+})
+
+/** Fail-closed GUI state (Codex batch-3 B2): only a clean descriptor unlocks it. */
+describe('settings GUI safety gate', () => {
+  const DIRTY_USER = { appSecret: 'super-secret', statePath: '/legacy/only-here.json' }
+
+  function fakeCtx(options: {
+    writable?: boolean
+    user?: Record<string, unknown>
+    mutate?: () => Promise<void>
+    describe?: () => unknown[]
+  }) {
+    const user = options.user ?? DIRTY_USER
+    return {
+      logger: { warn: () => undefined, info: () => undefined },
+      settings: {
+        writable: options.writable ?? true,
+        describe: options.describe ?? (() => [{ ns: 'feishu-remote', revision: 3, base: {}, value: user, user }]),
+        mutate: options.mutate ?? (async () => undefined),
+      },
+    }
+  }
+
+  it('reports read_only_dirty when a read-only provider cannot be cleaned', async () => {
+    const ctx = fakeCtx({ writable: false })
+    expect(await purgeForbiddenSettingsKeys(ctx as never, {}))
+      .toEqual({ safe: false, reason: 'read_only_dirty' })
+  })
+
+  it('reports purge_failed when the CAS write conflicts', async () => {
+    const ctx = fakeCtx({
+      mutate: async () => { throw Object.assign(new Error('settings conflict'), { code: 'SETTINGS_CONFLICT' }) },
+    })
+    expect(await purgeForbiddenSettingsKeys(ctx as never, {}))
+      .toEqual({ safe: false, reason: 'purge_failed' })
+  })
+
+  it('reports purge_failed when persisting the purge throws', async () => {
+    const ctx = fakeCtx({ mutate: async () => { throw new Error('disk is read-only') } })
+    expect(await purgeForbiddenSettingsKeys(ctx as never, {}))
+      .toEqual({ safe: false, reason: 'purge_failed' })
+  })
+
+  it('reports purge_failed when the descriptor cannot be read at all', async () => {
+    const ctx = fakeCtx({ describe: () => [] })
+    expect(await purgeForbiddenSettingsKeys(ctx as never, {}))
+      .toEqual({ safe: false, reason: 'purge_failed' })
+  })
+
+  it('unlocks the GUI once every layer is clean', async () => {
+    let user: Record<string, unknown> = { ...DIRTY_USER }
+    const ctx = {
+      logger: { warn: () => undefined, info: () => undefined },
+      settings: {
+        writable: true,
+        describe: () => [{ ns: 'feishu-remote', revision: 3, base: {}, value: user, user }],
+        mutate: async () => { user = {} },
+      },
+    }
+    expect(await purgeForbiddenSettingsKeys(ctx as never, { statePath: '/legacy/only-here.json' }))
+      .toEqual({ safe: true })
+  })
+
+  it('scans every nesting level for a forbidden key', () => {
+    expect(findForbiddenSettingsKeys({ bots: [{ id: 'a', feishuCliPath: '/bin/lark' }] })).toEqual(['feishuCliPath'])
+    expect(findForbiddenSettingsKeys({ appSecretRef: 'REF' })).toEqual([])
   })
 })

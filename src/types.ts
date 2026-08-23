@@ -79,18 +79,52 @@ export interface ResolvedConfig {
   multiBot: boolean
 }
 
+/**
+ * Stable, snake_case reason a bot is not running normally (Codex batch-3 B1).
+ *
+ * This is the ONLY failure discriminator that crosses the RPC boundary: the
+ * raw error text may embed absolute paths (statePath/inboundDir collisions,
+ * profile locations) and therefore stays host-side, in the logger.
+ */
+export type BotStatusReasonCode =
+  | 'disabled'
+  | 'credential_missing'
+  | 'duplicate_bot_id'
+  | 'duplicate_app_id'
+  | 'duplicate_state_path'
+  | 'duplicate_inbound_dir'
+  | 'duplicate_session_namespace'
+  | 'invalid_bot_id'
+  | 'workspace_unavailable'
+  | 'profile_unreadable'
+  | 'preset_unavailable'
+  | 'config_invalid'
+  | 'connect_failed'
+  | 'rate_limited'
+  | 'unknown'
+
 export interface BotRuntimeStatus {
   id: string
   appId?: string
   enabled: boolean
   status: 'starting' | 'connected' | 'degraded' | 'disabled' | 'stopping'
+  /**
+   * RAW host-side failure text. It may contain absolute paths and MUST NOT be
+   * forwarded to the browser — `src/admin.ts` projects this shape onto
+   * `ClientBotStatus`, which carries `reasonCode`/`detail` instead.
+   */
   error?: string
+  /** Stable machine code for `error`; safe to send to the browser. */
+  reasonCode?: BotStatusReasonCode
+  /** Short, path-free, secret-free explanation; safe to send to the browser. */
+  detail?: string
   connected: boolean
   terminalFailure: boolean
   botName?: string
   liveAgents: number
   provisionalAgents: number
   lastConnectedAt?: number
+  /** Host-side only: `path` is an absolute local path (never sent to the browser). */
   profile?: Pick<ProfileSnapshot, 'path' | 'digest' | 'bytes' | 'loadedAt'>
 }
 

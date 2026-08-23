@@ -31,7 +31,7 @@ const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8'
 
 type Row = Record<string, unknown>
 type Issue = { botId: string; field: string; message: string }
-type StatusModel = { tone: string; label: string; detail: string; params?: Record<string, unknown>; raw?: string; action?: string }
+type StatusModel = { tone: string; label: string; detail: string; params?: Record<string, unknown>; safeDetail?: string; action?: string }
 
 const normalizeBotRow = client.normalizeBotRow as (raw: unknown) => Row
 const projectLegacyRow = client.projectLegacyRow as (config: unknown) => Row
@@ -43,7 +43,7 @@ const buildLegacyPayload = client.buildLegacyPayload as (original: Row | undefin
 const changedBotKeys = client.changedBotKeys as (original: Row | undefined, draft: Row) => string[]
 const draftChangeCount = client.draftChangeCount as (originals: Row[], drafts: Row[], originalMax: number, max: number) => number
 const validateBotRows = client.validateBotRows as (rows: Row[], max: number, mode: string) => Issue[]
-const friendlyError = client.friendlyError as (error: unknown) => { key: string; raw: string } | undefined
+const friendlyError = client.friendlyError as (error: unknown) => { key: string; detail?: string } | undefined
 const maskId = client.maskId as (value: string) => string
 const formatClock = client.formatClock as (ts: number, now?: number) => { sameDay: boolean; clock: string; date: string } | undefined
 
@@ -148,10 +148,57 @@ describe('bot status model', () => {
     expect(botStatusModel(row(), undefined, 'multi')).toMatchObject({ tone: 'off', label: 'status.loading' })
   })
 
-  it('keeps the raw runtime error out of the primary line but available for 详情', () => {
-    expect(botStatusModel(row(), { status: 'degraded', error: 'ws 1006', connected: false }, 'multi')).toEqual({
-      tone: 'err', label: 'status.failed', detail: 'status.failedDetail', raw: 'ws 1006', action: 'retry',
-    })
+  it('separates a configuration problem from a connection problem (review M4)', () => {
+    expect(botStatusModel(row(), { connected: false, reasonCode: 'credential_missing', detail: '还没有保存这个机器人的 Secret。' }, 'multi'))
+      .toEqual({
+        tone: 'err', label: 'status.misconfigured',
+        detail: 'status.reason.credentialMissing', safeDetail: '还没有保存这个机器人的 Secret。',
+      })
+    const configReasons = [
+      'duplicate_state_path', 'duplicate_inbound_dir', 'duplicate_app_id', 'duplicate_bot_id',
+      'duplicate_session_namespace', 'invalid_bot_id', 'workspace_unavailable',
+      'preset_unavailable', 'profile_unreadable', 'config_invalid',
+    ]
+    for (const reasonCode of configReasons) {
+      const model = botStatusModel(row(), { connected: false, reasonCode }, 'multi')
+      expect(model.tone).toBe('err')
+      expect(model.label).toBe('status.misconfigured')
+      expect(model.detail.startsWith('status.reason.')).toBe(true)
+      expect(enDictionary[model.detail], model.detail).toBeTypeOf('string')
+      expect(model.action).toBeUndefined()
+    }
+  })
+
+  it('offers a retry only where the page renders one, and never a raw error string', () => {
+    expect(botStatusModel(row(), { connected: false, reasonCode: 'connect_failed', detail: '连接被服务端关闭。' }, 'multi'))
+      .toEqual({
+        tone: 'err', label: 'status.failed', detail: 'status.failedDetail',
+        safeDetail: '连接被服务端关闭。', action: 'retry',
+      })
+    // Still recognised when the Host only reports the coarse runtime state.
+    expect(botStatusModel(row(), { connected: false, status: 'degraded' }, 'multi'))
+      .toMatchObject({ tone: 'err', label: 'status.failed', action: 'retry' })
+    expect(botStatusModel(row(), { connected: false, terminalFailure: true }, 'multi'))
+      .toMatchObject({ tone: 'err', label: 'status.failed', action: 'retry' })
+    // No `raw` channel exists any more — nothing unstructured can be rendered.
+    expect(botStatusModel(row(), { connected: false, status: 'degraded', error: 'ws 1006 /Users/me/.dsh/state.json' }, 'multi'))
+      .not.toHaveProperty('raw')
+  })
+
+  it('reports the Host-side rate limit and a Host-side disable without inventing an action', () => {
+    expect(botStatusModel(row(), { connected: false, reasonCode: 'rate_limited' }, 'multi'))
+      .toEqual({ tone: 'warn', label: 'status.rateLimited', detail: 'status.rateLimitedDetail' })
+    expect(botStatusModel(row(), { connected: false, reasonCode: 'disabled' }, 'multi'))
+      .toEqual({ tone: 'off', label: 'status.disabled', detail: 'status.disabledDetail' })
+  })
+
+  it('redacts an implementation word or path that leaks into the safe detail', () => {
+    const model = botStatusModel(row(), {
+      connected: false, reasonCode: 'profile_unreadable',
+      detail: '无法读取 /Users/me/.dsh/bot-profiles/curio.md（revision 12）',
+    }, 'multi')
+    expect(model.safeDetail).not.toContain('/Users/me')
+    expect(model.safeDetail?.toLowerCase()).not.toContain('revision')
   })
 
   it('flags a connected bot that nobody is allowed to use', () => {
@@ -166,8 +213,9 @@ describe('bot status model', () => {
       .toEqual({ tone: 'ok', label: 'status.connected', detail: 'status.connectedDetail', params: { live: 2 } })
     expect(botStatusModel(row(), { connected: false, status: 'starting' }, 'multi'))
       .toMatchObject({ tone: 'warn', label: 'status.connecting' })
+    // 未连接 carries NO action: the page renders no button there (review M4).
     expect(botStatusModel(row(), { connected: false, status: 'stopping' }, 'multi'))
-      .toMatchObject({ tone: 'err', label: 'status.offline', action: 'retry' })
+      .toEqual({ tone: 'err', label: 'status.offline', detail: 'status.offlineDetail' })
   })
 
   it('returns dictionary keys, never raw Chinese, so both locales work', () => {
@@ -297,27 +345,56 @@ describe('field-level validation', () => {
 })
 
 describe('backend error copy', () => {
-  it('maps known messages and codes to friendly keys and keeps the raw text for 详情', () => {
-    expect(friendlyError('设置已被其他操作更新；已获取最新版本，请检查当前编辑后重试。'))
-      .toEqual({ key: 'err.conflict', raw: '设置已被其他操作更新；已获取最新版本，请检查当前编辑后重试。' })
-    expect(friendlyError(new Error('不能移除最后一个机器人：如果暂时不用，请把它停用'))?.key).toBe('err.lastBot')
-    expect(friendlyError(new Error('bot x 的 credential ref REF 尚未配置'))?.key).toBe('err.credential')
-    expect(friendlyError(Object.assign(new Error('another onboarding is running'), { code: 'busy' }))?.key).toBe('err.busy')
+  it('maps every structured admin and onboarding code to friendly copy', () => {
+    const cases: [string, string][] = [
+      ['conflict', 'err.conflict'], ['read_only', 'err.readOnly'], ['legacy_mode', 'err.shapeChanged'],
+      ['multi_mode', 'err.shapeChanged'], ['unknown_bot_id', 'err.unknownBot'], ['last_bot', 'err.lastBot'],
+      ['validation', 'err.validation'], ['credential_missing', 'err.credential'],
+      ['settings_unsafe', 'err.settingsUnsafe'], ['internal', 'err.generic'], ['bad_request', 'err.generic'],
+      ['busy', 'err.busy'], ['duplicate_app', 'err.duplicateApp'], ['multi_bot_required', 'err.shapeChanged'],
+      ['settings_unavailable', 'err.settingsUnsafe'], ['missing_app', 'err.notFound'],
+      ['expired', 'err.expired'], ['cancelled', 'err.cancelled'],
+    ]
+    for (const [code, key] of cases) {
+      expect(friendlyError(Object.assign(new Error('x'), { code })), code).toMatchObject({ key })
+    }
   })
 
-  it('never leaves a raw English backend string as the primary line', () => {
-    const failure = friendlyError(new Error('TypeError: cannot read properties of undefined'))
-    expect(failure).toEqual({ key: 'err.generic', raw: 'TypeError: cannot read properties of undefined' })
+  it('carries the Host sentence only when it arrived with a structured code', () => {
+    expect(friendlyError(Object.assign(new Error('这个飞书应用已经添加过了。'), { code: 'duplicate_app' })))
+      .toEqual({ key: 'err.duplicateApp', detail: '这个飞书应用已经添加过了。' })
+    // An unstructured throw has no safe sentence, so nothing is rendered from it.
+    expect(friendlyError(new Error('TypeError: cannot read properties of undefined')))
+      .toEqual({ key: 'err.generic' })
+    expect(friendlyError('设置已被其他操作更新')).toEqual({ key: 'err.generic' })
     expect(friendlyError(undefined)).toBeUndefined()
   })
+
+  it('still recognises a transport failure without echoing its text', () => {
+    expect(friendlyError(new TypeError('Failed to fetch'))).toEqual({ key: 'err.offline' })
+    expect(friendlyError(new Error('NetworkError when attempting to fetch resource.'))).toEqual({ key: 'err.offline' })
+  })
 })
+
+const BANNED_WORDS = ['legacy', '主机器人', 'namespace', '凭据引用', 'loopback', 'revision', '内部名称', 'wire']
 
 describe('settings copy rules', () => {
   const dictionaries = source.slice(source.indexOf('const en = {'), source.indexOf('// ------------------------------------------------ legacy transcript display'))
 
   it('keeps implementation vocabulary out of every user-visible string (docs/18 §2.4)', () => {
-    for (const banned of ['legacy', '主机器人', 'namespace', '凭据引用', 'loopback', 'revision']) {
+    for (const banned of BANNED_WORDS) {
       expect(dictionaries.toLowerCase()).not.toContain(banned.toLowerCase())
+    }
+  })
+
+  it('translates every key in both locales', () => {
+    const keysOf = (block: string) => new Set([...block.matchAll(/"([\w.]+)":/gu)].map(match => match[1]!))
+    const enKeys = keysOf(dictionaries.slice(0, dictionaries.indexOf('const zh = {')))
+    const zhKeys = keysOf(dictionaries.slice(dictionaries.indexOf('const zh = {')))
+    expect([...enKeys].filter(key => !zhKeys.has(key))).toEqual([])
+    expect([...zhKeys].filter(key => !enKeys.has(key))).toEqual([])
+    for (const key of ['gui.blocked.purgeFailed', 'gui.blocked.readOnlyDirty', 'gui.blocked.userLayerDirty', 'gui.blocked.generic']) {
+      expect(enKeys.has(key), key).toBe(true)
     }
   })
 
@@ -336,6 +413,11 @@ describe('settings copy rules', () => {
     // white in both themes); no text or surface colour may be hardcoded.
     expect(source).not.toMatch(/color:\s*#[0-9a-f]/iu)
     expect(source).toContain('color:var(--dsw-alias-label-primary)')
+    // EVERY custom property must come from the host alias layer: `--dsw-specific-*`
+    // is an internal token that is not guaranteed to exist in both themes.
+    const tokens = [...source.matchAll(/var\((--[\w-]+)/gu)].map(match => match[1]!)
+    expect(tokens.length).toBeGreaterThan(20)
+    for (const token of new Set(tokens)) expect(token, token).toMatch(/^--dsw-alias-/u)
   })
 
   it('drops the retired flat form, staged writes, and nested disclosures', () => {
@@ -349,12 +431,264 @@ describe('settings copy rules', () => {
   })
 })
 
+// ---------------------------------------------------------------- render harness
+type Node = { type: unknown; props: Record<string, unknown>; key?: unknown }
+
+/** Load the module with just enough of react/jsx-runtime to build a plain tree. */
+function loadRenderableClient(): Record<string, unknown> {
+  const jsx = (type: unknown, props: Record<string, unknown>, key?: unknown) => ({ type, props, key })
+  const reactStub = {
+    useState: (initial: unknown) => [typeof initial === 'function' ? (initial as () => unknown)() : initial, () => undefined],
+    useRef: (initial: unknown) => ({ current: initial }),
+    useEffect: () => undefined,
+    useMemo: (factory: () => unknown) => factory(),
+  }
+  return loadClientExports((name) => {
+    if (name === 'react') return reactStub
+    if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx }
+    if (name === '@deepseek-ai/dsh-client-runtime/client') {
+      return { createSnapshotStore: (initial: unknown) => ({ get: () => initial, set: () => undefined, subscribe: () => () => undefined }) }
+    }
+    return {}
+  })
+}
+
+const renderable = loadRenderableClient()
+
+function walk(node: unknown, visit: (node: Node) => void): void {
+  if (node === null || node === undefined || node === false || node === true) return
+  if (Array.isArray(node)) { for (const item of node) walk(item, visit); return }
+  if (typeof node !== 'object') return
+  const element = node as Node
+  if (!('type' in element)) return
+  visit(element)
+  walk((element.props ?? {}).children, visit)
+}
+
+function inspect(tree: unknown) {
+  const types: unknown[] = []
+  const text: string[] = []
+  const nodes: Node[] = []
+  walk(tree, node => {
+    nodes.push(node)
+    types.push(node.type)
+    const children = (node.props ?? {}).children
+    for (const child of Array.isArray(children) ? children : [children]) {
+      if (typeof child === 'string') text.push(child)
+    }
+  })
+  return { types, text, nodes }
+}
+
+/** Every `"key": "copy"` pair of one dictionary block, so tests read the OUTPUT. */
+function parseDictionary(block: string): Record<string, string> {
+  const entries: Record<string, string> = {}
+  for (const match of block.matchAll(/"([\w.]+)":\s*"((?:[^"\\]|\\.)*)"/gu)) entries[match[1]!] = match[2]!
+  return entries
+}
+
+const dictionaryBlock = source.slice(source.indexOf('const en = {'), source.indexOf('// ------------------------------------------------ legacy transcript display'))
+const enDictionary = parseDictionary(dictionaryBlock.slice(0, dictionaryBlock.indexOf('const zh = {')))
+const zhDictionary = parseDictionary(dictionaryBlock.slice(dictionaryBlock.indexOf('const zh = {')))
+
+describe('no implementation vocabulary reaches the rendered OUTPUT (review M6)', () => {
+  // Representative of what a Host could throw before the copy layer sees it.
+  const failures: unknown[] = [
+    Object.assign(new Error('settings/save-bots: revision 12 conflicts with the legacy root config at /Users/me/.dsh/settings.json'), { code: 'conflict' }),
+    Object.assign(new Error('bot curio-ops namespace 冲突：/Users/me/.dsh/feishu/state.json 已被主机器人占用'), { code: 'validation' }),
+    Object.assign(new Error('凭据引用 DSH_FEISHU_SECRET 写入 /Users/me/.dsh 失败'), { code: 'credential_missing' }),
+    Object.assign(new Error('loopback only'), { code: 'read_only' }),
+    Object.assign(new Error('wire payload rejected'), { code: 'internal' }),
+    new Error('TypeError: cannot read properties of undefined at /Users/me/dsh/lib/admin.js:120:5'),
+  ]
+
+  it('renders friendly copy plus a redacted Host sentence, never the raw throw', () => {
+    for (const locale of [enDictionary, zhDictionary]) {
+      for (const error of failures) {
+        const failure = friendlyError(error)!
+        expect(locale[failure.key], failure.key).toBeTypeOf('string')
+        const output = `${locale[failure.key]} ${failure.detail ?? ''}`
+        for (const banned of BANNED_WORDS) expect(output.toLowerCase(), banned).not.toContain(banned.toLowerCase())
+        expect(output).not.toContain('/Users/')
+        expect(output).not.toContain('TypeError')
+        expect(output).not.toContain('admin.js')
+      }
+    }
+  })
+
+  it('renders a bot status without leaking the reason text it was handed', () => {
+    const model = botStatusModel(row(), {
+      connected: false,
+      reasonCode: 'duplicate_state_path',
+      detail: 'legacy 主机器人 /Users/me/.dsh/feishu/state.json 与本机器人重复（revision 3）',
+    }, 'multi')
+    for (const locale of [enDictionary, zhDictionary]) {
+      const output = `${locale[model.label]} ${locale[model.detail]} ${model.safeDetail ?? ''}`
+      for (const banned of BANNED_WORDS) expect(output.toLowerCase(), banned).not.toContain(banned.toLowerCase())
+      expect(output).not.toContain('/Users/')
+    }
+  })
+})
+
+describe('GUI fail-closed rendering', () => {
+  const Section = renderable.FeishuRemoteSection as (props: Record<string, unknown>) => unknown
+  const SummaryCard = renderable.FeishuRemoteSummaryCard as (props: Record<string, unknown>) => unknown
+  const guiBlockedKey = renderable.guiBlockedKey as (reason: unknown) => string
+
+  function admin(patch: Record<string, unknown> = {}) {
+    return {
+      loaded: true, writable: true, mode: 'multi', revision: 2, guiSafe: false, guiReason: 'purge_failed',
+      bots: [row({ id: 'bot-a' })], originalBots: [row({ id: 'bot-a' })], statuses: [],
+      maxTotalLiveAgents: 0, originalMax: 0, dirty: false, issues: [], saving: false,
+      ...patch,
+    }
+  }
+  const props = (snapshot: Record<string, unknown>) => ({
+    t: (key: string) => key,
+    useFeishuBotAdmin: (select: (value: unknown) => unknown) => select(snapshot),
+    usePersonalAgentOnboarding: () => undefined,
+    useFeishuRemoteSettingsCard: () => ({ writable: true }),
+  })
+
+  it('names one explanatory message per reason, in both locales', () => {
+    const keys = {
+      purge_failed: 'gui.blocked.purgeFailed',
+      read_only_dirty: 'gui.blocked.readOnlyDirty',
+      user_layer_dirty: 'gui.blocked.userLayerDirty',
+    }
+    for (const [reason, key] of Object.entries(keys)) expect(guiBlockedKey(reason)).toBe(key)
+    expect(guiBlockedKey(undefined)).toBe('gui.blocked.generic')
+    for (const key of [...Object.values(keys), 'gui.blocked.generic']) {
+      expect(enDictionary[key], key).toBeTypeOf('string')
+      expect(zhDictionary[key], key).toBeTypeOf('string')
+    }
+  })
+
+  it('renders the section as one message with no editor and no action', () => {
+    const { types, text } = inspect(Section(props(admin())))
+    expect(text).toContain('gui.blocked.purgeFailed')
+    expect(text.filter(line => line.startsWith('gui.blocked.'))).toHaveLength(1)
+    for (const forbidden of ['button', 'input', 'details']) expect(types).not.toContain(forbidden)
+  })
+
+  it('falls back to one generic message when the Host names no reason', () => {
+    const { text } = inspect(Section(props(admin({ guiReason: undefined }))))
+    expect(text).toContain('gui.blocked.generic')
+  })
+
+  it('hands over to the normal bot list as soon as the Host reports it is safe', () => {
+    const { types, text } = inspect(Section(props(admin({ guiSafe: true }))))
+    expect(text.some(line => line.startsWith('gui.blocked.'))).toBe(false)
+    expect(types.some(type => typeof type === 'function')).toBe(true)
+  })
+
+  it('reduces the summary card to the same message, with no status dots', () => {
+    const { types, text } = inspect(SummaryCard(props(admin())))
+    expect(text).toContain('gui.blocked.purgeFailed')
+    expect(text).not.toContain('card.manageHint')
+    expect(types.filter(type => type === 'span')).toHaveLength(2)
+  })
+})
+
+describe('bot removal never commits the pending draft (review M2)', () => {
+  const DetailPage = renderable.BotDetailPage as (props: Record<string, unknown>) => unknown
+  const bot = row({ id: 'bot-a' })
+
+  function detail(dirty: boolean) {
+    return inspect(DetailPage({
+      t: (key: string) => key,
+      admin: {
+        writable: true, mode: 'multi', dirty, saving: false, issues: [],
+        bots: [bot, row({ id: 'bot-b' })], originalBots: [bot, row({ id: 'bot-b' })],
+      },
+      bot, busy: false, original: bot, status: undefined,
+      usePersonalAgentOnboarding: () => undefined,
+      onboardingStart: () => undefined, onboardingCancel: () => undefined, onboardingRetry: () => undefined,
+      editBot: () => undefined, onBack: () => undefined, onSave: () => undefined,
+      onDiscard: () => undefined, onRemove: () => undefined,
+    }))
+  }
+
+  function removeButton(tree: ReturnType<typeof detail>) {
+    return tree.nodes.find(node => node.type === 'button' && (node.props ?? {}).children === 'f.removeAction')
+  }
+
+  it('disables 「移除机器人…」 while the draft has unsaved changes, and says why', () => {
+    const dirty = detail(true)
+    expect(removeButton(dirty)?.props.disabled).toBe(true)
+    expect(dirty.text).toContain('f.removeDirtyHint')
+    expect(zhDictionary['f.removeDirtyHint']).toBe('请先保存或放弃当前修改')
+  })
+
+  it('enables it again once nothing is pending', () => {
+    const clean = detail(false)
+    expect(removeButton(clean)?.props.disabled).toBe(false)
+    expect(clean.text).toContain('f.removeHint')
+  })
+})
+
+describe('the detail page renders every action the status model claims (review M4)', () => {
+  const DetailPage = renderable.BotDetailPage as (props: Record<string, unknown>) => unknown
+  const bot = row({ id: 'bot-a' })
+
+  function render(patch: Record<string, unknown>, status: unknown, retried: string[] = []) {
+    return inspect(DetailPage({
+      t: (key: string) => key,
+      admin: {
+        writable: true, mode: 'multi', dirty: false, saving: false, issues: [],
+        bots: [bot, row({ id: 'bot-b' })], originalBots: [bot, row({ id: 'bot-b' })],
+        ...patch,
+      },
+      bot: patch.bot ?? bot, busy: false, original: bot, status,
+      usePersonalAgentOnboarding: () => undefined,
+      onboardingStart: () => undefined, onboardingCancel: () => undefined,
+      onboardingRetry: () => { retried.push('retry') },
+      editBot: () => undefined, onBack: () => undefined, onSave: () => undefined,
+      onDiscard: () => undefined, onRemove: () => undefined,
+    }))
+  }
+  const buttonFor = (tree: ReturnType<typeof render>, label: string) =>
+    tree.nodes.find(node => node.type === 'button' && (node.props ?? {}).children === label)
+
+  it('renders 「重试」 for a failed connection and 「添加用户」 for an unused bot', () => {
+    expect(buttonFor(render({}, { connected: false, reasonCode: 'connect_failed' }), 'status.actionRetry')).toBeDefined()
+    const noUsers = render({ bot: row({ id: 'bot-a', allowedOpenIds: [] }) }, { connected: true, liveAgents: 0 })
+    expect(buttonFor(noUsers, 'status.actionUsers')).toBeDefined()
+  })
+
+  it('retries through onboarding in single-bot mode', () => {
+    const retried: string[] = []
+    const tree = render({ mode: 'legacy', bots: [bot], originalBots: [bot] }, { connected: false, reasonCode: 'connect_failed' }, retried)
+    const button = buttonFor(tree, 'status.actionRetry')!
+    ;(button.props.onClick as () => void)()
+    expect(retried).toEqual(['retry'])
+  })
+
+  it('renders no action at all for the states that carry none', () => {
+    for (const status of [
+      { connected: false, status: 'stopping' },
+      { connected: false, reasonCode: 'credential_missing' },
+      { connected: false, reasonCode: 'rate_limited' },
+    ]) {
+      const tree = render({}, status)
+      expect(buttonFor(tree, 'status.actionRetry'), JSON.stringify(status)).toBeUndefined()
+      expect(buttonFor(tree, 'status.actionUsers'), JSON.stringify(status)).toBeUndefined()
+    }
+  })
+})
+
 describe('save routing through the admin controller', () => {
   type Call = { endpoint: string; payload: Record<string, unknown> }
+  type Handler = (endpoint: string, payload: Record<string, unknown>) => unknown
 
-  async function mountAdmin(editor: Record<string, unknown>) {
+  async function settle(times = 8) {
+    for (let tick = 0; tick < times; tick += 1) await Promise.resolve()
+  }
+
+  async function mountAdmin(initialEditor: Record<string, unknown>, handler?: Handler) {
     const calls: Call[] = []
     const disposers: (() => void)[] = []
+    let editor = initialEditor
     const store = <T,>(initial: T) => {
       let value = initial
       return { get: () => value, set: (next: T) => { value = next }, subscribe: () => () => undefined }
@@ -373,7 +707,8 @@ describe('save routing through the admin controller', () => {
         rpc: {
           call: async (_channel: string, endpoint: string, payload: Record<string, unknown>) => {
             calls.push({ endpoint, payload })
-            if (endpoint === 'settings/editor-snapshot') return { ok: true, value: editor }
+            const custom = handler?.(endpoint, payload)
+            if (custom !== undefined) return await custom
             if (endpoint === 'bots/status') return { ok: true, value: { bots: [] } }
             return { ok: true, value: editor }
           },
@@ -385,47 +720,51 @@ describe('save routing through the admin controller', () => {
       },
     })
     const section = registered.find(options => options.name === 'settings.section')!
-    for (let tick = 0; tick < 8; tick += 1) await Promise.resolve()
+    await settle()
     const api = (section.inject as () => Record<string, unknown>)()
     return {
       calls,
       api,
+      setEditor: (next: Record<string, unknown>) => { editor = next },
       state: () => (api.hooks as { feishuBotAdmin: { get: () => Record<string, unknown> } }).feishuBotAdmin.get(),
       stop: () => { for (const dispose of disposers) dispose() },
     }
   }
+
+  const editBot = (api: Record<string, unknown>) => api.editBot as (id: string, field: string, value: unknown) => void
+  const save = (api: Record<string, unknown>) => api.saveBots as () => Promise<boolean>
+  const remove = (api: Record<string, unknown>) => api.removeBot as (id: string) => Promise<boolean>
+  const botsOf = (state: Record<string, unknown>) => state.bots as Row[]
+  const originalsOf = (state: Record<string, unknown>) => state.originalBots as Row[]
+
+  function multiEditor(revision: number, bots: Record<string, unknown>[], max = 2) {
+    return { revision, writable: true, mode: 'multi', guiSafe: true, config: { maxTotalLiveAgents: max, bots } }
+  }
+  const botA = { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', allowedOpenIds: ['ou_a'] }
+  const botB = { id: 'bot-b', appId: 'cli_b', appSecretRef: 'REF_B', allowedOpenIds: ['ou_b'] }
 
   it('routes a single-bot edit to settings/save-legacy with only the changed root key', async () => {
     const mounted = await mountAdmin({
       revision: 9, writable: true, mode: 'legacy',
       config: { appId: 'cli_a', appSecretRef: 'REF', allowedOpenIds: 'ou_a', defaultWorkspace: '/a', bots: [] },
     })
-    ;(mounted.api.editBot as (id: string, field: string, value: unknown) => void)('legacy', 'allowedOpenIds', ['ou_a', 'ou_b'])
-    await (mounted.api.saveBots as () => Promise<boolean>)()
-    const save = mounted.calls.find(call => call.endpoint.startsWith('settings/save'))!
-    expect(save.endpoint).toBe('settings/save-legacy')
-    expect(save.payload).toEqual({ revision: 9, config: { allowedOpenIds: 'ou_a,ou_b' } })
+    editBot(mounted.api)('legacy', 'allowedOpenIds', ['ou_a', 'ou_b'])
+    await save(mounted.api)()
+    const call = mounted.calls.find(item => item.endpoint.startsWith('settings/save'))!
+    expect(call.endpoint).toBe('settings/save-legacy')
+    expect(call.payload).toEqual({ revision: 9, config: { allowedOpenIds: 'ou_a,ou_b' } })
     mounted.stop()
   })
 
   it('routes a multi-bot edit to settings/save-bots and keeps every stored bot id', async () => {
-    const mounted = await mountAdmin({
-      revision: 4, writable: true, mode: 'multi',
-      config: {
-        maxTotalLiveAgents: 2,
-        bots: [
-          { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', allowedOpenIds: ['ou_a'] },
-          { id: 'bot-b', appId: 'cli_b', appSecretRef: 'REF_B', allowedOpenIds: ['ou_b'] },
-        ],
-      },
-    })
-    ;(mounted.api.editBot as (id: string, field: string, value: unknown) => void)('bot-b', 'model', 'deepseek-v4-pro')
-    await (mounted.api.saveBots as () => Promise<boolean>)()
-    const save = mounted.calls.find(call => call.endpoint.startsWith('settings/save'))!
-    expect(save.endpoint).toBe('settings/save-bots')
-    expect(save.payload.revision).toBe(4)
-    expect(save.payload.maxTotalLiveAgents).toBe(2)
-    const saved = save.payload.bots as Record<string, unknown>[]
+    const mounted = await mountAdmin(multiEditor(4, [botA, botB]))
+    editBot(mounted.api)('bot-b', 'model', 'deepseek-v4-pro')
+    await save(mounted.api)()
+    const call = mounted.calls.find(item => item.endpoint.startsWith('settings/save'))!
+    expect(call.endpoint).toBe('settings/save-bots')
+    expect(call.payload.revision).toBe(4)
+    expect(call.payload.maxTotalLiveAgents).toBe(2)
+    const saved = call.payload.bots as Record<string, unknown>[]
     expect(saved.map(bot => bot.id)).toEqual(['bot-a', 'bot-b'])
     expect(saved[1]!.model).toBe('deepseek-v4-pro')
     mounted.stop()
@@ -436,9 +775,168 @@ describe('save routing through the admin controller', () => {
       revision: 1, writable: true, mode: 'legacy',
       config: { appId: 'cli_a', appSecretRef: 'REF', bots: [] },
     })
-    expect(await (mounted.api.removeBot as (id: string) => Promise<boolean>)('legacy')).toBe(false)
-    expect(mounted.calls.some(call => call.endpoint === 'settings/save-bots')).toBe(false)
-    expect(mounted.calls.some(call => call.endpoint === 'settings/convert-legacy')).toBe(false)
+    expect(await remove(mounted.api)('legacy')).toBe(false)
+    expect(mounted.calls.some(item => item.endpoint === 'settings/save-bots')).toBe(false)
+    expect(mounted.calls.some(item => item.endpoint === 'settings/convert-legacy')).toBe(false)
+    mounted.stop()
+  })
+
+  it('never commits the pending draft when a bot is removed (review M2)', async () => {
+    const mounted = await mountAdmin(multiEditor(4, [botA, botB]))
+    editBot(mounted.api)('bot-a', 'model', 'draft-only')
+    expect(await remove(mounted.api)('bot-b')).toBe(false)
+    expect(mounted.calls.some(item => item.endpoint === 'settings/save-bots')).toBe(false)
+    ;(mounted.api.discardBots as () => void)()
+    await remove(mounted.api)('bot-b')
+    const call = mounted.calls.find(item => item.endpoint === 'settings/save-bots')!
+    const saved = call.payload.bots as Record<string, unknown>[]
+    expect(saved.map(bot => bot.id)).toEqual(['bot-a'])
+    expect(saved[0]!.model).toBe('')
+    mounted.stop()
+  })
+
+  describe('CAS conflict handling (review B4)', () => {
+    /**
+     * The real dual-carrier envelope from `pluginRpcFailure` (src/admin.ts): the
+     * plugin code and details survive only inside `error.details.issues[0]`.
+     */
+    function conflict(latest: Record<string, unknown>) {
+      const message = '设置刚刚在别处被改动。'
+      const details = { latest }
+      return {
+        ok: false, code: 'conflict', message, details,
+        error: { code: 'bad-request', message, details: { issues: [{ code: 'conflict', message, details }] } },
+      }
+    }
+
+    it('keeps a remote edit to another bot while replaying the local one', async () => {
+      const latest = multiEditor(5, [botA, { ...botB, defaultWorkspace: '/remote/b' }])
+      const mounted = await mountAdmin(multiEditor(4, [botA, botB]), (endpoint) =>
+        endpoint === 'settings/save-bots' ? conflict(latest) : undefined)
+      editBot(mounted.api)('bot-a', 'model', 'local-model')
+      expect(await save(mounted.api)()).toBe(false)
+      const state = mounted.state()
+      expect(state.revision).toBe(5)
+      expect(botsOf(state).map(bot => bot.id)).toEqual(['bot-a', 'bot-b'])
+      expect(botsOf(state)[0]!.model).toBe('local-model')
+      expect(botsOf(state)[1]!.defaultWorkspace).toBe('/remote/b')
+      expect(state.dirty).toBe(true)
+      expect(state.conflictNotice).toBeUndefined()
+      // The old full list is never resent behind the user's back.
+      expect(mounted.calls.filter(item => item.endpoint === 'settings/save-bots')).toHaveLength(1)
+      mounted.stop()
+    })
+
+    it('adopts the latest value as the base while keeping the edit on the same field', async () => {
+      const latest = multiEditor(5, [{ ...botA, model: 'remote-model' }, botB])
+      const mounted = await mountAdmin(multiEditor(4, [botA, botB]), (endpoint) =>
+        endpoint === 'settings/save-bots' ? conflict(latest) : undefined)
+      editBot(mounted.api)('bot-a', 'model', 'local-model')
+      await save(mounted.api)()
+      const state = mounted.state()
+      expect(originalsOf(state)[0]!.model).toBe('remote-model')
+      expect(botsOf(state)[0]!.model).toBe('local-model')
+      expect(state.dirty).toBe(true)
+      mounted.stop()
+    })
+
+    it('drops edits aimed at a bot that no longer exists and says so', async () => {
+      const latest = multiEditor(5, [botA])
+      const mounted = await mountAdmin(multiEditor(4, [botA, botB]), (endpoint) =>
+        endpoint === 'settings/save-bots' ? conflict(latest) : undefined)
+      editBot(mounted.api)('bot-b', 'model', 'gone')
+      await save(mounted.api)()
+      const state = mounted.state()
+      expect(botsOf(state).map(bot => bot.id)).toEqual(['bot-a'])
+      expect(state.conflictNotice).toBe('conflict.dropped')
+      expect(state.dirty).toBe(false)
+      mounted.stop()
+    })
+
+    it('drops the whole draft when the list shape changed underneath it', async () => {
+      const latest = { revision: 6, writable: true, mode: 'legacy', guiSafe: true, config: { appId: 'cli_a', appSecretRef: 'REF', bots: [] } }
+      const mounted = await mountAdmin(multiEditor(4, [botA, botB]), (endpoint) =>
+        endpoint === 'settings/save-bots' ? conflict(latest) : undefined)
+      editBot(mounted.api)('bot-a', 'model', 'local-model')
+      await save(mounted.api)()
+      const state = mounted.state()
+      expect(state.mode).toBe('legacy')
+      expect(state.conflictNotice).toBe('conflict.modeChanged')
+      expect(botsOf(state).map(bot => bot.id)).toEqual(['legacy'])
+      mounted.stop()
+    })
+  })
+
+  it('ignores a poll that started before a save and resolves after it (review M3)', async () => {
+    let release: ((value: unknown) => void) | undefined
+    let reads = 0
+    const stale = multiEditor(4, [botA, botB])
+    const fresh = multiEditor(5, [botA, { ...botB, model: 'saved-model' }])
+    const mounted = await mountAdmin(stale, (endpoint) => {
+      if (endpoint !== 'settings/editor-snapshot') return undefined
+      reads += 1
+      // The FIRST read is the mount; the second is the poll this test holds open.
+      return reads === 2 ? new Promise(resolve => { release = resolve }) : undefined
+    })
+    // A poll is in flight against the OLD content…
+    const stalePoll = (mounted.api.refreshBots as () => Promise<void>)()
+    await settle()
+    // …while the user saves; the save's own refresh reads the new content.
+    mounted.setEditor(fresh)
+    editBot(mounted.api)('bot-b', 'model', 'saved-model')
+    expect(await save(mounted.api)()).toBe(true)
+    expect(mounted.state().revision).toBe(5)
+    // The stale read lands last and must change nothing.
+    release?.({ ok: true, value: stale })
+    await stalePoll
+    await settle()
+    expect(mounted.state().revision).toBe(5)
+    expect(botsOf(mounted.state())[1]!.model).toBe('saved-model')
+    mounted.stop()
+  })
+
+  it('ignores an editor snapshot older than the one already adopted', async () => {
+    let served = multiEditor(7, [botA, { ...botB, model: 'current' }])
+    const mounted = await mountAdmin(served, (endpoint) =>
+      endpoint === 'settings/editor-snapshot' ? { ok: true, value: served } : undefined)
+    expect(mounted.state().revision).toBe(7)
+    served = multiEditor(6, [botA, { ...botB, model: 'older' }])
+    await (mounted.api.refreshBots as () => Promise<void>)()
+    expect(mounted.state().revision).toBe(7)
+    expect(botsOf(mounted.state())[1]!.model).toBe('current')
+    mounted.stop()
+  })
+
+  it('reads the plugin failure code out of the envelope the Host actually sends', async () => {
+    const message = '这个机器人在本机已经不存在了。'
+    const mounted = await mountAdmin(multiEditor(4, [botA, botB]), (endpoint) => endpoint === 'settings/save-bots'
+      ? {
+        ok: false, code: 'unknown_bot_id', message,
+        error: { code: 'bad-request', message, details: { issues: [{ code: 'unknown_bot_id', message }] } },
+      }
+      : undefined)
+    editBot(mounted.api)('bot-a', 'model', 'x')
+    expect(await save(mounted.api)()).toBe(false)
+    const failure = friendlyError(mounted.state().error)!
+    expect(failure.key).toBe('err.unknownBot')
+    expect(failure.detail).toBe(message)
+    mounted.stop()
+  })
+
+  it('fails closed when the Host reports the settings are not safe to edit', async () => {
+    const mounted = await mountAdmin({
+      revision: 3, writable: true, mode: 'multi', guiSafe: false, guiReason: 'user_layer_dirty',
+      config: { maxTotalLiveAgents: 0, bots: [botA] },
+    })
+    expect(mounted.state().guiSafe).toBe(false)
+    expect(mounted.state().guiReason).toBe('user_layer_dirty')
+    mounted.stop()
+  })
+
+  it('treats a Host that does not report guiSafe yet as safe', async () => {
+    const mounted = await mountAdmin(multiEditor(1, [botA]))
+    expect(mounted.state().guiSafe).toBe(true)
+    expect(mounted.state().guiReason).toBeUndefined()
     mounted.stop()
   })
 })
