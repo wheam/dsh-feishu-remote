@@ -7,13 +7,37 @@
  * Credential semantics (docs/05 §1.2, triple-review #17): the card stores only
  * the credential REFERENCE (`appSecretRef`); the secret value itself never
  * rides through settings — `.credentials.yaml` is the single secret source
- * and the host resolves it via `ctx.credentials.resolve(ref)`.
+ * and the host resolves it via `ctx.credentials.resolve(ref)`. `appSecret` is
+ * therefore never produced by `flatten()`, never read by `unflatten()`, and a
+ * stale one left in the user layer by an older build is purged at startup
+ * (see {@link settingsPurgeOps}).
+ *
+ * Host-only keys (Codex batch-2 B1): `statePath`, `inboundDir` and
+ * `feishuCliPath` are trusted-admin YAML settings — an arbitrary executable
+ * path is equivalent to local code execution, and on-disk state locations are
+ * host topology. They are NOT part of `FlatSettings` at all, so they cannot
+ * reach the browser through the standard settings descriptor (`base`,
+ * `value`, `user` all come from this shape). They live only in the raw
+ * registration `Config` and are re-overlaid host-side by `unflatten()`.
  */
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
-import type { Config } from './config.js'
+import type { BotConfig, Config } from './config.js'
 
 export const SETTINGS_NAMESPACE = settingsNamespace('feishu-remote')
+
+/**
+ * Per-bot keys that must never enter the settings layer in either direction.
+ * The host re-overlays them from the registration `Config` in `unflatten()`.
+ */
+export const HOST_ONLY_BOT_KEYS = ['statePath', 'inboundDir', 'feishuCliPath'] as const
+export type HostOnlyBotKey = (typeof HOST_ONLY_BOT_KEYS)[number]
+
+/**
+ * Keys an older build may have persisted into the settings USER layer and
+ * that must be purged from it: the host-only paths plus the secret value.
+ */
+const FORBIDDEN_ROOT_KEYS = ['appSecret', ...HOST_ONLY_BOT_KEYS] as const
 
 export const flatSchema: Schema<FlatSettings> = Schema.object({
   appId: Schema.string().default(''),
@@ -37,15 +61,15 @@ export const flatSchema: Schema<FlatSettings> = Schema.object({
   commandAllowlist: Schema.string().default(''),
   contextMode: Schema.union(['off', 'auto'] as const).default('auto'),
   contextBackend: Schema.union(['auto', 'cli', 'sdk'] as const).default('auto'),
-  // NOTE (docs/15 F-09, docs/17 §10.2): feishuCliPath is deliberately NOT in
-  // the GUI schema — neither at the root NOR inside `bots[]`. An arbitrary
-  // executable path is equivalent to local code execution and stays a
-  // trusted-admin setting (cordis.patch.yml / DSH_FEISHU_CLI_PATH). A value
-  // configured there still reaches the bridge: it rides in through
-  // `flatten()` → the registration `base` layer, and the settings schema
-  // resolves non-strictly, so an undeclared key is preserved rather than
-  // dropped (see tests/settings.spec.ts). Declaring it would instead publish
-  // an editable field to the browser.
+  // NOTE (docs/15 F-09, docs/17 §10.2, Codex batch-2 B1): statePath,
+  // inboundDir and feishuCliPath are deliberately NOT in the GUI schema —
+  // neither at the root NOR inside `bots[]` — AND not in `FlatSettings`, so
+  // `flatten()` never puts them into the registration `base` either. The
+  // settings schema resolves non-strictly, so anything that reaches the flat
+  // value also reaches the browser through the standard settings descriptor;
+  // the only safe place for a host-only key is outside this shape. Values
+  // configured in cordis.patch.yml still reach the bridge: `unflatten()`
+  // re-overlays them from the raw entry `Config` (see tests/settings.spec.ts).
   contextP2pMaxMessages: Schema.number().step(1).min(1).max(500).default(80),
   contextP2pMaxChars: Schema.number().step(1).min(1000).max(500000).default(50000),
   contextMaxMessages: Schema.number().step(1).min(1).max(500).default(150),
@@ -62,9 +86,8 @@ export const flatSchema: Schema<FlatSettings> = Schema.object({
     appId: Schema.string().default(''),
     appSecretRef: Schema.string().default(''),
     brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
-    statePath: Schema.string().default(''),
-    inboundDir: Schema.string().default(''),
-    // feishuCliPath: see the NOTE above — host-only, never in the GUI schema.
+    // statePath / inboundDir / feishuCliPath: see the NOTE above — host-only,
+    // never in the GUI schema and never in FlatSettings.
     allowedOpenIds: Schema.array(Schema.string()).default([]),
     allowedChatIds: Schema.array(Schema.string()).default([]),
     allowAllUsers: Schema.boolean().default(false),
@@ -133,10 +156,6 @@ export interface FlatSettings {
     appId: string
     appSecretRef: string
     brand: 'feishu' | 'lark' | 'larkoffice'
-    statePath: string
-    inboundDir: string
-    /** Host-only (patch.yml): carried through the schema as an undeclared key. */
-    feishuCliPath?: string
     allowedOpenIds: string[]
     allowedChatIds: string[]
     allowAllUsers: boolean
@@ -181,9 +200,8 @@ function flattenBots(bots: Config['bots']): FlatSettings['bots'] {
     appId: bot.appId,
     appSecretRef: bot.appSecretRef,
     brand: bot.brand ?? 'feishu',
-    statePath: bot.statePath ?? '',
-    inboundDir: bot.inboundDir ?? '',
-    feishuCliPath: bot.feishuCliPath ?? '',
+    // statePath / inboundDir / feishuCliPath are deliberately absent: they are
+    // host-only and would otherwise ride the registration `base` to the browser.
     allowedOpenIds: [...(bot.allowedOpenIds ?? [])],
     allowedChatIds: [...(bot.allowedChatIds ?? [])],
     allowAllUsers: bot.allowAllUsers ?? false,
@@ -251,10 +269,91 @@ export function flatten(config: Config): FlatSettings {
   }
 }
 
+type HostOnlyBotFields = Partial<Pick<BotConfig, HostOnlyBotKey>>
+
+/** Non-empty host-only fields of one trusted-admin config node. */
+function hostOnlyFields(source: HostOnlyBotFields): HostOnlyBotFields {
+  const picked: Record<string, string> = {}
+  for (const key of HOST_ONLY_BOT_KEYS) {
+    const value = source[key]
+    if (typeof value === 'string' && value.trim() !== '') picked[key] = value
+  }
+  return picked as HostOnlyBotFields
+}
+
+/**
+ * Re-attach the host-only per-bot keys the settings layer never carries.
+ *
+ * `id` is the immutable identity of a bot, so a `bots[]` entry declared in
+ * cordis.patch.yml lends its host-only paths to the settings bot with the
+ * SAME id. A config that is still legacy at the entry level (no `bots[]`) but
+ * has been converted to multi-bot in the GUI lends its ROOT paths to exactly
+ * one bot: the one that continues the legacy session identity
+ * (`sessionNamespace: 'legacy'`, which is what `settings/convert-legacy`
+ * stamps), or failing that the one carrying the legacy appId. That bot is the
+ * same Feishu app as before, so it must keep reading the same state file.
+ */
+function overlayHostOnlyBots(bots: FlatSettings['bots'], entry: Config): BotConfig[] {
+  const entryBots = new Map((entry.bots ?? []).map(bot => [bot.id, bot]))
+  const legacyAppId = (entry.appId ?? '').trim()
+  const legacyRoot = entryBots.size === 0 ? hostOnlyFields(entry) : {}
+  const legacyIndex = entryBots.size > 0 || Object.keys(legacyRoot).length === 0
+    ? -1
+    : bots.findIndex(bot => bot.sessionNamespace === 'legacy') >= 0
+      ? bots.findIndex(bot => bot.sessionNamespace === 'legacy')
+      : legacyAppId === '' ? -1 : bots.findIndex(bot => bot.appId.trim() === legacyAppId)
+  return bots.map((bot, index) => {
+    const carried = structuredClone(bot) as Record<string, unknown>
+    // A stale user layer written by an older build may still contain these;
+    // the settings layer is never authoritative for them.
+    for (const key of FORBIDDEN_ROOT_KEYS) delete carried[key]
+    const declared = entryBots.get(bot.id)
+    const overlay = declared !== undefined
+      ? hostOnlyFields(declared)
+      : index === legacyIndex ? legacyRoot : {}
+    return { ...carried, ...overlay } as unknown as BotConfig
+  })
+}
+
+/**
+ * Path ops that purge keys an older build may have written into the settings
+ * USER layer: the secret value and the host-only paths, at the root and
+ * inside every `bots[]` entry. Empty when there is nothing to purge — the
+ * caller must not spend a revision bump on a no-op write.
+ *
+ * This matters beyond hygiene: the standard settings descriptor ships the raw
+ * `user` section and the resolved `value` to the browser, and the flat schema
+ * resolves non-strictly, so an undeclared leftover key would survive both.
+ */
+export function settingsPurgeOps(
+  user: unknown,
+): Array<{ op: 'set'; path: string[]; value: unknown } | { op: 'unset'; path: string[] }> {
+  if (typeof user !== 'object' || user === null || Array.isArray(user)) return []
+  const section = user as Record<string, unknown>
+  const ops: Array<{ op: 'set'; path: string[]; value: unknown } | { op: 'unset'; path: string[] }> = []
+  for (const key of FORBIDDEN_ROOT_KEYS) {
+    if (Object.hasOwn(section, key)) ops.push({ op: 'unset', path: [key] })
+  }
+  const bots = section.bots
+  if (Array.isArray(bots)) {
+    let dirty = false
+    const cleaned = bots.map(bot => {
+      if (typeof bot !== 'object' || bot === null || Array.isArray(bot)) return bot
+      const entries = Object.entries(bot as Record<string, unknown>)
+        .filter(([key]) => !(FORBIDDEN_ROOT_KEYS as readonly string[]).includes(key))
+      if (entries.length !== Object.keys(bot as object).length) dirty = true
+      return Object.fromEntries(entries)
+    })
+    if (dirty) ops.push({ op: 'set', path: ['bots'], value: cleaned })
+  }
+  return ops
+}
+
 /**
  * Flat user layer + patch.yml entry → the nested bridge config. The secret
  * value never comes from settings: `appSecret` keeps the entry/env value and
- * `appSecretRef` is the only credential field the card can edit.
+ * `appSecretRef` is the only credential field the card can edit. The host-only
+ * per-bot paths are likewise re-attached from `entry`, never from the flat value.
  */
 export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config): Config {
   const value = flat ?? {}
@@ -291,6 +390,6 @@ export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config
     workspacePolicy: value.workspacePolicy ?? 'default',
     profileFile: value.profileFile ?? '',
     maxTotalLiveAgents: value.maxTotalLiveAgents ?? 0,
-    bots: structuredClone(value.bots ?? []),
+    bots: overlayHostOnlyBots(value.bots ?? [], entry),
   }
 }

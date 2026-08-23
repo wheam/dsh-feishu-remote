@@ -3,7 +3,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { validateMultiBotConfig, type BotConfig, type Config } from './config.js'
 import type { FeishuBotManager } from './bots.js'
-import { SETTINGS_NAMESPACE, flatSchema, type FlatSettings } from './settings.js'
+import { HOST_ONLY_BOT_KEYS, SETTINGS_NAMESPACE, flatSchema, type FlatSettings } from './settings.js'
 
 export const ADMIN_RPC_CHANNEL = '/dsh-feishu-remote'
 
@@ -18,33 +18,33 @@ type AdminResult = { ok: true; value: unknown } | {
 type FlatBot = FlatSettings['bots'][number]
 
 /**
- * Host-only per-bot keys (docs/17 §10.2, docs/18 §3.2 item 7): an arbitrary
- * executable path and on-disk state locations are trusted-admin YAML settings.
- * They never ride the wire in either direction — the browser must not learn
- * them, and a save merges them back from the stored config by bot id.
+ * Per-bot keys a save may CHANGE. `id` is deliberately absent (Codex batch-2
+ * B3): it is the immutable identity a stored bot is merged back by, so the
+ * editor must echo it unchanged and can never move one bot's settings onto
+ * another. Host-only keys (`statePath`/`inboundDir`/`feishuCliPath`) are not
+ * in `FlatSettings` at all — they never enter the settings layer and are
+ * re-overlaid from the entry config by `unflatten()`.
  */
-const HOST_ONLY_BOT_KEYS = ['statePath', 'inboundDir', 'feishuCliPath'] as const satisfies readonly (keyof FlatBot)[]
-type HostOnlyBotKey = (typeof HOST_ONLY_BOT_KEYS)[number]
-
 const EDITABLE_BOT_KEY_LIST = [
-  'id', 'enabled', 'appId', 'appSecretRef', 'brand', 'allowedOpenIds', 'allowedChatIds',
+  'enabled', 'appId', 'appSecretRef', 'brand', 'allowedOpenIds', 'allowedChatIds',
   'allowAllUsers', 'requireMention', 'defaultWorkspace', 'workspacePolicy', 'agentPreset',
   'profileFile', 'provider', 'model', 'maxLiveAgents', 'contextMode', 'contextBackend',
-] as const satisfies readonly Exclude<keyof FlatBot, HostOnlyBotKey>[]
+] as const satisfies readonly (keyof FlatBot)[]
 
-const EDITABLE_BOT_KEYS = new Set<string>(EDITABLE_BOT_KEY_LIST)
+/** `id` is accepted on the wire — as identity only, never as an edit. */
+const ACCEPTED_BOT_KEYS = new Set<string>(['id', ...EDITABLE_BOT_KEY_LIST])
 
 /**
  * The per-bot keys the browser editor is allowed to SEE. `sessionNamespace`
  * stays read-only on the wire (docs/17 §10.3): it is shown, never accepted.
  */
 const CLIENT_BOT_KEY_LIST = [
-  ...EDITABLE_BOT_KEY_LIST,
+  'id', ...EDITABLE_BOT_KEY_LIST,
   'progressCards', 'progressUpdateMs', 'workingReaction', 'maxInboundFileBytes',
   'maxOutboundFileBytes', 'interactiveTimeoutMs', 'enableApprovals', 'cardBodyMaxChars',
   'commandAllowlist', 'contextP2pMaxMessages', 'contextP2pMaxChars', 'contextMaxMessages',
   'contextMaxChars', 'contextTimeoutMs', 'contextIncludeBot', 'sessionNamespace',
-] as const satisfies readonly Exclude<keyof FlatBot, HostOnlyBotKey>[]
+] as const satisfies readonly (keyof FlatBot)[]
 
 const CLIENT_BOT_KEYS = new Set<string>(CLIENT_BOT_KEY_LIST)
 
@@ -165,9 +165,11 @@ function toLegacyBot(current: FlatSettings, entry: Config): BotConfig {
     enableApprovals: entry.enableApprovals,
     cardBodyMaxChars: entry.cardBodyMaxChars,
     sessionNamespace: 'legacy',
-    ...(entry.statePath === undefined ? {} : { statePath: entry.statePath }),
-    ...(entry.inboundDir === undefined ? {} : { inboundDir: entry.inboundDir }),
-    ...(entry.feishuCliPath === undefined ? {} : { feishuCliPath: entry.feishuCliPath }),
+    // Host-only paths are NOT copied into the settings layer: `unflatten()`
+    // re-overlays the entry ROOT statePath/inboundDir/feishuCliPath onto the
+    // bot stamped `sessionNamespace: 'legacy'` — this one — so the converted
+    // bot keeps reading the very same state file without ever publishing the
+    // path to the browser.
   }
 }
 
@@ -208,23 +210,29 @@ export class FeishuAdminService {
 
   private normalizeSavedBots(raw: unknown): BotConfig[] {
     if (!Array.isArray(raw)) throw new Error('bots 必须是数组')
-    const current = new Map(this.settings.get().bots.map(bot => [bot.id, bot]))
-    const currentByApp = new Map(this.settings.get().bots.map(bot => [bot.appId, bot]))
-    const normalized = raw.map(value => {
+    // Identity is the stored `id` and NOTHING else (Codex batch-2 B3). An
+    // appId fallback would let a payload that swaps two bots' ids carry one
+    // bot's stored fields over to the other; appId stays a duplicate check
+    // only (validateMultiBotConfig).
+    const stored = new Map(this.settings.get().bots.map(bot => [bot.id, bot]))
+    const normalized = raw.map((value, index) => {
       const input = record(value)
       for (const key of Object.keys(input)) {
-        if (!EDITABLE_BOT_KEYS.has(key)) throw new Error(`bots[] 包含不可编辑字段 ${key}`)
+        if (!ACCEPTED_BOT_KEYS.has(key)) throw new Error(`bots[] 包含不可编辑字段 ${key}`)
       }
-      const id = typeof input.id === 'string' ? input.id : ''
-      const appId = typeof input.appId === 'string' ? input.appId : ''
-      const previous = current.get(id) ?? currentByApp.get(appId)
-      // Spreading the stored bot is what carries the host-only keys
-      // (statePath / inboundDir / feishuCliPath) forward: the browser never
-      // saw them and can never send them, so they must be merged back here.
+      if (typeof input.id !== 'string' || input.id.trim() === '') {
+        throw new Error(`bots[${index}] 缺少 id：id 是机器人的固定身份，保存时必须原样回传现有 id（新机器人请给一个未使用的 id）。`)
+      }
+      const id = input.id
+      const previous = stored.get(id)
+      // Spreading the stored bot carries forward every field the editor never
+      // sends (progressCards, file limits, …). Host-only keys are not stored
+      // here at all any more; a stale one left by an older build is dropped.
       const base: BotConfig = previous === undefined
         ? { id, appId: '', appSecretRef: '', sessionNamespace: 'app' }
-        : { ...previous }
-      for (const key of EDITABLE_BOT_KEYS) {
+        : { ...structuredClone(previous), id }
+      for (const key of HOST_ONLY_BOT_KEYS) delete (base as unknown as Record<string, unknown>)[key]
+      for (const key of EDITABLE_BOT_KEY_LIST) {
         if (Object.hasOwn(input, key)) (base as unknown as Record<string, unknown>)[key] = structuredClone(input[key])
       }
       base.sessionNamespace = previous?.sessionNamespace ?? 'app'
@@ -329,6 +337,13 @@ export class FeishuAdminService {
         }
         case 'settings/save-bots': {
           const body = record(payload)
+          // A plain edit must NEVER change the config shape. Converting a
+          // single-bot (legacy) config is the explicit `settings/convert-legacy`
+          // step; without this check a save-bots payload would silently create
+          // `bots[]` out of a legacy config (Codex batch-2 B2, docs/17 §10.3).
+          if (this.settings.get().bots.length === 0) {
+            throw new Error('当前是单机器人（legacy）配置，不能按机器人列表保存；请先执行「转换为多机器人配置」。')
+          }
           const revision = body.revision
           if (!Number.isSafeInteger(revision) || Number(revision) < 0) throw new Error('revision 必须是非负整数')
           const max = body.maxTotalLiveAgents

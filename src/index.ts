@@ -25,7 +25,14 @@ import {
   PersonalAgentOnboardingService,
   type BridgeHealth,
 } from './onboarding.js'
-import { SETTINGS_NAMESPACE, flatSchema, flatten, unflatten, type FlatSettings } from './settings.js'
+import {
+  SETTINGS_NAMESPACE,
+  flatSchema,
+  flatten,
+  settingsPurgeOps,
+  unflatten,
+  type FlatSettings,
+} from './settings.js'
 
 export * from './bridge.js'
 export * from './admin.js'
@@ -77,6 +84,29 @@ export const inject = [
 
 export const Config = ConfigSchema
 
+/**
+ * Drop host-only keys and any stale secret value from the persisted settings
+ * user layer. Exported for tests; safe to call repeatedly — it writes only
+ * when the layer actually carries one of those keys.
+ */
+export async function purgeForbiddenSettingsKeys(ctx: Context): Promise<void> {
+  try {
+    if (!ctx.settings.writable) return
+    const descriptor = ctx.settings.describe({ redactSecrets: true })
+      .find(item => String(item.ns) === String(SETTINGS_NAMESPACE))
+    if (descriptor === undefined) return
+    const ops = settingsPurgeOps((descriptor as { user?: unknown }).user)
+    if (ops.length === 0) return
+    await ctx.settings.mutate(SETTINGS_NAMESPACE, ops, descriptor.revision)
+    ctx.logger?.info?.('dsh-feishu-remote: 已从设置用户层清除主机专属字段（statePath/inboundDir/feishuCliPath/appSecret）')
+  } catch (error) {
+    ctx.logger?.warn?.(
+      'dsh-feishu-remote: 清除设置用户层的主机专属字段失败（不影响运行）：%s',
+      error instanceof Error ? error.message : String(error),
+    )
+  }
+}
+
 export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
   const manager = new FeishuBotManager(ctx)
   let generation = 0
@@ -106,6 +136,15 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
     })
     return
   }
+
+  /**
+   * One-shot migration: an older build persisted the host-only paths (and
+   * possibly a raw `appSecret`) into the settings USER layer, and the standard
+   * settings descriptor ships that layer — plus the value it resolves into —
+   * straight to the browser. Purge them once at startup. Best-effort: a
+   * read-only provider or a racing write must never take the plugin down.
+   */
+  await purgeForbiddenSettingsKeys(ctx)
 
   /**
    * One commit. The generation is allocated by sync() BEFORE the mutex

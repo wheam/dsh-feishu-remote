@@ -63,12 +63,13 @@ describe('FeishuAdminService', () => {
   })
 
   it('never sends host-only paths (feishuCliPath/statePath/inboundDir) to the browser', async () => {
-    const h = harness(flatten({
-      bots: [{
-        id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', statePath: '/hidden/a.json',
-        inboundDir: '/hidden/a', feishuCliPath: '/trusted/lark',
-      }],
-    }))
+    // `flatten()` already drops them; a stale user layer written by an older
+    // build is the case that still has to be filtered here.
+    const initial = flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] })
+    Object.assign(initial.bots[0]!, {
+      statePath: '/hidden/a.json', inboundDir: '/hidden/a', feishuCliPath: '/trusted/lark',
+    })
+    const h = harness(initial)
     const editor = await h.service.handleRpc('settings/editor-snapshot', {}, new AbortController().signal)
     const json = JSON.stringify(editor)
     for (const key of ['feishuCliPath', 'statePath', 'inboundDir']) expect(json).not.toContain(key)
@@ -87,16 +88,22 @@ describe('FeishuAdminService', () => {
     expect(expected).toBe(7)
     const bots = (ops as Array<{ op: string; path: string[]; value?: unknown }>).find(op => op.path[0] === 'bots')?.value as Array<Record<string, unknown>>
     expect(bots[0]).toMatchObject({
-      appId: 'cli_primary', appSecretRef: 'REF_PRIMARY', sessionNamespace: 'legacy',
-      contextBackend: 'sdk', statePath: '/host/state.json', inboundDir: '/host/inbox',
+      appId: 'cli_primary', appSecretRef: 'REF_PRIMARY', sessionNamespace: 'legacy', contextBackend: 'sdk',
     })
+    // Host-only paths must NOT be copied into the settings layer; the entry
+    // ROOT values are re-overlaid host-side by unflatten() instead.
+    expect(JSON.stringify(bots)).not.toContain('/host/state.json')
+    expect(JSON.stringify(bots)).not.toContain('/host/inbox')
+    expect(JSON.stringify(bots)).not.toContain('/trusted/lark')
   })
 
-  it('saves bots atomically, preserves host-only fields, and forces new bots to app namespace', async () => {
-    const h = harness(flatten({ bots: [{
-      id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', statePath: '/hidden/a.json',
-      inboundDir: '/hidden/a', feishuCliPath: '/trusted/lark', sessionNamespace: 'app',
-    }] }))
+  it('saves bots atomically, keeps unsent stored fields, and forces new bots to app namespace', async () => {
+    const initial = flatten({ bots: [{
+      id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', sessionNamespace: 'app', cardBodyMaxChars: 5000,
+    }] })
+    // A stale host-only key left by an older build must be dropped, not re-persisted.
+    Object.assign(initial.bots[0]!, { statePath: '/hidden/a.json' })
+    const h = harness(initial)
     const result = await h.service.handleRpc('settings/save-bots', {
       revision: 7,
       maxTotalLiveAgents: 5,
@@ -107,12 +114,59 @@ describe('FeishuAdminService', () => {
     }, new AbortController().signal)
     expect(result).toMatchObject({ ok: true })
     const bots = h.current().bots
-    expect(bots[0]).toMatchObject({
-      model: 'new-model', statePath: '/hidden/a.json', inboundDir: '/hidden/a', feishuCliPath: '/trusted/lark',
-    })
+    expect(bots[0]).toMatchObject({ id: 'bot-a', model: 'new-model', cardBodyMaxChars: 5000 })
+    expect(bots[0]).not.toHaveProperty('statePath')
     expect(bots[1]).toMatchObject({ id: 'bot-b', sessionNamespace: 'app' })
     expect(bots[1]).not.toHaveProperty('feishuCliPath')
     expect(h.current().maxTotalLiveAgents).toBe(5)
+  })
+
+  it('refuses a bots[] save while the config is still single-bot (legacy)', async () => {
+    const h = harness(flatten({ appId: 'cli_primary', appSecretRef: 'REF_PRIMARY' }))
+    const result = await h.service.handleRpc('settings/save-bots', {
+      revision: 7,
+      maxTotalLiveAgents: 0,
+      bots: [{ id: 'bot-a', enabled: true, appId: 'cli_a', appSecretRef: 'REF_A', contextBackend: 'sdk' }],
+    }, new AbortController().signal)
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    expect((result as { error: { message: string } }).error.message).toContain('转换为多机器人配置')
+    expect(h.mutate).not.toHaveBeenCalled()
+    expect(h.current().bots).toEqual([])
+  })
+
+  it('merges stored bots strictly by id, so swapping two ids cannot swap their identities', async () => {
+    const initial = flatten({ bots: [
+      { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', cardBodyMaxChars: 5000, sessionNamespace: 'legacy' },
+      { id: 'bot-b', appId: 'cli_b', appSecretRef: 'REF_B', cardBodyMaxChars: 9000 },
+    ] })
+    const h = harness(initial)
+    // The payload swaps the two ids while keeping each row's appId.
+    const result = await h.service.handleRpc('settings/save-bots', {
+      revision: 7,
+      maxTotalLiveAgents: 0,
+      bots: [
+        { id: 'bot-b', enabled: true, appId: 'cli_a', appSecretRef: 'REF_A', contextBackend: 'sdk' },
+        { id: 'bot-a', enabled: true, appId: 'cli_b', appSecretRef: 'REF_B', contextBackend: 'sdk' },
+      ],
+    }, new AbortController().signal)
+    expect(result).toMatchObject({ ok: true })
+    // Every non-editable stored field stays with its OWN stored id — the
+    // payload only moved the editable appId/ref, never bot-a's identity.
+    const byId = new Map(h.current().bots.map(bot => [bot.id, bot]))
+    expect(byId.get('bot-a')).toMatchObject({ cardBodyMaxChars: 5000, sessionNamespace: 'legacy' })
+    expect(byId.get('bot-b')).toMatchObject({ cardBodyMaxChars: 9000, sessionNamespace: 'app' })
+  })
+
+  it('rejects a bots[] entry that drops its id', async () => {
+    const h = harness(flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] }))
+    const result = await h.service.handleRpc('settings/save-bots', {
+      revision: 7,
+      maxTotalLiveAgents: 0,
+      bots: [{ enabled: true, appId: 'cli_a', appSecretRef: 'REF_A', contextBackend: 'sdk' }],
+    }, new AbortController().signal)
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    expect((result as { error: { message: string } }).error.message).toContain('id')
+    expect(h.mutate).not.toHaveBeenCalled()
   })
 
   it('refuses to delete the last bot even when it is already disabled', async () => {

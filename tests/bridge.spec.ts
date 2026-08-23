@@ -110,6 +110,12 @@ class FakeAgents {
   private resumeErrors: Error[] = []
   /** When set, create()/resume() wait on this gate before producing a handle. */
   gateCreate: Promise<void> | undefined
+  /** Every dispose() call, in order (idle-eviction race tests). */
+  readonly disposeCalls: string[] = []
+  /** When set, dispose() waits on this gate before completing. */
+  disposeGate: Promise<void> | undefined
+  /** While true, every dispose() rejects (eviction retry test). */
+  disposeFails = false
 
   failNextCreate(error: Error): void { this.createErrors.push(error) }
   failNextResume(error: Error): void { this.resumeErrors.push(error) }
@@ -146,6 +152,9 @@ class FakeAgents {
     return {
       agent,
       dispose: async () => {
+        this.disposeCalls.push(id)
+        if (this.disposeGate !== undefined) await this.disposeGate
+        if (this.disposeFails) throw new Error(`dispose failed for ${id}`)
         agent.disposed = true
         this.live.delete(id)
       },
@@ -281,8 +290,15 @@ class FakeChannel implements LarkChannelLike {
     this.status = { state: 'connected', reconnectAttempts: 0 }
   }
 
-  async disconnect(): Promise<void> {
+  /** When set, disconnect() throws SYNCHRONOUSLY (an SDK that validates before awaiting). */
+  disconnectThrows?: Error
+  disconnectCalls = 0
+
+  disconnect(): Promise<void> {
+    this.disconnectCalls += 1
+    if (this.disconnectThrows !== undefined) throw this.disconnectThrows
     this.status = { state: 'idle', reconnectAttempts: 0 }
+    return Promise.resolve()
   }
 
   getConnectionStatus() { return this.status }
@@ -304,11 +320,27 @@ class FakeChannel implements LarkChannelLike {
     }
   }
 
+  /** One-shot failures for `on(name)` — models an SDK that refuses a listener mid-wiring. */
+  readonly onErrors = new Map<string, Error>()
+  /** Event names whose unsubscribe function throws. */
+  readonly offThrows = new Set<string>()
+  readonly offCalls: string[] = []
+
   on(name: string, handler: (payload: never) => void | Promise<void>): () => void {
+    const failure = this.onErrors.get(name)
+    if (failure !== undefined) {
+      this.onErrors.delete(name)
+      throw failure
+    }
     const list = this.handlers.get(name) ?? []
     list.push(handler)
     this.handlers.set(name, list)
-    return () => undefined
+    return () => {
+      this.offCalls.push(name)
+      const index = list.indexOf(handler)
+      if (index >= 0) list.splice(index, 1)
+      if (this.offThrows.has(name)) throw new Error(`off(${name}) exploded`)
+    }
   }
 
   emit(name: string, payload: never): void {
@@ -3280,6 +3312,70 @@ describe('connect loop crash containment (H1)', () => {
     })
   })
 
+  /**
+   * Review batch 2, major 2: the connect loop's `finally` ran `unwire()` and
+   * `disconnectBounded()` unguarded. `disconnectBounded` only caught an async
+   * rejection, so a SYNCHRONOUS throw from `channel.disconnect()` unwound the
+   * whole loop and the outermost catch left the bot offline forever.
+   */
+  it('keeps reconnecting when the channel disconnect throws synchronously', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const channel = new FakeChannel()
+      channel.disconnectThrows = new Error('SDK disconnect exploded')
+      const { bridge, ctx } = await makeBridge(() => channel)
+      await bridge.start()
+      await waitFor(() => channel.connectCalls >= 1, 'first connect', 2_000)
+
+      // Terminal failure retires the connection; the finally then hits the throw.
+      channel.status = { state: 'failed', reconnectAttempts: 9 }
+      await waitFor(() => channel.disconnectCalls >= 1, 'throwing disconnect reached', 2_000)
+      await waitFor(() => channel.connectCalls >= 2, 'loop rebuilt the channel', 2_000)
+      expect(ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('重建飞书长连接'))).toBe(true)
+
+      // Teardown must survive the same throw.
+      await expect(bridge.stop()).resolves.toBeUndefined()
+      expect(seen).toEqual([])
+    })
+  })
+
+  it('keeps reconnecting when an event disposer throws', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const channel = new FakeChannel()
+      channel.offThrows.add('message')
+      const { bridge, ctx } = await makeBridge(() => channel)
+      await bridge.start()
+      await waitFor(() => channel.connectCalls >= 1, 'first connect', 2_000)
+
+      channel.status = { state: 'failed', reconnectAttempts: 9 }
+      await waitFor(() => channel.connectCalls >= 2, 'loop survived the throwing disposer', 2_000)
+      expect(ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('飞书连接清理失败'))).toBe(true)
+      // Every later disposer still ran: the throw did not abort the unwire.
+      expect(channel.offCalls).toContain('error')
+
+      await bridge.stop()
+      expect(seen).toEqual([])
+    })
+  })
+
+  it('rolls back partially registered listeners when wiring fails mid-way', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const channel = new FakeChannel()
+      // The LAST listener the bridge registers refuses, once.
+      channel.onErrors.set('error', new Error('SDK refused the error listener'))
+      const { bridge } = await makeBridge(() => channel)
+      await bridge.start()
+      await waitFor(() => channel.connectCalls >= 1, 'connects on the retry after a wiring failure', 2_000)
+
+      // The failed attempt left nothing behind: exactly one handler per event.
+      for (const [name, list] of channel.handlers) {
+        expect([name, list.length]).toEqual([name, 1])
+      }
+
+      await bridge.stop()
+      expect(seen).toEqual([])
+    })
+  })
+
   it('contains a throwing reaction handler instead of letting it escape the SDK callback', async () => {
     const h = await makeHarness()
     await h.emitMessage('do the thing')
@@ -3405,6 +3501,75 @@ describe('idle session eviction (H2)', () => {
     await waitFor(() => h.agents.resumed.length === 1, 'origin resumed its persisted session', 2_000)
     expect(String(h.agents.resumed[0]!.options.resumeSessionId)).toBe(firstId)
     expect(h.bridge.liveAgentCount()).toBe(1)
+  })
+
+  /**
+   * Review batch 2, major 1: bookkeeping used to be dropped BEFORE the async
+   * dispose settled. A message landing in that window resumed the very session
+   * being torn down ("agent already registered"), and `maxLiveAgents` under-
+   * counted a still-live Agent.
+   */
+  it('fences a message that arrives while the eviction dispose is still in flight', async () => {
+    const h = await makeHarness({}, { idleSessionTtlMs: 30, idleSweepIntervalMs: 5 })
+    // Hold every dispose open from the very start so the sweep cannot win a race.
+    let releaseDispose = (): void => undefined
+    h.agents.disposeGate = new Promise<void>(resolve => { releaseDispose = resolve })
+
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await completeTurn(h, sessionId)
+    // Keep the evicted session resumable from persistence.
+    h.persistence.headers.push({
+      version: 0,
+      id: SessionId(sessionId),
+      createdAt: Date.now(),
+      cwd: h.workspace,
+    } as SessionHeader)
+    h.persistence.remember(sessionId)
+
+    await waitFor(() => h.agents.disposeCalls.length === 1, 'eviction dispose started', 2_000)
+    // Still counted while the dispose is in flight — the Agent really is alive.
+    expect(h.bridge.liveAgentCount()).toBe(1)
+
+    await h.emitMessage('arrives mid-eviction')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(h.agents.resumed).toHaveLength(0) // fenced: nothing touched the half-evicted session
+    expect(h.agents.created).toHaveLength(1)
+
+    releaseDispose()
+    await waitFor(() => h.agents.resumed.length === 1, 'resumed once the fence lifted', 2_000)
+    expect(String(h.agents.resumed[0]!.options.resumeSessionId)).toBe(sessionId)
+    expect(h.bridge.liveAgentCount()).toBe(1)
+    expect(h.ctx.logger.error.mock.calls.some(call => String(call[0]).includes('消息处理失败'))).toBe(false)
+  })
+
+  it('keeps the slot counted and retries on the next sweep when the eviction dispose rejects', async () => {
+    const h = await makeHarness({ maxLiveAgents: 1 }, { idleSessionTtlMs: 30, idleSweepIntervalMs: 5 })
+    h.agents.disposeFails = true
+
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await completeTurn(h, sessionId)
+
+    await waitFor(
+      () => h.ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('保留占用并在下次巡检重试')),
+      'rejected dispose logged',
+      2_000,
+    )
+    // Retried by a later sweep, and the slot stays occupied the whole time.
+    await waitFor(() => h.agents.disposeCalls.length >= 2, 'eviction retried after the rejection', 2_000)
+    expect(h.bridge.liveAgentCount()).toBe(1)
+
+    // Capacity is NOT under-counted: the cap still refuses a second origin.
+    await h.emitMessage('second origin', { chatId: 'oc_grp', chatType: 'group', threadId: 'omt_ghost' })
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('上限')), 'cap still enforced')
+    expect(h.agents.created).toHaveLength(1)
+
+    // Once dispose can succeed, the next sweep reclaims the slot for real.
+    h.agents.disposeFails = false
+    await waitFor(() => h.bridge.liveAgentCount() === 0, 'slot freed once dispose succeeds', 2_000)
   })
 
   it('stops sweeping after teardown', async () => {

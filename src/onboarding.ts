@@ -218,9 +218,8 @@ function onboardedBot(
     appId,
     appSecretRef,
     brand,
-    statePath: '',
-    inboundDir: '',
-    feishuCliPath: '',
+    // statePath / inboundDir / feishuCliPath are host-only and never live in
+    // the settings layer; the host overlays them in unflatten().
     allowedOpenIds: [ownerOpenId],
     allowedChatIds: [],
     allowAllUsers: false,

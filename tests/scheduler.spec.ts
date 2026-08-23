@@ -441,3 +441,89 @@ describe('OutboundScheduler rate-limit pause (M6)', () => {
     await scheduler.shutdown()
   })
 })
+
+/**
+ * Blocker 4 (review batch 2): `dispatch()` runs the caller's `onPermanent`
+ * hook on its own stack and the drain loop fires it detached. An exception
+ * from either used to surface as a process-wide unhandledRejection, which
+ * Node 22's `--unhandled-rejections=throw` default turns into a dead `dsh web`.
+ */
+describe('OutboundScheduler unhandled-rejection containment (blocker 4)', () => {
+  async function waitFor(condition: () => boolean, label = 'condition', timeoutMs = 1_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`)
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+  }
+
+  /** Collect unhandled rejections for the duration of `body`. */
+  async function withUnhandledRejectionCapture<T>(body: (seen: unknown[]) => Promise<T>): Promise<T> {
+    const seen: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { seen.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const result = await body(seen)
+      // Unhandled rejections are reported on a later macrotask — let them land.
+      for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve))
+      return result
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  }
+
+  it('contains an onPermanent hook that throws', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const errors: unknown[][] = []
+      const scheduler = new OutboundScheduler({
+        concurrency: 1, minIntervalMs: 0, maxRetries: 0,
+        logger: { error: (...args: unknown[]) => { errors.push(args) } },
+      } as never)
+      const result = await scheduler.enqueue({
+        kind: 'send', chatId: 'oc_1', label: 'permanent-with-throwing-hook',
+        run: async () => { throw feishuError(230025) }, // 超长：permanent, no retry
+        onPermanent: () => { throw new Error('新卡片兜底炸了') },
+      })
+      expect(result).toBe('permanent')
+      for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve))
+      expect(seen).toEqual([])
+      expect(errors.some(args => String(args[0]).includes('onPermanent hook threw'))).toBe(true)
+
+      // The scheduler is still alive and draining.
+      expect(await scheduler.enqueue({
+        kind: 'send', chatId: 'oc_1', label: 'after-the-throwing-hook', run: async () => undefined,
+      })).toBe('sent')
+      scheduler.close()
+      await scheduler.shutdown()
+    })
+  })
+
+  it('contains an unexpected throw from the detached dispatch chain and keeps draining', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const errors: unknown[][] = []
+      const scheduler = new OutboundScheduler({
+        concurrency: 1, minIntervalMs: 0,
+        logger: { error: (...args: unknown[]) => { errors.push(args) } },
+      } as never)
+      // Break dispatch BEFORE its own try/catch can see it (bookkeeping throw).
+      const internals = scheduler as unknown as { release: (pending: unknown) => void }
+      const originalRelease = internals.release.bind(scheduler)
+      let broken = 0
+      internals.release = (pending: unknown) => {
+        if (broken === 0) { broken += 1; throw new Error('coalescing index exploded') }
+        originalRelease(pending)
+      }
+      // Never settles (its dispatch died) — deliberately not awaited.
+      void scheduler.enqueue({ kind: 'send', chatId: 'oc_1', label: 'dispatch-blows-up', run: async () => undefined })
+      await waitFor(() => errors.some(args => String(args[0]).includes('dispatch threw unexpectedly')))
+
+      // Concurrency was released, so the next task still runs.
+      expect(await scheduler.enqueue({
+        kind: 'send', chatId: 'oc_1', label: 'after-the-broken-dispatch', run: async () => undefined,
+      })).toBe('sent')
+      expect(seen).toEqual([])
+      scheduler.close()
+      await scheduler.shutdown()
+    })
+  })
+})

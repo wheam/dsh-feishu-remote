@@ -580,13 +580,28 @@ export class FeishuRemoteBridge {
     }
   }
 
-  /** One bounded disconnect helper for every teardown path (review #7 finding 2). */
+  /**
+   * One bounded disconnect helper for every teardown path (review #7 finding 2).
+   * Normalized through a microtask: a SYNCHRONOUS throw from `channel.disconnect()`
+   * used to escape the `.catch()` and unwind the connect loop's `finally`, which
+   * ended the loop for good and left the bot permanently offline (review batch 2,
+   * major 2). Never rejects.
+   */
   private async disconnectBounded(channel: LarkChannelLike | undefined): Promise<void> {
     if (channel === undefined) return
     await Promise.race([
-      channel.disconnect().catch(() => undefined),
+      Promise.resolve().then(() => channel.disconnect()).catch(() => undefined),
       sleep(5_000),
     ])
+  }
+
+  /** Run one cleanup step in isolation: a throwing disposer must never end the connect loop. */
+  private safeCleanup(what: string, run: () => void): void {
+    try {
+      run()
+    } catch (error) {
+      this.logger.warn('飞书连接清理失败（%s）：%s', what, errorMessage(error))
+    }
   }
 
   /**
@@ -596,13 +611,29 @@ export class FeishuRemoteBridge {
    */
   private readonly retiringHandles = new Map<AgentHandle, Promise<void>>()
 
-  private retireHandle(handle: AgentHandle): void {
-    const raw = handle.dispose()
+  /**
+   * Start a disposal and keep the RAW promise reachable for teardown. A
+   * synchronous throw from `dispose()` is normalized into a rejected promise so
+   * every caller has exactly one failure channel. Never leaves the returned
+   * promise unhandled.
+   */
+  private trackDisposal(handle: AgentHandle): Promise<void> {
+    let raw: Promise<void>
+    try {
+      raw = Promise.resolve(handle.dispose())
+    } catch (error) {
+      raw = Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
     this.retiringHandles.set(handle, raw)
-    void raw.catch(error => {
+    void raw.catch(() => undefined).finally(() => {
+      if (this.retiringHandles.get(handle) === raw) this.retiringHandles.delete(handle)
+    })
+    return raw
+  }
+
+  private retireHandle(handle: AgentHandle): void {
+    void this.trackDisposal(handle).catch(error => {
       this.logger.warn('旧会话清理失败（不影响新会话）：%s', errorMessage(error))
-    }).finally(() => {
-      this.retiringHandles.delete(handle)
     })
   }
 
@@ -639,6 +670,7 @@ export class FeishuRemoteBridge {
    * no creation is racing, and its origin queue is drained.
    */
   private isEvictable(entry: BridgeSession, now: number): boolean {
+    if (this.evicting.has(entry.key)) return false
     if (now - entry.lastActiveAt < this.idleSessionTtlMs) return false
     if (entry.handle.agent.status !== 'idle') return false
     if (entry.handle.agent.inbox?.hasPending === true) return false
@@ -671,25 +703,79 @@ export class FeishuRemoteBridge {
     }
   }
 
+  /**
+   * Per-origin eviction fence (review batch 2, major 1). Bookkeeping used to be
+   * dropped BEFORE the async dispose settled, so a message arriving in that
+   * window resumed the very session still being torn down ("agent already
+   * registered"), and `agents.size` under-counted a still-live Agent against
+   * `maxLiveAgents`. The entry now stays counted until dispose RESOLVES, both
+   * maps are dropped in one synchronous step, and `enqueueOrigin` waits on the
+   * fence so no work can observe the half-evicted state.
+   */
+  private readonly evicting = new Map<string, Promise<void>>()
+
   private evictSession(entry: BridgeSession): void {
+    if (this.evicting.has(entry.key)) return
     if (entry.progressTimer !== undefined) {
       clearTimeout(entry.progressTimer)
       entry.progressTimer = undefined
     }
-    this.sessions.delete(entry.key)
-    if (this.agents.get(entry.sessionId) === entry) this.agents.delete(entry.sessionId)
     this.logger.info('回收空闲飞书会话（超过 %dms 无活动）：origin=%s session=%s', this.idleSessionTtlMs, entry.key, entry.sessionId)
     // Same retire/dispose path a /new or /workspace swap uses: teardown can
     // still drain the raw disposal promise through retiringHandles.
-    try {
-      this.retireHandle(entry.handle)
-    } catch (error) {
-      this.logger.warn('空闲会话释放失败：%s', errorMessage(error))
+    const disposal = this.trackDisposal(entry.handle)
+    const fence = disposal.then(() => {
+      // Dispose resolved: the Agent is really gone — drop BOTH maps together.
+      if (this.sessions.get(entry.key) === entry) this.sessions.delete(entry.key)
+      if (this.agents.get(entry.sessionId) === entry) this.agents.delete(entry.sessionId)
+    }, error => {
+      // Dispose rejected: the Agent may well still be live, so keep it counted
+      // against the cap and let the next sweep retry (its watermark is stale,
+      // so it stays evictable until real activity refreshes it).
+      this.logger.warn('空闲会话释放失败，保留占用并在下次巡检重试：origin=%s session=%s：%s',
+        entry.key, entry.sessionId, errorMessage(error))
+    }).finally(() => {
+      if (this.evicting.get(entry.key) === fence) this.evicting.delete(entry.key)
+    })
+    this.evicting.set(entry.key, fence)
+  }
+
+  /**
+   * Block until no eviction is in flight for this origin. Bounded: a pathological
+   * evict/re-evict cycle must never wedge the control queue forever.
+   */
+  private async awaitEviction(key: string): Promise<void> {
+    for (let guard = 0; guard < 8; guard += 1) {
+      const fence = this.evicting.get(key)
+      if (fence === undefined) return
+      await fence
     }
   }
 
+  /**
+   * Register every channel listener, returning ONE idempotent unwire.
+   * A mid-way failure rolls back the listeners already registered (partial
+   * wiring used to leak handlers onto a channel nobody unwires), and each
+   * disposer is isolated so one throwing `off()` cannot skip the rest
+   * (review batch 2, major 2).
+   */
   private wireChannel(channel: LarkChannelLike): () => void {
     const off: Array<() => void> = []
+    const unwire = (): void => {
+      for (const dispose of off.splice(0).reverse()) {
+        this.safeCleanup('解绑飞书事件监听', dispose)
+      }
+    }
+    try {
+      this.registerChannelListeners(channel, off)
+    } catch (error) {
+      unwire()
+      throw error
+    }
+    return unwire
+  }
+
+  private registerChannelListeners(channel: LarkChannelLike, off: Array<() => void>): void {
     off.push(channel.on('message', message => {
       this.onMessage(message).catch(error => {
         this.logger.error('消息处理失败：%s', errorMessage(error))
@@ -725,9 +811,6 @@ export class FeishuRemoteBridge {
     off.push(channel.on('error', error => {
       this.logger.error('飞书通道错误：%s', errorMessage(error))
     }))
-    return () => {
-      for (const dispose of off.reverse()) dispose()
-    }
   }
 
   /**
@@ -762,13 +845,23 @@ export class FeishuRemoteBridge {
       } catch (error) {
         this.logger.warn('飞书长连接失败：%s', errorMessage(error))
       } finally {
+        // EVERY cleanup step is isolated: an exception escaping this `finally`
+        // unwinds past the backoff and out of the while loop, and the outermost
+        // catch in start() then leaves the bot offline forever (review batch 2,
+        // major 2). Cleanup failures are logged and fall through to the normal
+        // backoff instead.
         this.connected = false
         // Skip unwire/disconnect for the stages that never ran: a channel
         // that was never constructed has nothing to unwire or disconnect.
-        unwire?.()
-        if (channel !== undefined && this.channel === channel) this.channel = undefined
-        connectionAbort.abort()
-        await this.disconnectBounded(channel)
+        this.safeCleanup('解绑事件监听', () => unwire?.())
+        this.safeCleanup('清理通道引用', () => {
+          if (channel !== undefined && this.channel === channel) this.channel = undefined
+        })
+        this.safeCleanup('中止连接控制器', () => connectionAbort.abort())
+        // disconnectBounded never rejects, but keep the belt-and-braces guard.
+        await this.disconnectBounded(channel).catch(error => {
+          this.logger.warn('飞书通道关闭失败：%s', errorMessage(error))
+        })
       }
       if (this.stopped) break
       attempt += 1
@@ -856,7 +949,11 @@ export class FeishuRemoteBridge {
     // even against a pathological backend (review #6 finding 2).
     await this.disconnectBounded(this.channel)
     await this.scheduler.shutdown()
-    const sessionHandles = [...this.sessions.values()].map(entry => entry.handle)
+    // A session whose eviction is still in flight already has a tracked
+    // disposal below — disposing it twice here would be redundant.
+    const sessionHandles = [...this.sessions.values()]
+      .map(entry => entry.handle)
+      .filter(handle => !this.retiringHandles.has(handle))
     this.sessions.clear()
     this.agents.clear()
     const retiring = [...this.retiringHandles.entries()]
@@ -1181,7 +1278,11 @@ export class FeishuRemoteBridge {
   private enqueueOrigin(key: string, work: () => Promise<void>): void {
     const previous = this.originQueues.get(key) ?? Promise.resolve()
     this.touchSession(key)
-    const next = previous.catch(() => undefined).then(work).catch(error => {
+    // Eviction fence: work queued while this origin is being reclaimed must not
+    // resume the session until its dispose has settled and the maps are clean
+    // (review batch 2, major 1). Checked AFTER the predecessor drains, so a
+    // sweep that starts mid-queue is honored too.
+    const next = previous.catch(() => undefined).then(() => this.awaitEviction(key)).then(work).catch(error => {
       this.logger.error('控制队列任务失败（origin=%s）：%s', key, errorMessage(error))
     })
     this.originQueues.set(key, next)

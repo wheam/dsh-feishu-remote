@@ -269,7 +269,18 @@ export class OutboundScheduler {
           wrapped.message,
         )
         pending.resolve('permanent')
-        task.onPermanent?.(wrapped)
+        // The caller's fallback hook runs on OUR stack: a throw from it must
+        // never escape dispatch() and become an unhandledRejection that takes
+        // down `dsh web` (Codex review batch 2, blocker 4).
+        try {
+          task.onPermanent?.(wrapped)
+        } catch (hookError) {
+          this.logger.error?.(
+            'dsh-feishu-remote: onPermanent hook threw for task "%s": %s',
+            task.label,
+            hookError instanceof Error ? hookError.message : String(hookError),
+          )
+        }
         return
       }
       pending.attempts += 1
@@ -381,9 +392,23 @@ export class OutboundScheduler {
         continue
       }
       this.active += 1
-      void this.dispatch(pending).finally(() => {
-        this.active -= 1
-      })
+      // Detached on purpose (concurrency > 1), so the chain MUST swallow:
+      // dispatch() is contractually non-rejecting, and an unforeseen throw
+      // must degrade to a log instead of an unhandledRejection (blocker 4).
+      void this.dispatch(pending)
+        .catch(error => {
+          this.logger.error?.(
+            'dsh-feishu-remote: outbound dispatch threw unexpectedly for task "%s": %s',
+            pending.task.label,
+            error instanceof Error ? error.message : String(error),
+          )
+        })
+        .finally(() => {
+          this.active -= 1
+          // A dispatch that died before its own finally never signalled the
+          // drain loop; nudge it so waiters cannot hang (F4 liveness).
+          this.notifyChange()
+        })
     }
     // Closed: settle everything.
     for (const pending of [...this.terminalQueue, ...this.normalQueue]) {
