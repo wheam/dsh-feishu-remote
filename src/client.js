@@ -1355,8 +1355,12 @@ window.__ModuleLoader__.load({
 				// The single forced (user-triggered) read in flight, if any. A regular
 				// poll never runs alongside one (review major-3), and a second forced
 				// read joins this one instead of stacking another RPC (review major-4).
+				// The slot is an OWNERSHIP token: `{ generation, timer, bounded }`. Only
+				// the read that still owns it may adopt, release it or clear its timer,
+				// so a superseded or timed-out read can never touch a later one's slot
+				// (review major-1/major-2).
 				this.forcedRead = void 0;
-				this.forcedReadTimer = void 0;
+				this.forcedGeneration = 0;
 			}
 			publish(patch) {
 				this.snapshot = { ...this.snapshot, ...patch };
@@ -1431,7 +1435,21 @@ window.__ModuleLoader__.load({
 			 * still looks dirty (review major-3). No caller ever WAITS on one to finish
 			 * a user action, and the slot it holds is time-bounded, so a Host RPC that
 			 * hangs can delay a poll but never freeze the page (review major-4).
+			 *
+			 * Each forced read owns a generation slot with its OWN timer handle. Once
+			 * the slot is gone — the bound elapsed, or a newer forced read took over —
+			 * the read is DISCARDED: it publishes nothing, releases no slot it no
+			 * longer owns and clears no timer that is not its own (review major-1 /
+			 * major-2). Joiners get the same BOUNDED promise, never the raw RPC.
 			 */
+			/**
+			 * Is `slot` still the forced read this controller recognizes? Generations
+			 * are unique and monotonic, so a read whose generation is no longer the
+			 * current one has been superseded or timed out, and owns nothing.
+			 */
+			ownsForcedRead(slot) {
+				return slot !== void 0 && this.forcedRead?.generation === slot.generation;
+			}
 			async refresh(force = false) {
 				if (this.stopped || this.connection.isLoopback === false) return;
 				if (!force) {
@@ -1440,24 +1458,26 @@ window.__ModuleLoader__.load({
 					if (this.forcedRead !== void 0) return;
 					return this.read(false);
 				}
-				// Single-flight: a second forced read joins the pending one.
-				if (this.forcedRead !== void 0) return this.forcedRead;
-				const pending = this.read(true);
-				this.forcedRead = pending;
+				// Single-flight: a second forced read joins the pending one's bounded
+				// promise, so a joiner can never outlive the bound either (review minor).
+				if (this.forcedRead !== void 0) return this.forcedRead.bounded;
+				const slot = { generation: ++this.forcedGeneration, timer: void 0, bounded: void 0 };
+				this.forcedRead = slot;
+				// Give up the slot — but only while we still hold it. A late completion
+				// must never free a slot, nor cancel a timer, belonging to a later read.
 				const release = () => {
-					if (this.forcedReadTimer !== void 0) {
-						clearTimeout(this.forcedReadTimer);
-						this.forcedReadTimer = void 0;
-					}
-					if (this.forcedRead === pending) this.forcedRead = void 0;
+					if (!this.ownsForcedRead(slot)) return;
+					if (slot.timer !== void 0) { clearTimeout(slot.timer); slot.timer = void 0; }
+					this.forcedRead = void 0;
 				};
-				pending.then(release, release);
+				const pending = this.read(true, slot).then(release, release);
 				// A Host that never answers must not freeze the page: past the bound the
-				// slot is released and regular polls resume, even though the RPC is
-				// still out. Whatever it eventually publishes is still revision-guarded.
-				return Promise.race([pending, new Promise((resolve) => {
-					this.forcedReadTimer = setTimeout(() => { this.forcedReadTimer = void 0; release(); resolve(); }, FORCED_READ_TIMEOUT_MS);
+				// slot is released and regular polls resume. The still-outstanding RPC is
+				// now superseded, so its eventual answer is dropped rather than adopted.
+				slot.bounded = Promise.race([pending, new Promise((resolve) => {
+					slot.timer = setTimeout(() => { slot.timer = void 0; release(); resolve(); }, FORCED_READ_TIMEOUT_MS);
 				})]);
+				return slot.bounded;
 			}
 			/**
 			 * Start the post-write top-up read without waiting for it: a write is
@@ -1466,22 +1486,34 @@ window.__ModuleLoader__.load({
 			fireForcedRead() {
 				void Promise.resolve(this.refresh(true)).catch(() => void 0);
 			}
-			/** One read of the editor snapshot plus the runtime statuses. */
-			async read(force) {
+			/**
+			 * One read of the editor snapshot plus the runtime statuses. A forced read
+			 * carries the generation `slot` it owns; losing that slot (timed out, or
+			 * superseded by a newer forced read) makes the result stale by definition,
+			 * and stale results are discarded whole (review major-1).
+			 */
+			async read(force, slot) {
 				const requestId = ++this.requestSequence;
+				// A poll that started before a newer read must never undo it. A forced
+				// read outranks the sequence — but only while it still owns its slot.
+				const superseded = () => force ? !this.ownsForcedRead(slot) : requestId !== this.requestSequence;
 				try {
 					const [editor, runtimeStatus] = await Promise.all([
 						this.request("settings/editor-snapshot"),
 						this.request("bots/status")
 					]);
-					if (this.stopped) return;
-					// A poll that started before a newer read must never undo it. A forced
-					// read is never superseded — only the revision guard below can stop it.
-					if (!force && requestId !== this.requestSequence) return;
-					if (toCount(editor.revision) >= this.adoptedRevision && (!this.snapshot.dirty || force)) this.adopt(editor);
+					if (this.stopped || superseded()) return;
+					// A forced read is authoritative over a dirty draft, but only for
+					// content the screen has not already adopted: re-adopting the SAME
+					// revision would wipe a draft typed since (review major-1).
+					const revision = toCount(editor.revision);
+					const adoptable = force
+						? revision > this.adoptedRevision || (revision === this.adoptedRevision && !this.snapshot.dirty)
+						: revision >= this.adoptedRevision && !this.snapshot.dirty;
+					if (adoptable) this.adopt(editor);
 					this.publish({ statuses: runtimeStatus.bots ?? [] });
 				} catch (error) {
-					if (this.stopped || (!force && requestId !== this.requestSequence)) return;
+					if (this.stopped || superseded()) return;
 					this.publish({
 						loaded: true,
 						...(this.snapshot.mode === "loading" ? { mode: "unavailable", writable: false } : {}),
@@ -1503,7 +1535,8 @@ window.__ModuleLoader__.load({
 				return () => {
 					this.stopped = true;
 					if (this.timer !== void 0) clearTimeout(this.timer);
-					if (this.forcedReadTimer !== void 0) { clearTimeout(this.forcedReadTimer); this.forcedReadTimer = void 0; }
+					if (this.forcedRead?.timer !== void 0) clearTimeout(this.forcedRead.timer);
+					// Dropping the slot supersedes whatever forced read still owns it.
 					this.forcedRead = void 0;
 				};
 			}

@@ -1046,6 +1046,125 @@ describe('save routing through the admin controller', () => {
         vi.useRealTimers()
       }
     })
+
+    it('discards a forced read that already timed out instead of resetting a newer draft (review major-1)', async () => {
+      vi.useFakeTimers()
+      try {
+        let reads = 0
+        let releasePostSave: ((value: unknown) => void) | undefined
+        const controller = makeController((endpoint) => {
+          if (endpoint === 'bots/status') return { ok: true, value: { bots: [] } }
+          if (endpoint === 'settings/save-bots') return { ok: true, value: fresh }
+          reads += 1
+          // 1 = the mount read; 2 = the post-save forced read, held open past its
+          // bound; every later read serves the saved revision 5.
+          if (reads === 2) return new Promise(resolve => { releasePostSave = resolve })
+          return { ok: true, value: reads === 1 ? stale : fresh }
+        })
+        const stop = controller.mount()
+        await settle()
+        expect(await saveEdit(controller)).toBe(true)
+        await settle()
+        expect(controller.snapshot.revision).toBe(5)
+        // The post-save read never answers, so past the bound it loses its slot.
+        await vi.advanceTimersByTimeAsync(10_000)
+        // Only now does the user start a new draft on top of the saved revision.
+        ;(controller.inject().editBot as (id: string, field: string, value: unknown) => void)('bot-b', 'model', 'draft-after-timeout')
+        expect(controller.snapshot.dirty).toBe(true)
+        // A regular poll leaves the draft alone…
+        await controller.refresh(false)
+        await settle()
+        expect(controller.snapshot.dirty).toBe(true)
+        // …and so must the stale forced read when it finally answers, even though
+        // it carries exactly the revision the page has already adopted.
+        releasePostSave!({ ok: true, value: fresh })
+        await settle()
+        expect(controller.snapshot.dirty).toBe(true)
+        expect(controller.snapshot.revision).toBe(5)
+        expect((controller.snapshot.bots as Row[])[1]!.model).toBe('draft-after-timeout')
+        stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('never lets a late forced read cancel a later one\'s timeout (review major-2)', async () => {
+      vi.useFakeTimers()
+      try {
+        let reads = 0
+        let hangNext = false
+        const held: ((value: unknown) => void)[] = []
+        const controller = makeController((endpoint) => {
+          if (endpoint === 'bots/status') return { ok: true, value: { bots: [] } }
+          reads += 1
+          if (hangNext) {
+            hangNext = false
+            return new Promise(resolve => { held.push(resolve) })
+          }
+          return { ok: true, value: stale }
+        })
+        const stop = controller.mount()
+        await settle()
+        // Forced read A hangs and hits its bound: the slot is freed, its RPC is out.
+        hangNext = true
+        void controller.refresh(true)
+        await settle()
+        await vi.advanceTimersByTimeAsync(10_000)
+        // Forced read B takes the slot next, with a timer of its own.
+        hangNext = true
+        void controller.refresh(true)
+        await settle()
+        // A answers late. It owns nothing any more, so it must not free B's slot
+        // and — the bug — must not clear B's timeout either.
+        held[0]!({ ok: true, value: stale })
+        await settle()
+        const duringB = reads
+        void controller.refresh(false)
+        await settle()
+        expect(reads).toBe(duringB)
+        // B's own bound still fires, so regular polling comes back.
+        await vi.advanceTimersByTimeAsync(10_000)
+        const afterB = reads
+        void controller.refresh(false)
+        await settle()
+        expect(reads).toBe(afterB + 1)
+        stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('gives a joining forced read the same bounded promise, not the raw RPC (review minor)', async () => {
+      vi.useFakeTimers()
+      try {
+        let reads = 0
+        const controller = makeController((endpoint) => {
+          if (endpoint === 'bots/status') return { ok: true, value: { bots: [] } }
+          reads += 1
+          return reads === 1 ? { ok: true, value: stale } : new Promise(() => undefined)
+        })
+        const stop = controller.mount()
+        await settle()
+        let settledFirst = false
+        let settledJoiner = false
+        void controller.refresh(true).then(() => { settledFirst = true })
+        await settle()
+        expect(reads).toBe(2)
+        void controller.refresh(true).then(() => { settledJoiner = true })
+        await settle()
+        // The joiner stacks no second RPC and stays pending with the first.
+        expect(reads).toBe(2)
+        expect(settledJoiner).toBe(false)
+        // Both are released by the one bound the in-flight read holds.
+        await vi.advanceTimersByTimeAsync(10_000)
+        await settle()
+        expect(settledFirst).toBe(true)
+        expect(settledJoiner).toBe(true)
+        stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   it('ignores a poll that started before a save and resolves after it (review M3)', async () => {
