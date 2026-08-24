@@ -1231,10 +1231,12 @@ export class FeishuRemoteBridge {
       } else {
         entry = await this.ensureSession(message, origin, workspace)
       }
-      // Private and ordinary-group task cards are fresh messages in the chat.
-      // Threads require replyTo + replyInThread to stay in the topic.
-      entry.route.replyTo = origin.kind === 'thread' ? message.messageId : undefined
-      entry.route.replyInThread = origin.kind === 'thread'
+      // Group cards reply to the exact triggering message so Feishu identifies
+      // the member who @mentioned DSH. This is turn-scoped and does not change
+      // the chat/thread origin that owns the persistent DSH Session.
+      const turnReply = this.turnReplyFor(message, origin)
+      entry.route.replyTo = turnReply.replyTo
+      entry.route.replyInThread = turnReply.replyInThread
       entry.pendingPrompt = bounded(text, 700)
       // Context backfill (docs/13): fetch AFTER the command/empty guards so
       // control commands trigger ZERO history calls (F5/F8); fail-open on any
@@ -1249,8 +1251,7 @@ export class FeishuRemoteBridge {
       })
       entry.pendingClaims.set(String(userMessage.id), {
         triggerMessageId: message.messageId,
-        ...(origin.kind === 'thread' ? { replyTo: message.messageId } : {}),
-        replyInThread: origin.kind === 'thread',
+        ...turnReply,
         ...(context?.stats === undefined ? {} : { context: context.stats }),
       })
       if (context?.watermark !== undefined) {
@@ -1960,8 +1961,7 @@ export class FeishuRemoteBridge {
         if (entry.handle.agent.status === 'idle') {
           entry.pendingClaims.set(String(steerMessage.id), {
             triggerMessageId: message.messageId,
-            ...(origin.kind === 'thread' ? { replyTo: message.messageId } : {}),
-            replyInThread: origin.kind === 'thread',
+            ...this.turnReplyFor(message, origin),
           })
         }
         entry.handle.agent.steer(steerMessage)
@@ -2260,8 +2260,7 @@ export class FeishuRemoteBridge {
       chatId: message.chatId,
       chatType: message.chatType,
       ownerOpenId: message.senderId,
-      ...(origin.kind === 'thread' ? { replyTo: message.messageId } : {}),
-      replyInThread: origin.kind === 'thread',
+      ...this.turnReplyFor(message, origin),
     }
 
     const lease = this.acquireReservation(false)
@@ -2981,6 +2980,21 @@ export class FeishuRemoteBridge {
     return {
       ...(reply.replyTo === undefined ? {} : { replyTo: reply.replyTo }),
       ...(reply.replyInThread === true ? { replyInThread: true } : {}),
+    }
+  }
+
+  /**
+   * Per-turn Feishu reply target. Private task cards remain unquoted; every
+   * group task replies to its triggering member, while topic replies also set
+   * replyInThread so the card stays inside the originating topic.
+   */
+  private turnReplyFor(
+    message: NormalizedMessage,
+    origin: ActionableOrigin,
+  ): { replyTo?: string; replyInThread: boolean } {
+    return {
+      ...(origin.kind === 'p2p' ? {} : { replyTo: message.messageId }),
+      replyInThread: origin.kind === 'thread',
     }
   }
 

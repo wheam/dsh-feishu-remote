@@ -902,10 +902,11 @@ describe('sender allowlist and optional group restriction', () => {
     )
   })
 
-  it('sends an ordinary-group task result directly to the group, never into a thread', async () => {
+  it('replies an ordinary-group task result to the member who mentioned DSH without creating a thread', async () => {
     const h = await makeHarness()
     h.channel.chatModes.set('oc_grp', 'group')
     await h.emitMessage('处理任务', { chatId: 'oc_grp', chatType: 'group', mentionedBot: true })
+    const inboundId = `om_in_${messageSeq}`
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     const agent = h.agents.live.get(sessionId)!
@@ -921,8 +922,57 @@ describe('sender allowlist and optional group restriction', () => {
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
     const card = h.channel.sent.find(item => item.input.card !== undefined)!
     expect(card.to).toBe('oc_grp')
-    expect(card.options).toEqual({})
+    expect(card.options).toEqual({ replyTo: inboundId })
     expect(JSON.stringify(card.input.card)).toContain('群内完成。')
+  })
+
+  it('keeps one ordinary-group Session while replying each queued turn to its own mentioning member', async () => {
+    const h = await makeHarness({ allowedOpenIds: ['ou_alice', 'ou_bob'] })
+    h.channel.chatModes.set('oc_grp', 'group')
+
+    await h.emitMessage('Alice 的任务', {
+      chatId: 'oc_grp', chatType: 'group', senderId: 'ou_alice', mentionedBot: true,
+    })
+    const aliceInboundId = `om_in_${messageSeq}`
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    await waitFor(() => agent.followups.length === 1)
+
+    await h.emitMessage('Bob 的任务', {
+      chatId: 'oc_grp', chatType: 'group', senderId: 'ou_bob', mentionedBot: true,
+    })
+    const bobInboundId = `om_in_${messageSeq}`
+    await waitFor(() => agent.followups.length === 2)
+    expect(h.agents.created).toHaveLength(1)
+
+    const aliceMessage = agent.followups[0] as { id?: unknown }
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitClaim(sessionId, aliceMessage.id, 1)
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Alice 完成。' }] },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.filter(item => item.input.card !== undefined).length === 1)
+
+    const bobMessage = agent.followups[1] as { id?: unknown }
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 2 })
+    await h.emitClaim(sessionId, bobMessage.id, 2)
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 2,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Bob 完成。' }] },
+    })
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+    await waitFor(() => h.channel.sent.filter(item => item.input.card !== undefined).length === 2)
+
+    const cards = h.channel.sent.filter(item => item.input.card !== undefined)
+    expect(cards[0]!.options).toEqual({ replyTo: aliceInboundId })
+    expect(cards[1]!.options).toEqual({ replyTo: bobInboundId })
+    expect(JSON.stringify(cards[0]!.input.card)).toContain('Alice 完成。')
+    expect(JSON.stringify(cards[1]!.input.card)).toContain('Bob 完成。')
   })
 })
 
