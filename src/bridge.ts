@@ -2286,7 +2286,23 @@ export class FeishuRemoteBridge {
           }
           await workspace.attachSession(target.id)
           await this.assignSessionGroup(target.id, group)
-          handle = await this.resumeAgent(target.id, selection, loggedPreset ?? presetId)
+          try {
+            handle = await this.resumeAgent(target.id, selection, loggedPreset ?? presetId)
+          } catch (error) {
+            // Resume can permanently fail when the target Session is stuck as
+            // "live" in the DSH session store (e.g. after a hard restart or a
+            // torn-down handle left an orphan live registration). Failing the
+            // whole message here blocks the chat permanently, so degrade to a
+            // brand-new Session (new id) instead. The target's workspace/session
+            // group mappings are idempotent registry entries and are left as-is.
+            this.logger.warn(
+              '恢复会话 %s 失败，降级为新建会话以保持可用：%s',
+              target.id,
+              errorMessage(error),
+            )
+            handle = await this.createFreshAgent(prefix, workspace, selection, presetId, group)
+            createdFresh = true
+          }
           this.provisionalHandles.add(handle)
         } else {
           handle = await this.createFreshAgent(prefix, workspace, selection, presetId, group)
