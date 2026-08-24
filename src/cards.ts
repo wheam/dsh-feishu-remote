@@ -105,16 +105,6 @@ function latestStepText(progress: TurnProgress): string {
   return step === undefined ? progress.visibleText : step.final ?? step.chunks
 }
 
-/**
- * Feishu card Markdown mention for an authenticated event sender. Restrict the
- * value to an Open ID before embedding it in markup so untrusted payload text
- * can never inject another card tag (especially `id=all`).
- */
-function requesterLine(openId: string | undefined): string | undefined {
-  if (openId === undefined || !/^ou_[A-Za-z0-9_-]{1,128}$/u.test(openId)) return undefined
-  return `**回复：** <at id="${openId}"></at>`
-}
-
 export interface TurnCardInput {
   progress: TurnProgress
   outcome?: 'completed' | 'cancelled' | 'blocked' | 'error'
@@ -145,8 +135,6 @@ export function buildTurnCard(input: TurnCardInput): object {
   const body = bounded(cleanText, bodyLimit)
   const wasTruncated = cleanText.length > bodyLimit || input.truncated === true
   const parts = [`**${status}**`]
-  const requester = requesterLine(input.progress.reply?.requesterOpenId)
-  if (requester !== undefined) parts.push(requester)
   if (body !== '') parts.push(body)
   if (done && input.outcomeDetail !== undefined && input.outcomeDetail.trim() !== '') {
     parts.push(`_${bounded(redactSecrets(input.outcomeDetail), 700)}_`)
@@ -427,13 +415,11 @@ export function parseBridgeAction(value: unknown): BridgeAction | undefined {
 /**
  * Constant-size fallback card for pathological payloads that still exceed the
  * 28KB patch budget after every shrink (Codex P1-12/review #2 finding 8):
- * only the optional validated requester Open ID is dynamic and tightly
- * bounded, so the card remains guaranteed far below the limit.
+ * no dynamic metadata — guaranteed far below the limit.
  * `state: 'running'` avoids mislabeling an in-flight turn as completed.
  */
 export function buildOversizeCard(
   state: 'running' | 'completed' | 'cancelled' | 'blocked' | 'error',
-  requesterOpenId?: string,
 ): object {
   const labels = {
     running: '⏳ 正在处理…',
@@ -443,9 +429,5 @@ export function buildOversizeCard(
     error: '❌ 执行失败',
   } as const
   const label = labels[state]
-  const parts = [`**${label}**`]
-  const requester = requesterLine(requesterOpenId)
-  if (requester !== undefined) parts.push(requester)
-  parts.push('输出过大，无法在卡片中呈现；请到 Web GUI 的会话记录中查看完整输出。')
-  return card(undefined, undefined, [markdown(parts.join('\n\n'))], label)
+  return card(undefined, undefined, [markdown(`**${label}**\n\n输出过大，无法在卡片中呈现；请到 Web GUI 的会话记录中查看完整输出。`)], label)
 }

@@ -973,10 +973,6 @@ describe('sender allowlist and optional group restriction', () => {
     expect(cards[1]!.options).toEqual({ replyTo: bobInboundId })
     expect(JSON.stringify(cards[0]!.input.card)).toContain('Alice 完成。')
     expect(JSON.stringify(cards[1]!.input.card)).toContain('Bob 完成。')
-    expect(JSON.stringify(cards[0]!.input.card)).toContain('ou_alice')
-    expect(JSON.stringify(cards[0]!.input.card)).not.toContain('ou_bob')
-    expect(JSON.stringify(cards[1]!.input.card)).toContain('ou_bob')
-    expect(JSON.stringify(cards[1]!.input.card)).not.toContain('ou_alice')
   })
 })
 
@@ -1725,8 +1721,6 @@ describe('session creation and mapping', () => {
     await waitFor(() => threadHarness.channel.sent.some(item => item.input.card !== undefined))
     const threadCard = threadHarness.channel.sent.find(item => item.input.card !== undefined)!
     expect(threadCard.options).toEqual({ replyTo: inboundId, replyInThread: true })
-    expect(JSON.stringify(threadCard.input.card)).toContain('回复：')
-    expect(JSON.stringify(threadCard.input.card)).toContain('ou_1')
   })
 
   it('keeps runtime-generated follow-up turns in the originating Feishu topic', async () => {
