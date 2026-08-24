@@ -1754,6 +1754,40 @@ describe('session creation and mapping', () => {
     expect(String(h2.agents.resumed[0]!.options.resumeSessionId)).toBe(`${prefix}-a`)
   })
 
+  it('degrades to a fresh session when the persisted target is stuck live', async () => {
+    const h = await makeHarness()
+    const prefix = sessionPrefix('p2p:oc_p2p')
+    const targetId = `${prefix}-stuck`
+    h.persistence.headers = [{
+      version: 0,
+      id: SessionId(targetId),
+      createdAt: 1,
+      cwd: h.workspace,
+    }]
+    h.persistence.remember(targetId)
+    h.agents.failNextResume(new Error(`cannot prepare session "${targetId}" while it is live`))
+
+    await h.emitMessage('recover me')
+    await waitFor(() => h.agents.created.length === 1)
+    const freshId = String(h.agents.created[0]!.options.sessionId)
+    await waitFor(() => h.agents.live.get(freshId)?.followups.length === 1)
+
+    expect(freshId).not.toBe(targetId)
+    expect(freshId).toMatch(new RegExp(`^${prefix}-`, 'u'))
+    expect(h.workspaceRegistry.get('ws_default')!.sessionIds.map(String)).toEqual(
+      expect.arrayContaining([targetId, freshId]),
+    )
+    expect(h.ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('恢复会话 %s 失败，降级为新建会话以保持可用：%s'),
+      targetId,
+      `cannot prepare session "${targetId}" while it is live`,
+    )
+
+    await h.emitMessage('keep going')
+    await waitFor(() => h.agents.live.get(freshId)?.followups.length === 2)
+    expect(h.agents.created).toHaveLength(1)
+  })
+
   it('does not resume a same-origin Session from a different Workspace', async () => {
     const h = await makeHarness()
     const prefix = sessionPrefix('p2p:oc_p2p')
