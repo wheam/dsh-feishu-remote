@@ -26,6 +26,7 @@ function harness(options: {
   settingsUpdate?: (patch: Partial<FlatSettings>) => Promise<void>
   initialSettings?: Partial<FlatSettings>
   settingsWritable?: boolean
+  guiGuard?: OnboardingDependencies['guiGuard']
   settingsCas?: boolean
   credentialWritable?: boolean
   probe?: AppProbe
@@ -96,6 +97,7 @@ function harness(options: {
     probeApp: async () => options.probe ?? okProbe(),
     getBridgeHealth: () => health,
     waitForBridge,
+    ...(options.guiGuard === undefined ? {} : { guiGuard: options.guiGuard }),
   }
   const ctx = {
     credentials,
@@ -391,6 +393,40 @@ describe('PersonalAgent onboarding', () => {
     expect(h.registerApp).not.toHaveBeenCalled()
   })
 
+  /**
+   * Codex batch-4 MAJOR-2: the GUI safety gate used to be an admin-service
+   * concern only, so a QR bind wrote `bots[]` straight past it and dropped
+   * the very user-layer statePath the purge had deliberately kept. The gate
+   * is now shared, and dynamic: cleaning the layer re-opens onboarding
+   * without a restart.
+   */
+  it('refuses to start while the settings layers are not provably clean', async () => {
+    let dirty = true
+    const h = harness({ guiGuard: () => (dirty ? { safe: false, reason: 'user_layer_dirty' } : { safe: true }) })
+    await expect(h.service.start()).rejects.toThrow('主机专属字段')
+    expect(h.registerApp).not.toHaveBeenCalled()
+    expect(await h.service.handleRpc('onboarding/start', {}, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'settings_unsafe', details: { retryable: false } })
+    expect(h.registerApp).not.toHaveBeenCalled()
+
+    dirty = false
+    await h.service.start()
+    await waitForPhase(h.service, 'qr_ready')
+    expect(h.registerApp).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to commit a scan when the settings layers turn unsafe mid-flight', async () => {
+    let safe = true
+    const h = harness({ guiGuard: () => ({ safe }) })
+    await h.service.start()
+    safe = false
+    h.resolveRegistration({ client_id: 'cli_new', client_secret: 'secret-value', user_info: { open_id: 'ou_owner' } })
+    await waitForPhase(h.service, 'failed')
+    expect(h.service.status().error?.code).toBe('settings_unsafe')
+    expect(h.credentials.set).not.toHaveBeenCalled()
+    expect(h.settings.update).not.toHaveBeenCalled()
+  })
+
   it('refuses a non-writable credential provider before creating a Feishu app', async () => {
     const h = harness({ credentialWritable: false })
     await h.service.start()
@@ -484,9 +520,46 @@ describe('PersonalAgent onboarding', () => {
     const signal = new AbortController().signal
     const badMode = await h.service.handleRpc('onboarding/start', { mode: 'replace' }, signal)
     const unknown = await h.service.handleRpc('onboarding/nope', {}, signal)
-    expect(badMode).toMatchObject({ ok: false, error: { code: 'bad-request' } })
-    expect(unknown).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    expect(badMode).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(unknown).toMatchObject({ ok: false, code: 'bad_request' })
     expect(h.registerApp).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Audit M5: `handleRpc` used to collapse every structured failure into
+   * `internal`, so the GUI could not tell "settings are read-only" from
+   * "already added" and had nothing actionable to show.
+   */
+  it('passes structured onboarding failure codes through to the RPC result', async () => {
+    const readOnly = harness({ settingsWritable: false })
+    expect(await readOnly.service.handleRpc('onboarding/start', {}, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'read_only' })
+
+    const multi = harness({
+      initialSettings: flatten({ bots: [{ id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }] }),
+    })
+    expect(await multi.service.handleRpc('onboarding/start', { destination: 'legacy' }, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'destination_required' })
+
+    const noApp = harness()
+    expect(await noApp.service.handleRpc('onboarding/retry', {}, new AbortController().signal))
+      .toMatchObject({ ok: false, code: 'missing_app' })
+
+    const aborted = new AbortController()
+    aborted.abort()
+    expect(await harness().service.handleRpc('onboarding/status', {}, aborted.signal))
+      .toMatchObject({ ok: false, code: 'cancelled' })
+  })
+
+  it('wraps every failure in the Host RpcResult envelope the browser can parse', async () => {
+    const result = await harness().service.handleRpc('onboarding/nope', {}, new AbortController().signal)
+    // The browser re-parses the response with the Host's CLOSED RpcError
+    // schema, so `error.code` must be a Host code and the plugin code has to
+    // travel in the one free-form slot, `details.issues`.
+    const envelope = (result as { error: { code: string; message: string; details: { issues: unknown[] } } }).error
+    expect(envelope.code).toBe('bad-request')
+    expect(envelope.details.issues[0]).toMatchObject({ code: 'bad_request' })
+    expect(envelope.message).toContain('unknown endpoint')
   })
 })
 

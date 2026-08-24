@@ -18,9 +18,10 @@ import {
   type AppAddons,
 } from '@larksuiteoapi/node-sdk'
 import * as QRCode from 'qrcode'
+import { pluginRpcFailure, type PluginRpcFailure } from './admin.js'
 import { validateMultiBotConfig } from './config.js'
 import { bounded, redactSecrets } from './security.js'
-import { SETTINGS_NAMESPACE, type FlatSettings } from './settings.js'
+import { SETTINGS_NAMESPACE, type FlatSettings, type SettingsGuard } from './settings.js'
 import type { LarkBrand } from './types.js'
 
 export const ONBOARDING_RPC_CHANNEL = '/dsh-feishu-remote'
@@ -135,12 +136,39 @@ interface RpcSuccess<T> {
   value: T
 }
 
-type RpcFailure =
-  | { ok: false; error: { code: 'bad-request'; message: string; details: { issues: [] } } }
-  | { ok: false; error: { code: 'cancelled'; message: string; details: Record<string, never> } }
-  | { ok: false; error: { code: 'internal'; message: string; details: Record<string, never> } }
+/**
+ * Onboarding shares the admin RPC failure body (see `PluginRpcFailure`): a
+ * STABLE `code` the browser maps to its own copy, plus secondary `message`
+ * text, carried both flat and inside the Host error envelope. `failure.code`
+ * is passed through as-is (audit M5) — collapsing `read_only` / `busy` /
+ * `duplicate_app` / … into `internal` left the GUI unable to tell the user
+ * what to do next. Only a genuinely unknown exception becomes `internal`.
+ */
+type RpcResult<T> = RpcSuccess<T> | PluginRpcFailure
 
-type RpcResult<T> = RpcSuccess<T> | RpcFailure
+/** External (SDK/host) error codes `failureFor()` recognises and re-labels. */
+const KNOWN_EXTERNAL_CODES = new Set([
+  'access_denied', 'expired_token', 'abort', 'connection_failed', 'connection_timeout',
+])
+
+/**
+ * RPC-boundary aliases: the internal status codes stay untouched (they also
+ * drive `OnboardingStatus.phase`), while the wire uses the vocabulary the
+ * client maps (docs/18 §5 / batch-3 contract).
+ */
+const RPC_CODE_ALIASES: Record<string, string> = {
+  abort: 'cancelled',
+  expired_token: 'expired',
+  bad_request: 'bad_request',
+}
+
+function rpcFailure(error: unknown, failure: OnboardingFailure): PluginRpcFailure {
+  const external = externalErrorCode(error)
+  const known = error instanceof OnboardingError
+    || (external !== undefined && KNOWN_EXTERNAL_CODES.has(external))
+  const code = known ? RPC_CODE_ALIASES[failure.code] ?? failure.code : 'internal'
+  return pluginRpcFailure(code, failure.message, { retryable: failure.retryable })
+}
 
 type RegisterResult = Awaited<ReturnType<typeof registerApp>>
 
@@ -162,6 +190,13 @@ export interface OnboardingDependencies {
   probeApp: (appId: string, appSecret: string, brand: LarkBrand) => Promise<AppProbe>
   getBridgeHealth: (appId?: string) => BridgeHealth | undefined
   waitForBridge: (appId: string, signal?: AbortSignal) => Promise<BridgeHealth>
+  /**
+   * The same dynamic GUI safety gate the admin service uses (Codex batch-4
+   * MAJOR-2). Onboarding writes `bots[]` and the legacy root binding, so a
+   * settings layer that still carries an unresolved host-only path must stop
+   * it too — previously onboarding bypassed the gate entirely.
+   */
+  guiGuard: SettingsGuard
 }
 
 class OnboardingError extends Error {
@@ -218,9 +253,8 @@ function onboardedBot(
     appId,
     appSecretRef,
     brand,
-    statePath: '',
-    inboundDir: '',
-    feishuCliPath: '',
+    // statePath / inboundDir / feishuCliPath are host-only and never live in
+    // the settings layer; the host overlays them in unflatten().
     allowedOpenIds: [ownerOpenId],
     allowedChatIds: [],
     allowAllUsers: false,
@@ -442,6 +476,7 @@ function defaultDependencies(overrides: Partial<OnboardingDependencies>): Onboar
     waitForBridge: async () => {
       throw new OnboardingError('connection_timeout', '机器人已创建，但长连接尚未就绪。请稍后重试连接。')
     },
+    guiGuard: () => ({ safe: true }),
     ...overrides,
   }
 }
@@ -508,6 +543,23 @@ export class PersonalAgentOnboardingService {
     if (!this.isCurrent(session)) throw new OnboardingError('abort', '本次扫码已取消。')
   }
 
+  /**
+   * The dynamic GUI safety gate (Codex batch-4 MAJOR-2), checked BOTH when a
+   * scan starts and again right before the commit writes anything: a QR bind
+   * rewrites `bots[]` wholesale, which would drop a legitimate user-layer
+   * statePath the purge deliberately kept. Re-scanning means an admin who
+   * cleans the layer mid-session can start onboarding without a restart.
+   */
+  private assertSettingsSafe(): void {
+    const gui = this.deps.guiGuard()
+    if (gui.safe) return
+    throw new OnboardingError(
+      'settings_unsafe',
+      '设置存储中仍有需要人工处理的主机专属字段，暂时不能通过扫码修改配置。',
+      false,
+    )
+  }
+
   private settingsRevision(): number | undefined {
     if (typeof this.ctx.settings.describe !== 'function') return undefined
     const descriptor = this.ctx.settings.describe({ redactSecrets: true })
@@ -523,6 +575,7 @@ export class PersonalAgentOnboardingService {
     if (this.ctx.settings.writable === false) {
       throw new OnboardingError('read_only', '当前部署的设置存储为只读，无法保存扫码结果。', false)
     }
+    this.assertSettingsSafe()
     const multi = this.settings.get().bots.length > 0
     if (multi && destination !== 'new-bot') {
       throw new OnboardingError('destination_required', '多机器人模式扫码时必须明确添加为新机器人。', false)
@@ -657,7 +710,7 @@ export class PersonalAgentOnboardingService {
 
   async handleRpc(endpoint: string, payload: unknown, signal: AbortSignal): Promise<RpcResult<OnboardingStatus>> {
     if (signal.aborted) {
-      return { ok: false, error: { code: 'cancelled', message: 'request cancelled', details: {} } }
+      return pluginRpcFailure('cancelled', '请求已取消。', { retryable: true })
     }
     try {
       switch (endpoint) {
@@ -682,27 +735,10 @@ export class PersonalAgentOnboardingService {
         case 'onboarding/retry':
           return { ok: true, value: await this.retryConnection() }
         default:
-          return {
-            ok: false,
-            error: { code: 'bad-request', message: `unknown endpoint ${endpoint}`, details: { issues: [] } },
-          }
+          return pluginRpcFailure('bad_request', `unknown endpoint ${endpoint}`)
       }
     } catch (error) {
-      const failure = failureFor(error)
-      if (error instanceof OnboardingError && error.code === 'bad_request') {
-        return {
-          ok: false,
-          error: { code: 'bad-request', message: failure.message, details: { issues: [] } },
-        }
-      }
-      return {
-        ok: false,
-        error: {
-          code: 'internal',
-          message: failure.message,
-          details: {},
-        },
-      }
+      return rpcFailure(error, failureFor(error))
     }
   }
 
@@ -797,6 +833,10 @@ export class PersonalAgentOnboardingService {
         this.statusAppId = undefined
         throw new OnboardingError('duplicate_app', '这个机器人已经在列表里了，无需重复添加。', false)
       }
+
+      // Re-checked at the commit boundary: the layer may have turned dirty
+      // while the operator was scanning, and everything below writes.
+      this.assertSettingsSafe()
 
       const refName = onboardingCredentialRef(appId, session.id)
       const ref = credentialRef(refName)

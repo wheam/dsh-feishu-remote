@@ -351,3 +351,179 @@ describe('OutboundScheduler shutdown grace (Codex review #5 F2)', () => {
     expect(elapsed).toBeLessThan(2_000)         // but did not hang forever
   })
 })
+
+/**
+ * M6: the channel-wide pause is a RATE-LIMIT signal, not a per-task backoff,
+ * and it may only ever move forward. Before the fix a single transient socket
+ * error stalled every other outbound task, and a short 429 window arriving
+ * after a long one shortened the pause already in effect.
+ */
+describe('OutboundScheduler rate-limit pause (M6)', () => {
+  /** The channel-wide pause is private state; this invariant is exactly what M6 is about. */
+  const pausedUntil = (scheduler: OutboundScheduler): number =>
+    (scheduler as unknown as { pausedUntil: number }).pausedUntil
+
+  it('does not pause the whole channel for a non-rate-limit transient failure', async () => {
+    const scheduler = new OutboundScheduler({
+      concurrency: 1, minIntervalMs: 0, backoffBaseMs: 40, backoffMaxMs: 200, maxRetries: 3,
+    })
+    let flakyCalls = 0
+    const flaky = scheduler.enqueue({
+      kind: 'send', chatId: 'oc_1', label: 'flaky-socket',
+      run: async () => {
+        flakyCalls += 1
+        if (flakyCalls === 1) throw new Error('socket hang up') // transient, not 429
+      },
+    })
+    // A healthy task queued behind the failure must not inherit its backoff.
+    const startedAt = Date.now()
+    let healthyAt = 0
+    const healthy = scheduler.enqueue({
+      kind: 'send', chatId: 'oc_2', label: 'healthy',
+      run: async () => { healthyAt = Date.now() },
+    })
+
+    expect(await healthy).toBe('sent')
+    expect(healthyAt - startedAt).toBeLessThan(40) // never waited out the flaky task's backoff
+    expect(pausedUntil(scheduler)).toBe(0) // no channel-wide pause was armed
+    expect(await flaky).toBe('sent')
+    expect(flakyCalls).toBe(2)
+    scheduler.close()
+    await scheduler.shutdown()
+  })
+
+  it('arms the channel-wide pause for a rate limit', async () => {
+    const scheduler = new OutboundScheduler({
+      concurrency: 1, minIntervalMs: 0, backoffBaseMs: 20, backoffMaxMs: 60, maxRetries: 3,
+    })
+    let calls = 0
+    const result = await scheduler.enqueue({
+      kind: 'send', chatId: 'oc_1', label: 'rate-limited',
+      run: async () => {
+        calls += 1
+        if (calls === 1) throw feishuError(0, 429)
+      },
+    })
+    expect(result).toBe('sent')
+    expect(pausedUntil(scheduler)).toBeGreaterThan(0)
+    scheduler.close()
+    await scheduler.shutdown()
+  })
+
+  it('never shortens a rate-limit pause that is already in effect', async () => {
+    const scheduler = new OutboundScheduler({
+      concurrency: 1, minIntervalMs: 0, backoffBaseMs: 5, backoffMaxMs: 50, maxRetries: 3,
+    })
+    let calls = 0
+    let seeded = 0
+    let observed = -1
+    let secondAttemptAt = 0
+    const result = await scheduler.enqueue({
+      kind: 'send', chatId: 'oc_1', label: 'short-429-after-long-429',
+      run: async () => {
+        calls += 1
+        if (calls === 1) {
+          // Stand in for a long 429 window an earlier task already armed.
+          seeded = Date.now() + 300
+          ;(scheduler as unknown as { pausedUntil: number }).pausedUntil = seeded
+          // A SHORT backoff (no reset header) must not roll the pause back.
+          throw feishuError(0, 429)
+        }
+        secondAttemptAt = Date.now()
+        observed = pausedUntil(scheduler)
+      },
+    })
+    expect(result).toBe('sent')
+    expect(calls).toBe(2)
+    expect(observed).toBe(seeded) // Math.max kept the longer window
+    expect(secondAttemptAt).toBeGreaterThanOrEqual(seeded) // and it was honored
+    scheduler.close()
+    await scheduler.shutdown()
+  })
+})
+
+/**
+ * Blocker 4 (review batch 2): `dispatch()` runs the caller's `onPermanent`
+ * hook on its own stack and the drain loop fires it detached. An exception
+ * from either used to surface as a process-wide unhandledRejection, which
+ * Node 22's `--unhandled-rejections=throw` default turns into a dead `dsh web`.
+ */
+describe('OutboundScheduler unhandled-rejection containment (blocker 4)', () => {
+  async function waitFor(condition: () => boolean, label = 'condition', timeoutMs = 1_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`)
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+  }
+
+  /** Collect unhandled rejections for the duration of `body`. */
+  async function withUnhandledRejectionCapture<T>(body: (seen: unknown[]) => Promise<T>): Promise<T> {
+    const seen: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { seen.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const result = await body(seen)
+      // Unhandled rejections are reported on a later macrotask — let them land.
+      for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve))
+      return result
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  }
+
+  it('contains an onPermanent hook that throws', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const errors: unknown[][] = []
+      const scheduler = new OutboundScheduler({
+        concurrency: 1, minIntervalMs: 0, maxRetries: 0,
+        logger: { error: (...args: unknown[]) => { errors.push(args) } },
+      } as never)
+      const result = await scheduler.enqueue({
+        kind: 'send', chatId: 'oc_1', label: 'permanent-with-throwing-hook',
+        run: async () => { throw feishuError(230025) }, // 超长：permanent, no retry
+        onPermanent: () => { throw new Error('新卡片兜底炸了') },
+      })
+      expect(result).toBe('permanent')
+      for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve))
+      expect(seen).toEqual([])
+      expect(errors.some(args => String(args[0]).includes('onPermanent hook threw'))).toBe(true)
+
+      // The scheduler is still alive and draining.
+      expect(await scheduler.enqueue({
+        kind: 'send', chatId: 'oc_1', label: 'after-the-throwing-hook', run: async () => undefined,
+      })).toBe('sent')
+      scheduler.close()
+      await scheduler.shutdown()
+    })
+  })
+
+  it('contains an unexpected throw from the detached dispatch chain and keeps draining', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const errors: unknown[][] = []
+      const scheduler = new OutboundScheduler({
+        concurrency: 1, minIntervalMs: 0,
+        logger: { error: (...args: unknown[]) => { errors.push(args) } },
+      } as never)
+      // Break dispatch BEFORE its own try/catch can see it (bookkeeping throw).
+      const internals = scheduler as unknown as { release: (pending: unknown) => void }
+      const originalRelease = internals.release.bind(scheduler)
+      let broken = 0
+      internals.release = (pending: unknown) => {
+        if (broken === 0) { broken += 1; throw new Error('coalescing index exploded') }
+        originalRelease(pending)
+      }
+      // Never settles (its dispatch died) — deliberately not awaited.
+      void scheduler.enqueue({ kind: 'send', chatId: 'oc_1', label: 'dispatch-blows-up', run: async () => undefined })
+      await waitFor(() => errors.some(args => String(args[0]).includes('dispatch threw unexpectedly')))
+
+      // Concurrency was released, so the next task still runs.
+      expect(await scheduler.enqueue({
+        kind: 'send', chatId: 'oc_1', label: 'after-the-broken-dispatch', run: async () => undefined,
+      })).toBe('sent')
+      expect(seen).toEqual([])
+      scheduler.close()
+      await scheduler.shutdown()
+    })
+  })
+})

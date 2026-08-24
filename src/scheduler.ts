@@ -222,18 +222,19 @@ export class OutboundScheduler {
     this.lastDispatch = Date.now()
   }
 
-  private classifyDelay(error: unknown, attempts: number): { retry: boolean; delayMs: number } {
+  private classifyDelay(error: unknown, attempts: number): { retry: boolean; delayMs: number; rateLimited: boolean } {
     const classification = classifyOutboundError(error)
-    if (classification.kind === 'permanent') return { retry: false, delayMs: 0 }
-    if (classification.kind === 'rate-limit') {
+    if (classification.kind === 'permanent') return { retry: false, delayMs: 0, rateLimited: false }
+    const rateLimited = classification.kind === 'rate-limit'
+    if (rateLimited) {
       // 429/限流码：等待 reset 或指数退避，加抖动（docs/05 §1.3 验收）。
       const resetMs = classification.resetMs
       if (resetMs !== undefined && Number.isFinite(resetMs)) {
-        return { retry: true, delayMs: Math.min(resetMs + jitter(300), this.options.backoffMaxMs) }
+        return { retry: true, delayMs: Math.min(resetMs + jitter(300), this.options.backoffMaxMs), rateLimited }
       }
     }
     const exponential = this.options.backoffBaseMs * 2 ** attempts
-    return { retry: true, delayMs: Math.min(exponential + jitter(this.options.backoffBaseMs), this.options.backoffMaxMs) }
+    return { retry: true, delayMs: Math.min(exponential + jitter(this.options.backoffBaseMs), this.options.backoffMaxMs), rateLimited }
   }
 
   private async dispatch(pending: PendingTask): Promise<void> {
@@ -259,7 +260,7 @@ export class OutboundScheduler {
         pending.resolve('closed')
         return
       }
-      const { retry, delayMs } = this.classifyDelay(error, pending.attempts)
+      const { retry, delayMs, rateLimited } = this.classifyDelay(error, pending.attempts)
       if (!retry || pending.attempts >= this.options.maxRetries) {
         const wrapped = error instanceof Error ? error : new Error(String(error))
         this.logger.warn?.(
@@ -268,12 +269,27 @@ export class OutboundScheduler {
           wrapped.message,
         )
         pending.resolve('permanent')
-        task.onPermanent?.(wrapped)
+        // The caller's fallback hook runs on OUR stack: a throw from it must
+        // never escape dispatch() and become an unhandledRejection that takes
+        // down `dsh web` (Codex review batch 2, blocker 4).
+        try {
+          task.onPermanent?.(wrapped)
+        } catch (hookError) {
+          this.logger.error?.(
+            'dsh-feishu-remote: onPermanent hook threw for task "%s": %s',
+            task.label,
+            hookError instanceof Error ? hookError.message : String(hookError),
+          )
+        }
         return
       }
       pending.attempts += 1
       pending.notBefore = Date.now() + delayMs
-      if (delayMs > 0) this.pausedUntil = pending.notBefore
+      // M6: only a RATE LIMIT is a channel-wide signal — a single task's
+      // transient failure must not stall every other outbound task. And the
+      // global pause only ever moves FORWARD: a short reset window arriving
+      // after a long one must never shorten the pause already in effect.
+      if (rateLimited && delayMs > 0) this.pausedUntil = Math.max(this.pausedUntil, pending.notBefore)
       this.logger.warn?.('dsh-feishu-remote: outbound task "%s" backing off %dms (attempt %d)',
         task.label, delayMs, pending.attempts + 1)
       this.insert(pending)
@@ -376,9 +392,23 @@ export class OutboundScheduler {
         continue
       }
       this.active += 1
-      void this.dispatch(pending).finally(() => {
-        this.active -= 1
-      })
+      // Detached on purpose (concurrency > 1), so the chain MUST swallow:
+      // dispatch() is contractually non-rejecting, and an unforeseen throw
+      // must degrade to a log instead of an unhandledRejection (blocker 4).
+      void this.dispatch(pending)
+        .catch(error => {
+          this.logger.error?.(
+            'dsh-feishu-remote: outbound dispatch threw unexpectedly for task "%s": %s',
+            pending.task.label,
+            error instanceof Error ? error.message : String(error),
+          )
+        })
+        .finally(() => {
+          this.active -= 1
+          // A dispatch that died before its own finally never signalled the
+          // drain loop; nudge it so waiters cannot hang (F4 liveness).
+          this.notifyChange()
+        })
     }
     // Closed: settle everything.
     for (const pending of [...this.terminalQueue, ...this.normalQueue]) {

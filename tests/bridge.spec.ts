@@ -110,6 +110,12 @@ class FakeAgents {
   private resumeErrors: Error[] = []
   /** When set, create()/resume() wait on this gate before producing a handle. */
   gateCreate: Promise<void> | undefined
+  /** Every dispose() call, in order (idle-eviction race tests). */
+  readonly disposeCalls: string[] = []
+  /** When set, dispose() waits on this gate before completing. */
+  disposeGate: Promise<void> | undefined
+  /** While true, every dispose() rejects (eviction retry test). */
+  disposeFails = false
 
   failNextCreate(error: Error): void { this.createErrors.push(error) }
   failNextResume(error: Error): void { this.resumeErrors.push(error) }
@@ -146,6 +152,9 @@ class FakeAgents {
     return {
       agent,
       dispose: async () => {
+        this.disposeCalls.push(id)
+        if (this.disposeGate !== undefined) await this.disposeGate
+        if (this.disposeFails) throw new Error(`dispose failed for ${id}`)
         agent.disposed = true
         this.live.delete(id)
       },
@@ -281,8 +290,15 @@ class FakeChannel implements LarkChannelLike {
     this.status = { state: 'connected', reconnectAttempts: 0 }
   }
 
-  async disconnect(): Promise<void> {
+  /** When set, disconnect() throws SYNCHRONOUSLY (an SDK that validates before awaiting). */
+  disconnectThrows?: Error
+  disconnectCalls = 0
+
+  disconnect(): Promise<void> {
+    this.disconnectCalls += 1
+    if (this.disconnectThrows !== undefined) throw this.disconnectThrows
     this.status = { state: 'idle', reconnectAttempts: 0 }
+    return Promise.resolve()
   }
 
   getConnectionStatus() { return this.status }
@@ -304,11 +320,27 @@ class FakeChannel implements LarkChannelLike {
     }
   }
 
+  /** One-shot failures for `on(name)` — models an SDK that refuses a listener mid-wiring. */
+  readonly onErrors = new Map<string, Error>()
+  /** Event names whose unsubscribe function throws. */
+  readonly offThrows = new Set<string>()
+  readonly offCalls: string[] = []
+
   on(name: string, handler: (payload: never) => void | Promise<void>): () => void {
+    const failure = this.onErrors.get(name)
+    if (failure !== undefined) {
+      this.onErrors.delete(name)
+      throw failure
+    }
     const list = this.handlers.get(name) ?? []
     list.push(handler)
     this.handlers.set(name, list)
-    return () => undefined
+    return () => {
+      this.offCalls.push(name)
+      const index = list.indexOf(handler)
+      if (index >= 0) list.splice(index, 1)
+      if (this.offThrows.has(name)) throw new Error(`off(${name}) exploded`)
+    }
   }
 
   emit(name: string, payload: never): void {
@@ -472,6 +504,8 @@ interface HarnessBridgeOptions {
   sessionGroupMetadataTtlMs?: number
   sessionGroupMetadataNow?: () => number
   resolvedConfig?: Partial<ResolvedConfig>
+  idleSessionTtlMs?: number
+  idleSweepIntervalMs?: number
 }
 
 async function makeHarness(
@@ -3177,5 +3211,374 @@ describe('context backfill (docs/13)', () => {
     expect(calls.filter(call => call.argv[0] === 'config' && call.argv[1] === 'init')).toHaveLength(1)
     expect(calls.filter(call => call.argv[0] === 'im')).toHaveLength(2)
     expect(calls.filter(call => call.argv[0] === 'im').every(call => call.configured)).toBe(true)
+  })
+})
+
+// ------------------------------------------------------------------ H1 / H2
+
+/**
+ * H1: `dsh web` must survive a Feishu channel that cannot even be constructed.
+ * Under Node 22's `--unhandled-rejections=throw` default, a rejection escaping
+ * the detached `void this.connectLoop()` would kill the host process (D1).
+ */
+describe('connect loop crash containment (H1)', () => {
+  /** Collect unhandled rejections for the duration of `body`. */
+  async function withUnhandledRejectionCapture<T>(body: (seen: unknown[]) => Promise<T>): Promise<T> {
+    const seen: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { seen.push(reason) }
+    // Vitest installs its own handler; ours runs alongside it.
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const result = await body(seen)
+      // Unhandled rejections are reported on a later macrotask — let them land.
+      for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve))
+      return result
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  }
+
+  async function makeBridge(
+    channelFactory: () => LarkChannelLike,
+  ): Promise<{ bridge: FeishuRemoteBridge; ctx: FakeCtx }> {
+    const workspace = await tempWorkspace()
+    const statePath = await tempState()
+    const ctx = new FakeCtx()
+    const agents = new FakeAgents()
+    ctx.agents = agents
+    ctx.services.set('agents', agents)
+    ctx.services.set('sessionPersistence', new FakePersistence())
+    ctx.services.set('workspaceRegistry', new FakeWorkspaceRegistry(workspace))
+    ctx.services.set('agentPresets', {
+      resolve: vi.fn(async (id?: string) => ({ id: id ?? 'standard' })),
+      mount: vi.fn(async () => ({ id: 'standard' })),
+    })
+    const config = resolveConfig({
+      appId: 'cli_test',
+      appSecret: 'secret',
+      cwd: workspace,
+      workspaceRoot: workspace,
+      statePath,
+      allowedOpenIds: ['ou_1'],
+      contextMode: 'off',
+    })
+    const bridge = new FeishuRemoteBridge(ctx as never, config, {
+      channelFactory,
+      channelPollMs: 5,
+      reconnectBaseMs: 2,
+      teardownProducerMs: 40,
+    })
+    bridges.push(bridge)
+    return { bridge, ctx }
+  }
+
+  it('survives a channel factory that throws synchronously: no unhandled rejection, keeps backing off, stops cleanly', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      let calls = 0
+      const { bridge, ctx } = await makeBridge(() => {
+        calls += 1
+        throw new Error('SDK 构造失败：缺少 @larksuiteoapi/node-sdk')
+      })
+      // start() must resolve normally — apply()/start() may never reject (D1).
+      await expect(bridge.start()).resolves.toBeUndefined()
+      // The loop retries with backoff instead of dying on the first throw.
+      await waitFor(() => calls >= 3, 'connect retries after a constructor throw', 2_000)
+      expect(ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('飞书长连接失败'))).toBe(true)
+      expect(bridge.health().connected).toBe(false)
+
+      await bridge.stop()
+      const afterStop = calls
+      await new Promise(resolve => setTimeout(resolve, 30))
+      expect(calls).toBe(afterStop) // the loop really stopped
+
+      expect(seen).toEqual([])
+    })
+  })
+
+  it('recovers on a later attempt once the factory stops throwing', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const channel = new FakeChannel()
+      let calls = 0
+      const { bridge } = await makeBridge(() => {
+        calls += 1
+        if (calls <= 2) throw new Error('transient construction failure')
+        return channel
+      })
+      await bridge.start()
+      await waitFor(() => channel.connectCalls >= 1, 'channel connects after two failed constructions', 2_000)
+      expect(bridge.health().connected).toBe(true)
+      await bridge.stop()
+      expect(seen).toEqual([])
+    })
+  })
+
+  /**
+   * Review batch 2, major 2: the connect loop's `finally` ran `unwire()` and
+   * `disconnectBounded()` unguarded. `disconnectBounded` only caught an async
+   * rejection, so a SYNCHRONOUS throw from `channel.disconnect()` unwound the
+   * whole loop and the outermost catch left the bot offline forever.
+   */
+  it('keeps reconnecting when the channel disconnect throws synchronously', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const channel = new FakeChannel()
+      channel.disconnectThrows = new Error('SDK disconnect exploded')
+      const { bridge, ctx } = await makeBridge(() => channel)
+      await bridge.start()
+      await waitFor(() => channel.connectCalls >= 1, 'first connect', 2_000)
+
+      // Terminal failure retires the connection; the finally then hits the throw.
+      channel.status = { state: 'failed', reconnectAttempts: 9 }
+      await waitFor(() => channel.disconnectCalls >= 1, 'throwing disconnect reached', 2_000)
+      await waitFor(() => channel.connectCalls >= 2, 'loop rebuilt the channel', 2_000)
+      expect(ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('重建飞书长连接'))).toBe(true)
+
+      // Teardown must survive the same throw.
+      await expect(bridge.stop()).resolves.toBeUndefined()
+      expect(seen).toEqual([])
+    })
+  })
+
+  it('keeps reconnecting when an event disposer throws', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const channel = new FakeChannel()
+      channel.offThrows.add('message')
+      const { bridge, ctx } = await makeBridge(() => channel)
+      await bridge.start()
+      await waitFor(() => channel.connectCalls >= 1, 'first connect', 2_000)
+
+      channel.status = { state: 'failed', reconnectAttempts: 9 }
+      await waitFor(() => channel.connectCalls >= 2, 'loop survived the throwing disposer', 2_000)
+      expect(ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('飞书连接清理失败'))).toBe(true)
+      // Every later disposer still ran: the throw did not abort the unwire.
+      expect(channel.offCalls).toContain('error')
+
+      await bridge.stop()
+      expect(seen).toEqual([])
+    })
+  })
+
+  it('rolls back partially registered listeners when wiring fails mid-way', async () => {
+    await withUnhandledRejectionCapture(async seen => {
+      const channel = new FakeChannel()
+      // The LAST listener the bridge registers refuses, once.
+      channel.onErrors.set('error', new Error('SDK refused the error listener'))
+      const { bridge } = await makeBridge(() => channel)
+      await bridge.start()
+      await waitFor(() => channel.connectCalls >= 1, 'connects on the retry after a wiring failure', 2_000)
+
+      // The failed attempt left nothing behind: exactly one handler per event.
+      for (const [name, list] of channel.handlers) {
+        expect([name, list.length]).toEqual([name, 1])
+      }
+
+      await bridge.stop()
+      expect(seen).toEqual([])
+    })
+  })
+
+  it('contains a throwing reaction handler instead of letting it escape the SDK callback', async () => {
+    const h = await makeHarness()
+    await h.emitMessage('do the thing')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    const claimed = agent.followups.at(-1) as { id?: unknown }
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitClaim(sessionId, claimed!.id, 1)
+    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hi' } })
+    await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined), 'progress card sent')
+    const progressMessageId = h.channel.sent.filter(item => item.input.card !== undefined).at(-1)!.messageId
+
+    agent.cancel = () => { throw new Error('cancel exploded') }
+    // FakeChannel.emit dispatches synchronously: an unguarded throw would
+    // propagate straight out of this call.
+    expect(() => h.channel.emit('reaction', {
+      action: 'added',
+      emojiType: 'CrossMark',
+      messageId: progressMessageId,
+      operator: { openId: 'ou_1' },
+    } as never)).not.toThrow()
+    expect(h.ctx.logger.error.mock.calls.some(call => String(call[0]).includes('表情回复处理失败'))).toBe(true)
+  })
+})
+
+/**
+ * H2: live sessions pin live Agents, and `maxLiveAgents` counts those pins.
+ * Without eviction the count only grows and the cap becomes a permanent lock.
+ */
+describe('idle session eviction (H2)', () => {
+  /** Drive one full Feishu turn to completion so the agent settles idle. */
+  async function completeTurn(h: Harness, sessionId: string, turn = 1): Promise<FakeAgent> {
+    const agent = h.agents.live.get(sessionId)!
+    const claimed = agent.followups.at(-1) as { id?: unknown }
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn })
+    await h.emitClaim(sessionId, claimed!.id, turn)
+    await h.emitSessionEvent(sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
+    agent.status = 'idle'
+    return agent
+  }
+
+  it('evicts a session idle past the TTL through the retire/dispose path', async () => {
+    const h = await makeHarness({}, { idleSessionTtlMs: 30, idleSweepIntervalMs: 5 })
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = await completeTurn(h, sessionId)
+    expect(h.bridge.liveAgentCount()).toBe(1)
+
+    await waitFor(() => h.bridge.liveAgentCount() === 0, 'idle session evicted', 2_000)
+    await waitFor(() => agent.disposed, 'evicted handle disposed', 2_000)
+    expect(h.ctx.logger.info.mock.calls.some(call => String(call[0]).includes('回收空闲飞书会话'))).toBe(true)
+  })
+
+  it('never evicts a busy session', async () => {
+    const h = await makeHarness({}, { idleSessionTtlMs: 20, idleSweepIntervalMs: 5 })
+    await h.emitMessage('long job')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    const claimed = agent.followups.at(-1) as { id?: unknown }
+    await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
+    await h.emitClaim(sessionId, claimed!.id, 1)
+    agent.status = 'running' // turn in flight — the sweep must keep its hands off
+
+    await new Promise(resolve => setTimeout(resolve, 120)) // many TTLs worth of sweeps
+    expect(h.bridge.liveAgentCount()).toBe(1)
+    expect(agent.disposed).toBe(false)
+  })
+
+  it('keeps an idle session whose inbox still holds unclaimed work', async () => {
+    const h = await makeHarness({}, { idleSessionTtlMs: 20, idleSweepIntervalMs: 5 })
+    await h.emitMessage('queued but never claimed')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    const agent = h.agents.live.get(sessionId)!
+    agent.status = 'idle' // idle, but our message was never claimed (pendingClaims > 0)
+
+    await new Promise(resolve => setTimeout(resolve, 120))
+    expect(h.bridge.liveAgentCount()).toBe(1)
+    expect(agent.disposed).toBe(false)
+  })
+
+  it('frees the maxLiveAgents slot so a new origin can start after eviction', async () => {
+    const h = await makeHarness({ maxLiveAgents: 1 }, { idleSessionTtlMs: 30, idleSweepIntervalMs: 5 })
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    const firstId = h.agents.created[0]!.options.sessionId!
+    await completeTurn(h, firstId)
+
+    // Before eviction the cap is hard: a second origin is refused.
+    await h.emitMessage('too early', { chatId: 'oc_grp', chatType: 'group', threadId: 'omt_early' })
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('上限')), 'cap refusal')
+    expect(h.agents.created).toHaveLength(1)
+
+    await waitFor(() => h.bridge.liveAgentCount() === 0, 'first session evicted', 2_000)
+
+    // The freed slot admits a brand-new origin.
+    await h.emitMessage('now there is room', { chatId: 'oc_grp', chatType: 'group', threadId: 'omt_late' })
+    await waitFor(() => h.agents.created.length === 2, 'second origin admitted after eviction', 2_000)
+    expect(h.bridge.liveAgentCount()).toBe(1)
+  })
+
+  it('rebuilds the same DSH Session from the persisted binding after eviction', async () => {
+    const h = await makeHarness({}, { idleSessionTtlMs: 30, idleSweepIntervalMs: 5 })
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    const firstId = h.agents.created[0]!.options.sessionId!
+    await completeTurn(h, firstId)
+    // The evicted Session stays resumable: persistence still lists its header.
+    h.persistence.headers.push({
+      version: 0,
+      id: SessionId(firstId),
+      createdAt: Date.now(),
+      cwd: h.workspace,
+    } as SessionHeader)
+    h.persistence.remember(firstId)
+
+    await waitFor(() => h.bridge.liveAgentCount() === 0, 'idle session evicted', 2_000)
+
+    await h.emitMessage('back again')
+    await waitFor(() => h.agents.resumed.length === 1, 'origin resumed its persisted session', 2_000)
+    expect(String(h.agents.resumed[0]!.options.resumeSessionId)).toBe(firstId)
+    expect(h.bridge.liveAgentCount()).toBe(1)
+  })
+
+  /**
+   * Review batch 2, major 1: bookkeeping used to be dropped BEFORE the async
+   * dispose settled. A message landing in that window resumed the very session
+   * being torn down ("agent already registered"), and `maxLiveAgents` under-
+   * counted a still-live Agent.
+   */
+  it('fences a message that arrives while the eviction dispose is still in flight', async () => {
+    const h = await makeHarness({}, { idleSessionTtlMs: 30, idleSweepIntervalMs: 5 })
+    // Hold every dispose open from the very start so the sweep cannot win a race.
+    let releaseDispose = (): void => undefined
+    h.agents.disposeGate = new Promise<void>(resolve => { releaseDispose = resolve })
+
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await completeTurn(h, sessionId)
+    // Keep the evicted session resumable from persistence.
+    h.persistence.headers.push({
+      version: 0,
+      id: SessionId(sessionId),
+      createdAt: Date.now(),
+      cwd: h.workspace,
+    } as SessionHeader)
+    h.persistence.remember(sessionId)
+
+    await waitFor(() => h.agents.disposeCalls.length === 1, 'eviction dispose started', 2_000)
+    // Still counted while the dispose is in flight — the Agent really is alive.
+    expect(h.bridge.liveAgentCount()).toBe(1)
+
+    await h.emitMessage('arrives mid-eviction')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(h.agents.resumed).toHaveLength(0) // fenced: nothing touched the half-evicted session
+    expect(h.agents.created).toHaveLength(1)
+
+    releaseDispose()
+    await waitFor(() => h.agents.resumed.length === 1, 'resumed once the fence lifted', 2_000)
+    expect(String(h.agents.resumed[0]!.options.resumeSessionId)).toBe(sessionId)
+    expect(h.bridge.liveAgentCount()).toBe(1)
+    expect(h.ctx.logger.error.mock.calls.some(call => String(call[0]).includes('消息处理失败'))).toBe(false)
+  })
+
+  it('keeps the slot counted and retries on the next sweep when the eviction dispose rejects', async () => {
+    const h = await makeHarness({ maxLiveAgents: 1 }, { idleSessionTtlMs: 30, idleSweepIntervalMs: 5 })
+    h.agents.disposeFails = true
+
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    const sessionId = h.agents.created[0]!.options.sessionId!
+    await completeTurn(h, sessionId)
+
+    await waitFor(
+      () => h.ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('保留占用并在下次巡检重试')),
+      'rejected dispose logged',
+      2_000,
+    )
+    // Retried by a later sweep, and the slot stays occupied the whole time.
+    await waitFor(() => h.agents.disposeCalls.length >= 2, 'eviction retried after the rejection', 2_000)
+    expect(h.bridge.liveAgentCount()).toBe(1)
+
+    // Capacity is NOT under-counted: the cap still refuses a second origin.
+    await h.emitMessage('second origin', { chatId: 'oc_grp', chatType: 'group', threadId: 'omt_ghost' })
+    await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('上限')), 'cap still enforced')
+    expect(h.agents.created).toHaveLength(1)
+
+    // Once dispose can succeed, the next sweep reclaims the slot for real.
+    h.agents.disposeFails = false
+    await waitFor(() => h.bridge.liveAgentCount() === 0, 'slot freed once dispose succeeds', 2_000)
+  })
+
+  it('stops sweeping after teardown', async () => {
+    const h = await makeHarness({}, { idleSessionTtlMs: 20, idleSweepIntervalMs: 5 })
+    await h.emitMessage('first')
+    await waitFor(() => h.agents.created.length === 1)
+    await h.bridge.stop()
+    const infoCallsAfterStop = h.ctx.logger.info.mock.calls.length
+    await new Promise(resolve => setTimeout(resolve, 80))
+    expect(h.ctx.logger.info.mock.calls.length).toBe(infoCallsAfterStop)
   })
 })

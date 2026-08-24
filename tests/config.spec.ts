@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ConfigSchema, resolveBotRuntimeConfig, resolveConfig, validateMultiBotConfig } from '../src/config.js'
+import { BotConfigError, ConfigSchema, resolveBotRuntimeConfig, resolveConfig, validateMultiBotConfig } from '../src/config.js'
 
 const BASE = {
   appId: 'cli_test',
@@ -127,6 +127,53 @@ describe('resolveConfig (Workspace Registry routing, fail-closed sender access)'
       botId: 'bot-a', appId: 'cli_a', appSecret: 'bot-secret', allowAllUsers: false,
       allowedOpenIds: [], contextBackend: 'sdk', feishuCliPath: '', multiBot: true,
     })
+  })
+
+  /**
+   * Codex batch-3 B1: a duplicate host path must be reported by CODE, never by
+   * echoing the resolved absolute path — that message travels to `bots/status`.
+   */
+  it('reports duplicate host paths with a stable code and no absolute path', () => {
+    const duplicate = (key: 'statePath' | 'inboundDir', code: string) => {
+      let thrown: unknown
+      try {
+        validateMultiBotConfig([
+          { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', [key]: '/tmp/dsh-feishu-dup/shared' },
+          { id: 'bot-b', appId: 'cli_b', appSecretRef: 'REF_B', [key]: '/tmp/dsh-feishu-dup/shared' },
+        ])
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(BotConfigError)
+      expect((thrown as BotConfigError).code).toBe(code)
+      expect((thrown as Error).message).toContain('bot-b')
+      expect((thrown as Error).message).not.toContain('/tmp')
+    }
+    duplicate('statePath', 'duplicate_state_path')
+    duplicate('inboundDir', 'duplicate_inbound_dir')
+  })
+
+  it('tags every root invariant failure with its stable code', () => {
+    const codeOf = (bots: Parameters<typeof validateMultiBotConfig>[0]) => {
+      try {
+        validateMultiBotConfig(bots)
+        return undefined
+      } catch (error) {
+        return error instanceof BotConfigError ? error.code : 'not-structured'
+      }
+    }
+    expect(codeOf([
+      { id: 'bot-a', appId: 'cli_same', appSecretRef: 'REF_A' },
+      { id: 'bot-b', appId: 'cli_same', appSecretRef: 'REF_B' },
+    ])).toBe('duplicate_app_id')
+    expect(codeOf([
+      { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' },
+      { id: 'bot-a', appId: 'cli_b', appSecretRef: 'REF_B' },
+    ])).toBe('duplicate_bot_id')
+    expect(codeOf([{ id: 'Bad ID', appId: 'cli_a', appSecretRef: 'REF_A' }])).toBe('invalid_bot_id')
+    expect(codeOf([
+      { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', workspacePolicy: 'locked' },
+    ])).toBe('workspace_unavailable')
   })
 
   it('requires a default Workspace for locked policy and forbids CLI in bots[]', () => {
