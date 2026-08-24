@@ -857,7 +857,10 @@ window.__ModuleLoader__.load({
 					], "text")
 				], "head"),
 				!admin.writable ? h("p", { className: cx.note, role: "status" }, t("settings.readOnly"), "readOnly") : null,
-				props.showOnboarding
+				// Empty state: the QR card IS the page, so it sits at the top.
+				// With bots present, it renders BELOW the list instead — right where
+				// the 「＋ 添加机器人」 row that opened it lives.
+				props.showOnboarding && admin.bots.length === 0
 					? h(OnboardingCard, {
 						t,
 						usePersonalAgentOnboarding: props.usePersonalAgentOnboarding,
@@ -867,8 +870,8 @@ window.__ModuleLoader__.load({
 						destination: props.onboardingDestination,
 						baselineRevision: props.baselineRevision,
 						writable: admin.writable,
-						titleKey: admin.bots.length === 0 ? "onboarding.firstTitle" : "onboarding.addTitle",
-						descriptionKey: admin.bots.length === 0 ? "onboarding.firstDescription" : "onboarding.addDescription",
+						titleKey: "onboarding.firstTitle",
+						descriptionKey: "onboarding.firstDescription",
 						onClose: props.onCloseOnboarding
 					}, void 0, "onboarding")
 					: null,
@@ -888,6 +891,21 @@ window.__ModuleLoader__.load({
 						h("span", {}, props.preparing ? t("page.preparing") : t("page.add"), "text")
 					], "add")
 				], "bots"),
+				props.showOnboarding && admin.bots.length > 0
+					? h(OnboardingCard, {
+						t,
+						usePersonalAgentOnboarding: props.usePersonalAgentOnboarding,
+						onboardingStart: props.onboardingStart,
+						onboardingCancel: props.onboardingCancel,
+						onboardingRetry: props.onboardingRetry,
+						destination: props.onboardingDestination,
+						baselineRevision: props.baselineRevision,
+						writable: admin.writable,
+						titleKey: "onboarding.addTitle",
+						descriptionKey: "onboarding.addDescription",
+						onClose: props.onCloseOnboarding
+					}, void 0, "onboardingAdd")
+					: null,
 				admin.mode === "multi" ? h("p", { className: cx.secTitle }, t("page.allBots"), "allTitle") : null,
 				admin.mode === "multi" ? h("div", { className: cx.card }, [
 					settingRow({
