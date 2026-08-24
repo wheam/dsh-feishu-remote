@@ -70,6 +70,40 @@ describe('card templates', () => {
     }
   })
 
+  it('visibly attributes an explicitly mentioned group turn to its requester', () => {
+    const card = buildTurnCard({
+      progress: progress({
+        reply: {
+          replyTo: 'om_alice',
+          replyInThread: false,
+          requesterOpenId: 'ou_alice',
+        },
+      }),
+      maxBodyChars: 12000,
+      outcome: 'completed',
+    })
+    const body = JSON.stringify(card)
+    expect(body).toContain('回复：')
+    expect(body).toContain('<at id=\\"ou_alice\\"></at>')
+  })
+
+  it('never embeds an invalid requester id into card Markdown', () => {
+    const card = buildTurnCard({
+      progress: progress({
+        reply: {
+          replyTo: 'om_bad',
+          replyInThread: false,
+          requesterOpenId: 'all\"><at id="all',
+        },
+      }),
+      maxBodyChars: 12000,
+      outcome: 'completed',
+    })
+    const body = JSON.stringify(card)
+    expect(body).not.toContain('回复：')
+    expect(body).not.toContain('<at')
+  })
+
   it('uses ordinary mutable patches so shorter progress cannot trigger typewriter artifacts', () => {
     const card = buildTurnCard({
       progress: progress(),

@@ -90,6 +90,7 @@ import type {
   ProfileSnapshot,
   TurnContextStats,
   TurnProgress,
+  TurnReplyContext,
   TurnStepText,
 } from './types.js'
 
@@ -140,12 +141,10 @@ const BRIDGE_COMMAND_NAMES = new Set([
 
 type ActionableOrigin = Extract<Origin, { kind: 'p2p' | 'group' | 'thread' }>
 
-interface RouteContext {
+interface RouteContext extends TurnReplyContext {
   chatId: string
   chatType: 'p2p' | 'group'
   ownerOpenId: string
-  replyTo?: string
-  replyInThread: boolean
 }
 
 interface BridgeSession {
@@ -173,19 +172,17 @@ interface BridgeSession {
    */
   pendingClaims: Map<string, {
     triggerMessageId: string
-    replyTo?: string
-    replyInThread: boolean
     context?: TurnContextStats
-  }>
+  } & TurnReplyContext>
   /** turn → origin and reply context, written by the claimed handler. */
   turnOrigin: Map<number, 'feishu' | 'gui'>
-  turnReply: Map<number, { replyTo?: string; replyInThread: boolean }>
+  turnReply: Map<number, TurnReplyContext>
   /** turn → context-backfill stats (docs/13 F10), copied at claim time. */
   turnContext: Map<number, TurnContextStats>
   /** Incremental-window watermark for THIS session (docs/13 F6); undefined = full window. */
   contextWatermark?: ContextWatermark
   /** Reply context of the currently active turn (feishu: the claimed message's; gui: thread-only). */
-  activeReply?: { replyTo?: string; replyInThread: boolean }
+  activeReply?: TurnReplyContext
   /** In-flight turn finalizer (terminal card + archive). Switches await it so old work never crosses a swap. */
   pendingFinalize?: Promise<void>
   /**
@@ -1237,6 +1234,7 @@ export class FeishuRemoteBridge {
       const turnReply = this.turnReplyFor(message, origin)
       entry.route.replyTo = turnReply.replyTo
       entry.route.replyInThread = turnReply.replyInThread
+      entry.route.requesterOpenId = turnReply.requesterOpenId
       entry.pendingPrompt = bounded(text, 700)
       // Context backfill (docs/13): fetch AFTER the command/empty guards so
       // control commands trigger ZERO history calls (F5/F8); fail-open on any
@@ -2658,7 +2656,7 @@ export class FeishuRemoteBridge {
           // settlement notice) have no Feishu inbox claim of their own. Keep
           // them anchored to the Session's latest topic message; Feishu only
           // honors replyInThread when a concrete replyTo is also present.
-          ?? { replyTo: entry.route.replyTo, replyInThread: entry.route.replyInThread }
+          ?? this.replyFromRoute(entry.route)
         const progress: TurnProgress = {
           turn: event.data.turn,
           startedAt: event.time,
@@ -2893,7 +2891,7 @@ export class FeishuRemoteBridge {
     // after turn/start; this runs on the first chunk at the earliest).
     if (progress.reply === undefined) {
       progress.reply = entry.activeReply
-        ?? { replyTo: entry.route.replyTo, replyInThread: entry.route.replyInThread }
+        ?? this.replyFromRoute(entry.route)
     }
     const { card, truncated } = this.fitCardBudget(entry, progress, resolvedOutcome, resolvedDetail)
     progress.truncated = progress.truncated === true || truncated
@@ -2968,7 +2966,7 @@ export class FeishuRemoteBridge {
       // guaranteed byte postcondition. Running turns keep live-card semantics
       // without reintroducing headers, metadata, or action buttons.
       truncated = true
-      card = buildOversizeCard(outcome ?? 'running')
+      card = buildOversizeCard(outcome ?? 'running', progress.reply?.requesterOpenId)
     }
     return { card, truncated }
   }
@@ -2976,7 +2974,7 @@ export class FeishuRemoteBridge {
   private replyFor(entry: BridgeSession, progress?: TurnProgress): SendOptions | undefined {
     const reply = progress?.reply
       ?? entry.activeReply
-      ?? { replyTo: entry.route.replyTo, replyInThread: entry.route.replyInThread }
+      ?? this.replyFromRoute(entry.route)
     return {
       ...(reply.replyTo === undefined ? {} : { replyTo: reply.replyTo }),
       ...(reply.replyInThread === true ? { replyInThread: true } : {}),
@@ -2991,10 +2989,22 @@ export class FeishuRemoteBridge {
   private turnReplyFor(
     message: NormalizedMessage,
     origin: ActionableOrigin,
-  ): { replyTo?: string; replyInThread: boolean } {
+  ): TurnReplyContext {
     return {
       ...(origin.kind === 'p2p' ? {} : { replyTo: message.messageId }),
       replyInThread: origin.kind === 'thread',
+      ...(message.chatType === 'group' && message.mentionedBot
+        ? { requesterOpenId: message.senderId }
+        : {}),
+    }
+  }
+
+  /** Copy only immutable per-turn reply fields from the mutable Session route. */
+  private replyFromRoute(route: RouteContext): TurnReplyContext {
+    return {
+      ...(route.replyTo === undefined ? {} : { replyTo: route.replyTo }),
+      replyInThread: route.replyInThread,
+      ...(route.requesterOpenId === undefined ? {} : { requesterOpenId: route.requesterOpenId }),
     }
   }
 

@@ -146,6 +146,14 @@ export interface TurnStepText {
   hasToolCalls?: boolean
 }
 
+/** Immutable Feishu delivery and visible requester attribution for one turn. */
+export interface TurnReplyContext {
+  replyTo?: string
+  replyInThread: boolean
+  /** Present only for group turns that explicitly @mentioned this bot. */
+  requesterOpenId?: string
+}
+
 export interface TurnProgress {
   turn: number
   startedAt: number
@@ -162,7 +170,7 @@ export interface TurnProgress {
   truncated?: boolean
   cardFallbackAttempted?: boolean
   /** Immutable reply context for THIS turn's cards (captured once, survives route mutation). */
-  reply?: { replyTo?: string; replyInThread: boolean }
+  reply?: TurnReplyContext
   /** Feishu context backfill stats for THIS turn (docs/13 F10), copied at claim time. */
   contextStats?: TurnContextStats
   /** Feishu message this turn's "working" reaction (敲键盘) was added to — removed at turn/end. */
