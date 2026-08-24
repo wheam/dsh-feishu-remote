@@ -25,6 +25,11 @@ window.__ModuleLoader__.load({
 			+ ".fr_h1{margin:0;font-size:16px;font-weight:600;color:var(--dsw-alias-label-primary)}"
 			+ ".fr_intro{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}"
 			+ ".fr_card{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}"
+			+ ".fr_addRow{display:flex;align-items:center;gap:8px;width:100%;padding:11px 16px;border:0;border-top:1px solid var(--dsw-alias-border-l1);background:transparent;font:inherit;font-size:13px;color:var(--dsw-alias-state-business-primary);cursor:pointer;text-align:left}"
+			+ ".fr_addRow:first-child{border-top:0}"
+			+ ".fr_addRow:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}"
+			+ ".fr_addRow:disabled{opacity:.5;cursor:default}"
+			+ ".fr_addPlus{font-size:15px;line-height:1}"
 			+ ".fr_secTitle{margin:6px 0 -6px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}"
 			+ ".fr_note{margin:0;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}"
 			+ ".fr_error{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-error-primary)}"
@@ -131,7 +136,7 @@ window.__ModuleLoader__.load({
 		}
 		const cx = {
 			page: "fr_page", head: "fr_head", headText: "fr_headText", h1: "fr_h1", intro: "fr_intro",
-			card: "fr_card", secTitle: "fr_secTitle", note: "fr_note", error: "fr_error",
+			card: "fr_card", addRow: "fr_addRow", addPlus: "fr_addPlus", secTitle: "fr_secTitle", note: "fr_note", error: "fr_error",
 			raw: "fr_raw", notice: "fr_notice", blocked: "fr_blocked",
 			row: "fr_row", rowOff: "fr_rowOff", avatar: "fr_avatar", avatarLg: "fr_avatarLg",
 			rowText: "fr_rowText", rowTitle: "fr_rowTitle", name: "fr_name", nameLg: "fr_nameLg",
@@ -849,11 +854,7 @@ window.__ModuleLoader__.load({
 					h("div", { className: cx.headText }, [
 						h("h2", { className: cx.h1 }, t("settings.title"), "title"),
 						h("p", { className: cx.intro }, t("page.intro"), "intro")
-					], "text"),
-					h("button", {
-						type: "button", className: cx.primary, disabled: disabled || admin.dirty,
-						onClick: props.onAdd
-					}, props.preparing ? t("page.preparing") : t("page.add"), "add")
+					], "text")
 				], "head"),
 				!admin.writable ? h("p", { className: cx.note, role: "status" }, t("settings.readOnly"), "readOnly") : null,
 				props.showOnboarding
@@ -871,10 +872,22 @@ window.__ModuleLoader__.load({
 						onClose: props.onCloseOnboarding
 					}, void 0, "onboarding")
 					: null,
-				admin.bots.length === 0 ? null : h("div", { className: cx.card }, admin.bots.map((bot) => h(BotRow, {
-					t, bot, mode: admin.mode, status: props.statuses.get(bot.id),
-					onOpen: () => props.onOpen(bot.id)
-				}, void 0, bot.id)), "bots"),
+				admin.bots.length === 0 ? null : h("div", { className: cx.card }, [
+					...admin.bots.map((bot) => h(BotRow, {
+						t, bot, mode: admin.mode, status: props.statuses.get(bot.id),
+						onOpen: () => props.onOpen(bot.id)
+					}, void 0, bot.id)),
+					// The add action lives as the list's last row — the page head keeps
+					// only title + intro so nothing crowds the dialog's own
+					// 「打开配置文件」/close controls directly above it.
+					props.showOnboarding ? null : h("button", {
+						type: "button", className: cx.addRow, disabled: disabled || admin.dirty,
+						onClick: props.onAdd
+					}, [
+						h("span", { className: cx.addPlus, "aria-hidden": true }, "＋", "plus"),
+						h("span", {}, props.preparing ? t("page.preparing") : t("page.add"), "text")
+					], "add")
+				], "bots"),
 				admin.mode === "multi" ? h("p", { className: cx.secTitle }, t("page.allBots"), "allTitle") : null,
 				admin.mode === "multi" ? h("div", { className: cx.card }, [
 					settingRow({
