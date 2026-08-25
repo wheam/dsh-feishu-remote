@@ -74,8 +74,19 @@ describe('legacy Feishu transcript display', () => {
     expect(split(`${frame}现在测试负责人是谁？`)).toBe('现在测试负责人是谁？')
   })
 
+  it('removes runtime metadata plus history while preserving only the current prompt', () => {
+    const runtime = JSON.stringify({
+      type: 'feishu-runtime-context',
+      conversation: { kind: 'group', name: '项目群' },
+      reply: { status: 'loaded', content: '引用里也有 } 和 \\"引号\\"' },
+    })
+    const history = JSON.stringify({ type: 'feishu-context', messages: [{ x: '历史' }] })
+    expect(split(`${runtime}${history}请按被回复文档处理`)).toBe('请按被回复文档处理')
+  })
+
   it('ignores malformed, unrelated, and context-only text', () => {
     expect(split('{"type":"feishu-context"坏数据')).toBeUndefined()
+    expect(split('{"type":"feishu-runtime-context"坏数据')).toBeUndefined()
     expect(split('{"type":"something-else"}用户问题')).toBeUndefined()
     expect(split('{"type":"feishu-context"}')).toBeUndefined()
     expect(split('普通用户问题')).toBeUndefined()

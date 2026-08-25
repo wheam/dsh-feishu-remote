@@ -2020,46 +2020,51 @@ window.__ModuleLoader__.load({
 		};
 
 		// ------------------------------------------------ legacy transcript display
-		const FEISHU_CONTEXT_PREFIX = '{"type":"feishu-context"';
+		const FEISHU_CONTEXT_TYPES = new Set(["feishu-context", "feishu-runtime-context"]);
 
 		/**
-		 * Return the user-visible suffix after one leading feishu-context JSON
-		 * object. This is deliberately a structural JSON scan rather than a regex:
+		 * Return the user-visible suffix after one or more leading Feishu context
+		 * objects. This is deliberately a structural JSON scan rather than a regex:
 		 * quoted braces and escaped quotes inside chat history must not end the
 		 * frame early.
 		 */
 		function splitLegacyFeishuMessageText(text) {
-			if (typeof text !== "string" || !text.startsWith(FEISHU_CONTEXT_PREFIX)) return void 0;
-			let depth = 0;
-			let inString = false;
-			let escaped = false;
-			for (let index = 0; index < text.length; index += 1) {
-				const char = text[index];
-				if (inString) {
-					if (escaped) escaped = false;
-					else if (char === "\\") escaped = true;
-					else if (char === '"') inString = false;
-					continue;
-				}
-				if (char === '"') inString = true;
-				else if (char === "{") depth += 1;
-				else if (char === "}") {
-					depth -= 1;
-					if (depth !== 0) continue;
-					const rawFrame = text.slice(0, index + 1);
-					const visible = text.slice(index + 1);
-					if (visible === "") return void 0;
-					try {
-						const frame = JSON.parse(rawFrame);
-						return frame !== null && typeof frame === "object" && frame.type === "feishu-context"
-							? visible
-							: void 0;
-					} catch {
-						return void 0;
+			if (typeof text !== "string") return void 0;
+			let offset = 0;
+			let removed = false;
+			for (;;) {
+				if (text[offset] !== "{") break;
+				let depth = 0;
+				let inString = false;
+				let escaped = false;
+				let end = -1;
+				for (let index = offset; index < text.length; index += 1) {
+					const char = text[index];
+					if (inString) {
+						if (escaped) escaped = false;
+						else if (char === "\\") escaped = true;
+						else if (char === '"') inString = false;
+						continue;
+					}
+					if (char === '"') inString = true;
+					else if (char === "{") depth += 1;
+					else if (char === "}") {
+						depth -= 1;
+						if (depth === 0) { end = index + 1; break; }
 					}
 				}
+				if (end < 0) return void 0;
+				try {
+					const frame = JSON.parse(text.slice(offset, end));
+					if (frame === null || typeof frame !== "object" || !FEISHU_CONTEXT_TYPES.has(frame.type)) break;
+				} catch {
+					return void 0;
+				}
+				removed = true;
+				offset = end;
 			}
-			return void 0;
+			const visible = text.slice(offset);
+			return removed && visible !== "" ? visible : void 0;
 		}
 
 		/**

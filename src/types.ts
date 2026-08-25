@@ -225,6 +225,8 @@ export interface LarkChannelLike {
   getChatInfo?(chatId: string): Promise<{
     chatId: string
     name?: string
+    description?: string
+    memberCount?: number
     chatType: 'p2p' | 'group' | 'topic'
   }>
   /** Authoritative Feishu chat mode; callers cache this because it rarely changes. */

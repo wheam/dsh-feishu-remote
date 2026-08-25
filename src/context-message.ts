@@ -1,5 +1,6 @@
 /**
- * Transcript-safe representation of one Feishu turn with history backfill.
+ * Transcript-safe representation of one Feishu turn with runtime metadata
+ * and optional history backfill.
  *
  * The bridge queues one tagged message so inbox claim attribution remains
  * exact. At the pre-step boundary, the tagged message is split atomically into
@@ -9,6 +10,7 @@
  */
 import { createUserMessage, freezeMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { CONTEXT_FRAME_TYPE } from './context.js'
+import { RUNTIME_CONTEXT_FRAME_TYPE } from './runtime-context.js'
 
 export const FEISHU_REMOTE_SOURCE = {
   kind: 'user',
@@ -19,7 +21,7 @@ const CONTEXT_SOURCE = {
   kind: 'plugin',
   plugin: 'dsh-feishu-remote',
   form: 'notice',
-  summary: '飞书聊天历史 / Feishu history',
+  summary: '飞书会话上下文 / Feishu context',
 } as const
 
 function isTaggedFeishuMessage(message: UserMessage): boolean {
@@ -28,12 +30,11 @@ function isTaggedFeishuMessage(message: UserMessage): boolean {
 }
 
 function isFeishuContextFrame(text: string): boolean {
-  if (!text.startsWith(`{"type":"${CONTEXT_FRAME_TYPE}"`)) return false
   try {
     const value = JSON.parse(text) as unknown
-    return typeof value === 'object'
-      && value !== null
-      && (value as { type?: unknown }).type === CONTEXT_FRAME_TYPE
+    if (typeof value !== 'object' || value === null) return false
+    const type = (value as { type?: unknown }).type
+    return type === CONTEXT_FRAME_TYPE || type === RUNTIME_CONTEXT_FRAME_TYPE
   } catch {
     return false
   }
@@ -49,10 +50,17 @@ function isFeishuContextFrame(text: string): boolean {
 export function separateFeishuContextMessages(messages: UserMessage[]): UserMessage[] {
   return messages.flatMap(message => {
     if (!isTaggedFeishuMessage(message)) return [message]
-    const [context, ...prompt] = message.content
-    if (context?.type !== 'text' || prompt.length === 0 || !isFeishuContextFrame(context.text)) return [message]
+    let contextCount = 0
+    while (contextCount < message.content.length) {
+      const block = message.content[contextCount]
+      if (block?.type !== 'text' || !isFeishuContextFrame(block.text)) break
+      contextCount += 1
+    }
+    if (contextCount === 0 || contextCount >= message.content.length) return [message]
+    const context = message.content.slice(0, contextCount)
+    const prompt = message.content.slice(contextCount)
     return [
-      createUserMessage({ content: [context], source: CONTEXT_SOURCE }),
+      createUserMessage({ content: context, source: CONTEXT_SOURCE }),
       freezeMessage({ ...message, content: prompt }),
     ]
   })

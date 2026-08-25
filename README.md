@@ -74,6 +74,8 @@ DSH 仍处于 RC 阶段，相邻 RC 版本可能包含破坏性变化。安装�
 
 - 首次使用可从 DSH Workspace Registry 选择 Workspace、创建一个末级目录，或输入绝对路径；
 - Workspace 绑定跨重启保存；`/new` 保留当前 Workspace，切换 Workspace 会开启新 Session；
+- 每轮都会告诉模型当前群名/群类型、发言人、消息/话题标识、@对象和附件元数据；
+- 回复群消息时按 `replyToMessageId` 精确读取被回复内容，保留其中的文档标题与链接；
 - 可选读取最近的私聊、群聊或话题历史，作为不可信上下文发送给当前模型；
 - 一个插件实例可管理多个飞书 App，每个机器人独立配置凭据、白名单、Workspace、模型和并发；
 - 每个机器人可加载一份本机 Markdown Profile，作为稳定的角色和工作方式说明；
@@ -197,8 +199,8 @@ dsh plugin --profile web add "link:$DSH_FEISHU_PLUGIN_DIR"
 | 权限 | `im:message.p2p_msg:readonly` | 接收私聊 |
 | 权限 | `im:message.group_at_msg:readonly` | 接收群内 `@机器人` |
 | 权限 | `im:message:send_as_bot` | 发送消息和卡片 |
-| 权限 | `im:message:readonly` | 读取私聊历史 |
-| 权限 | `im:message.group_msg` | 接收普通群消息并读取群/话题历史 |
+| 权限 | `im:message:readonly` | 读取私聊历史和显式回复目标 |
+| 权限 | `im:message.group_msg` | 接收普通群消息，并读取群/话题历史及群内回复目标 |
 | 权限 | `im:message.reactions:write_only` | 添加和删除工作状态 reaction |
 | 事件 | `im.message.receive_v1` | 接收消息事件 |
 | 回调 | `card.action.trigger` | 处理审批与 Workspace 卡片 |
@@ -363,7 +365,7 @@ API key、密码或不希望发送给模型的内容。
 | `maxInboundFileBytes` | `20971520` | 入站文件上限，默认 20 MiB |
 | `maxOutboundFileBytes` | `31457280` | 出站文件上限，默认 30 MiB |
 | `cardBodyMaxChars` | `12000` | 单卡正文预算 |
-| `contextMode` | `auto` | `auto` 开启上下文回填；`off` 完全关闭 |
+| `contextMode` | `auto` | `auto` 开启最近聊天历史回填；`off` 关闭该历史窗口（不关闭当前会话元数据和明确回复对象） |
 | `contextBackend` | `auto` | 单机器人可用 `auto`、`cli`、`sdk`；多机器人必须 `sdk` |
 | `contextMaxMessages` | `150` | 群聊/话题历史消息总上限 |
 | `contextMaxChars` | `100000` | 群聊/话题历史字符总上限 |
@@ -396,6 +398,10 @@ API key、密码或不希望发送给模型的内容。
 - **聊天历史会发给模型。** 开启 `contextMode: auto` 后，被读取的群聊、话题和私聊历史会注入
   DSH durable history，并发送给当前模型提供商。它们被标记为不可信上下文，但插件只做密钥
   形态脱敏，不承诺清理个人信息或业务敏感内容。
+- **当前飞书场景会发给模型。** 每个普通任务都会携带群名/ID、会话类型、发言人、消息/话题
+  标识、@和资源元数据；用户使用飞书“回复”时，还会按 ID 读取并携带被明确选择的那一条消息。
+  原始事件、tenant key、完整成员列表和无关身份字段不会进入模型。字段清单与降级规则见
+  [docs/19-feishu-runtime-context.md](docs/19-feishu-runtime-context.md)。
 - **Profile 会发给模型。** `profileFile` 正文进入 system prompt；状态页只显示路径、大小和 digest。
 - **Secret 不进普通设置。** 扫码写入 DSH credential provider；手工配置也应只写
   `~/.dsh/.credentials.yaml`，并保持 `0600` 权限。
@@ -404,8 +410,9 @@ API key、密码或不希望发送给模型的内容。
 - **本机插件不是安全沙箱。** DSH Agent 工具与插件进程使用同一 OS 用户；高隔离需求应在操作系统
   或独立主机层实现。
 
-如需完全关闭飞书历史读取，设置 `contextMode: off`。敏感部署建议同时配置非空
-`allowedChatIds`，只允许指定群使用。
+如需关闭未被当前消息明确选择的最近聊天历史窗口，设置 `contextMode: off`。当前会话元数据和用户
+主动回复的目标消息仍属于当前输入，会继续注入。敏感部署建议同时配置非空 `allowedChatIds`，只允许
+指定群使用。
 
 ## 更新、卸载与数据保留
 

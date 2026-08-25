@@ -128,7 +128,7 @@
   1M 上下文，但不以此放弃预算。DeepSeek 上下文缓存是
   **前缀匹配、尽力而为**（[官方文档](https://api-docs.deepseek.com/guides/kv_cache)），
   窗口滑动时命中不可依赖；且桥接器允许任意 provider/model，不能普遍假设 1M——
-  成本由预算封顶承担，`contextMode: off` 是逃生门。**拉取页数**：`--page-limit`
+  成本由预算封顶承担，`contextMode: off` 是关闭最近历史窗口的逃生门。**拉取页数**：`--page-limit`
   `ceil(maxMessages/50)` 只是上界，**停止条件 = 渲染后保留条数达到预算或服务端耗尽**；
   为抵消触发消息剔除与 system/deleted 过滤，实际拉取目标为 `maxMessages + 1`。
 - **F5 失败 fail-open，且拉取只发生在普通消息路径。** CLI 缺失/超时/非零退出/SDK 报错 →
@@ -167,7 +167,7 @@
   3. 对抗测试入首版契约（历史中夹带"执行命令/泄露文件/覆盖规则/闭合标签"等载荷）。
 - **F9 数据流与隐私。**（Codex F-07 修正）注入的群历史会：随 UserMessage 进入 dsh 会话
   durable history（持久化）、出现在 Web GUI 会话列表（同一批会话）、随会话归档/导出/删除
-  流转。措施：文档明示该数据流（本文 §8 + README 独立章节）；`contextMode: off` 完全关闭；
+  流转。措施：文档明示该数据流（本文 §8 + README 独立章节）；`contextMode: off` 完全关闭环境历史窗口；
   群场景默认适用于机器人加入的任意群，非空 `allowedChatIds` 可选收窄范围；日志与错误文本不打印上下文原文；
   `redactSecrets` 只管密钥形态，**不是**个人信息清洗器——不承诺脱敏群讨论。
   **子进程环境最小化**（docs/15 F-09）：CLI 子进程只继承白名单环境变量（PATH/HOME/TMP/
@@ -305,7 +305,7 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 
 | 键 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `contextMode` | `off` \| `auto` | `auto` | 上下文回填开关 |
+| `contextMode` | `off` \| `auto` | `auto` | 最近聊天历史回填开关；不控制当前会话元数据或显式回复对象 |
 | `contextBackend` | `auto` \| `cli` \| `sdk` | `auto` | 获取后端选择（F1） |
 | `feishuCliPath` | string | `''` | CLI 显式路径（env `DSH_FEISHU_CLI_PATH` 等价）；**仅受信任管理员配置，不进 GUI 设置卡**（docs/15 F-09） |
 | `contextP2pMaxMessages` | number | `80` | 私聊额外消息上限（1–500）；实际还受 `contextMaxMessages` 约束 |
@@ -391,11 +391,11 @@ post 内容解析含 **locale 解包**（`{zh_cn:{...}}` 等，docs/15 F-11）�
 
 - **数据流（F9）**：群/私聊历史（含未 @ 消息、其他群成员发言）会作为 plugin context →
   进入 dsh 会话 durable history（本地持久化）→ 在 Web GUI 显示为默认折叠的上下文行 →
-  发送给所配置的模型提供商。当前飞书提问作为同回合独立 UserMessage 显示；`contextMode: off` 完全关闭；群场景默认适用于机器人加入的
+  发送给所配置的模型提供商。当前飞书提问作为同回合独立 UserMessage 显示；`contextMode: off` 完全关闭最近历史窗口（当前会话元数据和显式回复对象见 docs/19）；群场景默认适用于机器人加入的
   任意群，非空 `allowedChatIds` 可选收窄范围；日志与错误不打印上下文原文；本插件不承诺
   对群讨论内容脱敏。
 - **每次入站都注入窗口 → token 成本**：增量窗口（F6）消除二次增长；预算封顶；
-  DeepSeek 前缀缓存尽力而为、命中不可依赖（F4），`contextMode off` 逃生门。
+  DeepSeek 前缀缓存尽力而为、命中不可依赖（F4），`contextMode off` 关闭最近历史窗口。
 - **拉取延迟**：默认预算 3 页以内约 1–3s，但 CLI 话题展开（§1.1）可能额外增加调用——
   超时 + 全局并发 2 + 熔断兜底，不卡交互。
 - **CLI 二进制供给**：GitHub/npmmirror 双源 + SHA-256 校验 + wrapper 自动补装 + SDK 兜底

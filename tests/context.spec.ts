@@ -566,11 +566,33 @@ describe('SdkProvider', () => {
       sdkItem({
         message_id: 'om_post',
         msg_type: 'post',
-        body: { content: JSON.stringify({ zh_cn: { title: '标题', content: [[{ tag: 'text', text: '第一段' }]] } }) },
+        body: { content: JSON.stringify({
+          zh_cn: {
+            title: '标题',
+            content: [[
+              { tag: 'text', text: '第一段' },
+              { tag: 'a', text: '项目文档', href: 'https://example.feishu.cn/docx/doc_123' },
+            ]],
+          },
+        }) },
       }),
     ]]))
     const messages = await provider.fetchHistory(fetchSpec())
     expect(messages[0]!.text).toContain('第一段')
+    expect(messages[0]!.text).toContain('[项目文档](https://example.feishu.cn/docx/doc_123)')
+  })
+
+  it('extracts title and URL from non-standard document-share payloads', async () => {
+    const provider = new SdkProvider(listMessages([[
+      sdkItem({
+        message_id: 'om_doc',
+        msg_type: 'share_doc',
+        body: { content: JSON.stringify({ title: '季度规划', url: 'https://example.feishu.cn/wiki/wiki_123' }) },
+      }),
+    ]]))
+    const messages = await provider.fetchHistory(fetchSpec())
+    expect(messages[0]!.text).toContain('季度规划')
+    expect(messages[0]!.text).toContain('https://example.feishu.cn/wiki/wiki_123')
   })
 
   it('extracts post text recursively and renders placeholders for media', async () => {

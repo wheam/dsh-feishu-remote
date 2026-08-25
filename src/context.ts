@@ -464,7 +464,7 @@ function senderOf(raw: RawSender | undefined, botOpenId: string | undefined): { 
   return { id, name, isOwnBot, isBotApp }
 }
 
-/** Recursively collect text from SDK post content; unwraps locale wrappers like {zh_cn:{...}} (docs/15 F-11). */
+/** Recursively collect readable SDK post content, preserving document/web links. */
 const LOCALE_KEY = /^(zh_cn|en_us|ja_jp|zh_hk|zh_tw|ko_kr)$/iu
 
 function extractPostText(value: unknown, out: string[] = []): string[] {
@@ -473,7 +473,33 @@ function extractPostText(value: unknown, out: string[] = []): string[] {
   } else if (Array.isArray(value)) {
     for (const item of value) extractPostText(item, out)
   } else if (typeof value === 'object' && value !== null) {
-    const entries = Object.entries(value as Record<string, unknown>)
+    const object = value as Record<string, unknown>
+    const tag = typeof object.tag === 'string' ? object.tag : undefined
+    if (tag === 'a') {
+      const label = typeof object.text === 'string' && object.text.trim() !== ''
+        ? object.text.trim()
+        : (typeof object.href === 'string' ? object.href : '')
+      const href = typeof object.href === 'string' ? object.href.trim() : ''
+      if (label !== '' && href !== '') out.push(`[${label}](${href})`)
+      else if (label !== '') out.push(label)
+      return out
+    }
+    if (tag === 'at') {
+      const name = typeof object.user_name === 'string' && object.user_name.trim() !== ''
+        ? object.user_name.trim()
+        : (typeof object.user_id === 'string' ? object.user_id : '')
+      if (name !== '') out.push(`@${name}`)
+      return out
+    }
+    if (tag === 'img') {
+      out.push('[图片]')
+      return out
+    }
+    if (tag === 'media') {
+      out.push('[文件]')
+      return out
+    }
+    const entries = Object.entries(object)
     let consumed = false
     for (const [key, item] of entries) {
       if (key === 'text' || key === 'content' || key === 'title' || key === 'elements') {
@@ -489,30 +515,83 @@ function extractPostText(value: unknown, out: string[] = []): string[] {
   return out
 }
 
-function normalizeSdkItem(item: Record<string, unknown>, index: number, botOpenId: string | undefined): ContextMessage {
+function namedPlaceholder(label: string, parsed: unknown): string {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return label
+  const record = parsed as Record<string, unknown>
+  const name = [record.file_name, record.name, record.title]
+    .find(value => typeof value === 'string' && value.trim() !== '')
+  return typeof name === 'string' ? `${label}：${name.trim()}` : label
+}
+
+/** Extract useful text and URLs from non-standard message payloads such as document shares. */
+function extractStructuredText(value: unknown, out: string[] = [], seen = new Set<unknown>()): string[] {
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (text !== '') out.push(text)
+    return out
+  }
+  if (typeof value !== 'object' || value === null || seen.has(value)) return out
+  seen.add(value)
+  if (Array.isArray(value)) {
+    for (const item of value) extractStructuredText(item, out, seen)
+    return out
+  }
+  const record = value as Record<string, unknown>
+  const tag = typeof record.tag === 'string' ? record.tag : undefined
+  if (tag === 'a' && typeof record.href === 'string') {
+    const label = typeof record.text === 'string' && record.text.trim() !== '' ? record.text.trim() : record.href
+    out.push(`[${label}](${record.href})`)
+    return out
+  }
+  const prioritized = ['title', 'text', 'content', 'name', 'file_name', 'url', 'href', 'link']
+  for (const key of prioritized) {
+    if (record[key] !== undefined) extractStructuredText(record[key], out, seen)
+  }
+  for (const [key, item] of Object.entries(record)) {
+    if (prioritized.includes(key) || key === 'tag' || key.endsWith('_key') || key.endsWith('_id')) continue
+    if (Array.isArray(item) || (typeof item === 'object' && item !== null)) extractStructuredText(item, out, seen)
+  }
+  return out
+}
+
+function sdkMessageText(msgType: string, bodyContent: unknown): string {
+  if (msgType === 'system' || msgType === 'deleted') return ''
+  let parsed: unknown
+  if (typeof bodyContent === 'string' && bodyContent !== '') {
+    try {
+      parsed = JSON.parse(bodyContent) as unknown
+    } catch {
+      parsed = bodyContent
+    }
+  }
+  if (msgType === 'text' && typeof parsed === 'object' && parsed !== null) {
+    const text = (parsed as { text?: unknown }).text
+    return typeof text === 'string' ? text : ''
+  }
+  if (msgType === 'post') return extractPostText(parsed).join(' ').trim()
+  if (msgType === 'image') return '[图片]'
+  if (msgType === 'file') return namedPlaceholder('[文件]', parsed)
+  if (msgType === 'folder') return namedPlaceholder('[文件夹]', parsed)
+  if (msgType === 'audio') return '[语音]'
+  if (msgType === 'video' || msgType === 'media') return namedPlaceholder('[视频]', parsed)
+  if (msgType === 'sticker') return '[表情]'
+  if (msgType === 'merge_forward') return '[合并转发]'
+  if (msgType === 'share_chat') return '[聊天记录]'
+  if (msgType === 'share_user') return '[名片分享]'
+  const structured = extractStructuredText(parsed)
+  if (structured.length > 0) return [...new Set(structured)].join(' ').trim()
+  return TYPE_PLACEHOLDERS[msgType] ?? (typeof parsed === 'string' ? parsed : `[${msgType} 消息]`)
+}
+
+/** Normalize one item returned by `im.v1.message.get/list`. */
+export function normalizeSdkContextMessage(item: Record<string, unknown>, index: number, botOpenId: string | undefined): ContextMessage {
   const messageId = item.message_id
   const msgType = item.msg_type
   if (typeof messageId !== 'string' || messageId === '' || typeof msgType !== 'string') {
     throw new Error(`dsh-feishu-remote: SDK 消息字段缺失（第 ${index} 条）`)
   }
   const sender = senderOf(item.sender as RawSender | undefined, botOpenId)
-  let content = ''
   const bodyContent = (item.body as { content?: unknown } | undefined)?.content
-  if (typeof bodyContent === 'string' && bodyContent !== '') {
-    try {
-      const parsed = JSON.parse(bodyContent) as unknown
-      if (msgType === 'text' && typeof parsed === 'object' && parsed !== null) {
-        const text = (parsed as { text?: unknown }).text
-        content = typeof text === 'string' ? text : ''
-      } else if (msgType === 'post') {
-        content = extractPostText(parsed).join(' ')
-      } else {
-        content = typeof parsed === 'string' ? parsed : ''
-      }
-    } catch {
-      content = ''
-    }
-  }
   return {
     messageId,
     senderName: sender.name,
@@ -521,7 +600,7 @@ function normalizeSdkItem(item: Record<string, unknown>, index: number, botOpenI
     isBotApp: sender.isBotApp,
     msgType,
     deleted: item.deleted === true,
-    text: textFor(msgType, content),
+    text: sdkMessageText(msgType, bodyContent),
     createdAtMs: parseSdkTime(item.create_time, `#${messageId}`),
   }
 }
@@ -676,7 +755,7 @@ export class SdkProvider implements FeishuContextProvider {
       const result = await this.raceCall(spec, deadline, () => this.listMessages({ containerIdType, containerId, pageToken }))
       const items = Array.isArray(result.items) ? result.items : []
       for (const item of items) {
-        collected.push(normalizeSdkItem(item as Record<string, unknown>, collected.length, spec.botOpenId))
+        collected.push(normalizeSdkContextMessage(item as Record<string, unknown>, collected.length, spec.botOpenId))
       }
       const next = typeof result.pageToken === 'string' && result.pageToken !== '' ? result.pageToken : undefined
       if (result.hasMore !== true || next === undefined || next === pageToken) break
@@ -689,7 +768,7 @@ export class SdkProvider implements FeishuContextProvider {
       && !collected.some(item => item.messageId === spec.rootMessageId)) {
       try {
         const root = await this.raceCall(spec, deadline, () => this.getMessage!(spec.rootMessageId!))
-        if (root !== undefined) collected.push(normalizeSdkItem(root, collected.length, spec.botOpenId))
+        if (root !== undefined) collected.push(normalizeSdkContextMessage(root, collected.length, spec.botOpenId))
       } catch (error) {
         this.logger?.warn?.('dsh-feishu-remote: 话题根消息补取失败（fail-open）：%s', error instanceof Error ? error.message : String(error))
       }

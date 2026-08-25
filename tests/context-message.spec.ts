@@ -10,10 +10,20 @@ const frame = JSON.stringify({
   messages: [{ t: '23:43', n: '张奇', s: '…67f6', x: '测试编号 Q7-4821' }],
 })
 
+const runtimeFrame = JSON.stringify({
+  type: 'feishu-runtime-context',
+  conversation: { kind: 'group', chatId: 'oc_team', name: '项目群' },
+  currentMessage: { messageId: 'om_current', sender: { openId: 'ou_alice' } },
+})
+
 describe('Feishu context transcript projection', () => {
   it('atomically separates tagged history from the visible user prompt', () => {
     const queued = createUserMessage({
-      content: [{ type: 'text', text: frame }, { type: 'text', text: '负责人是谁？' }],
+      content: [
+        { type: 'text', text: runtimeFrame },
+        { type: 'text', text: frame },
+        { type: 'text', text: '负责人是谁？' },
+      ],
       source: FEISHU_REMOTE_SOURCE,
     })
 
@@ -21,12 +31,12 @@ describe('Feishu context transcript projection', () => {
 
     expect(context).toMatchObject({
       role: 'user',
-      content: [{ type: 'text', text: frame }],
+      content: [{ type: 'text', text: runtimeFrame }, { type: 'text', text: frame }],
       source: {
         kind: 'plugin',
         plugin: 'dsh-feishu-remote',
         form: 'notice',
-        summary: '飞书聊天历史 / Feishu history',
+        summary: '飞书会话上下文 / Feishu context',
       },
     })
     expect(prompt).toMatchObject({

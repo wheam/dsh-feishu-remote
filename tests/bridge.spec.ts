@@ -276,6 +276,8 @@ class FakeChannel implements LarkChannelLike {
   readonly chatModeCalls: string[] = []
   chatModeError?: Error
   readonly chatNames = new Map<string, string>()
+  readonly chatDescriptions = new Map<string, string>()
+  readonly chatMemberCounts = new Map<string, number>()
   readonly getChatInfoCalls: string[] = []
   chatInfoError?: Error
   chatInfoGate?: Promise<void>
@@ -316,6 +318,8 @@ class FakeChannel implements LarkChannelLike {
     return {
       chatId,
       ...(this.chatNames.get(chatId) === undefined ? {} : { name: this.chatNames.get(chatId) }),
+      ...(this.chatDescriptions.get(chatId) === undefined ? {} : { description: this.chatDescriptions.get(chatId) }),
+      ...(this.chatMemberCounts.get(chatId) === undefined ? {} : { memberCount: this.chatMemberCounts.get(chatId) }),
       chatType: this.chatModes.get(chatId) ?? 'topic',
     }
   }
@@ -396,11 +400,14 @@ class FakeChannel implements LarkChannelLike {
 
   readonly getMessageCalls: string[] = []
   rootMessageItem?: Record<string, unknown>
+  readonly messageItems = new Map<string, Record<string, unknown>>()
+  getMessageError?: Error
   downloadGate?: Promise<Buffer>
 
   async getMessage(messageId: string): Promise<Record<string, unknown> | undefined> {
     this.getMessageCalls.push(messageId)
-    return this.rootMessageItem
+    if (this.getMessageError !== undefined) throw this.getMessageError
+    return this.messageItems.get(messageId) ?? this.rootMessageItem
   }
 
   async downloadMessageResource(): Promise<Buffer> {
@@ -446,8 +453,10 @@ function message(
     chatId: string
     chatType: 'p2p' | 'group'
     senderId: string
+    senderName: string
     threadId: string
     rootId: string
+    replyToMessageId: string
     mentionedBot: boolean
   }> = {},
 ) {
@@ -456,6 +465,7 @@ function message(
     chatId: overrides.chatId ?? 'oc_p2p',
     chatType: (overrides.chatType ?? 'p2p') as 'p2p' | 'group',
     senderId: overrides.senderId ?? 'ou_1',
+    ...(overrides.senderName === undefined ? {} : { senderName: overrides.senderName }),
     content,
     rawContentType: 'text',
     resources: [],
@@ -465,6 +475,7 @@ function message(
     createTime: Date.now(),
     ...(overrides.threadId === undefined ? {} : { threadId: overrides.threadId }),
     ...(overrides.rootId === undefined ? {} : { rootId: overrides.rootId }),
+    ...(overrides.replyToMessageId === undefined ? {} : { replyToMessageId: overrides.replyToMessageId }),
   }
 }
 
@@ -873,7 +884,7 @@ describe('sender allowlist and optional group restriction', () => {
     expect(provider.calls[0]).toMatchObject({ origin: 'group', chatId: 'oc_grp' })
     const agent = h.agents.live.values().next().value as FakeAgent
     await waitFor(() => agent.followups.length === 1)
-    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ n: string; x: string }> }
+    const frame = followupFrame<{ messages: Array<{ n: string; x: string }> }>(agent, 'feishu-context')
     expect(frame.messages.map(item => item.n)).toEqual(['成员乙', '成员甲'])
     expect(frame.messages.map(item => item.x)).toEqual([
       expect.stringContaining('乙补充的资料'),
@@ -1018,8 +1029,8 @@ describe('sticky topic activation', () => {
     await waitFor(() => h.agents.created.length === 1)
     const agent = h.agents.live.values().next().value as FakeAgent
     await waitFor(() => agent.followups.length === 1)
-    const content = followupContent(agent, 0)
-    expect(String((content[0] as { text?: unknown }).text)).toContain('首次 @ 之前的话题资料')
+    const frame = followupFrame<{ messages: Array<{ x: string }> }>(agent, 'feishu-context')
+    expect(frame.messages.some(item => item.x.includes('首次 @ 之前的话题资料'))).toBe(true)
   })
 
   it('persists activation across bridge restarts', async () => {
@@ -1189,13 +1200,15 @@ describe('session-group metadata refresh', () => {
     await waitFor(() => sessionGroups.assignments.length === 1)
     const { sessionId, group } = sessionGroups.assignments[0]!
     expect(group).toMatchObject({ title: '与爱丽丝的私聊', kind: 'private' })
-    expect(h.channel.getMessageCalls).toHaveLength(1)
+    // One lookup names the optional Session group; the runtime-context path
+    // independently resolves and then caches the sender for future turns.
+    expect(h.channel.getMessageCalls).toHaveLength(2)
     expect(h.channel.getChatInfoCalls).toHaveLength(0)
 
     now = 9_000
     await h.emitMessage('私聊二')
     await waitFor(() => h.agents.live.get(sessionId)!.followups.length === 2)
-    expect(h.channel.getMessageCalls).toHaveLength(1)
+    expect(h.channel.getMessageCalls).toHaveLength(2)
     expect(h.channel.getChatInfoCalls).toHaveLength(0)
     expect(sessionGroups.assignments).toHaveLength(1)
   })
@@ -2993,6 +3006,23 @@ function followupContent(agent: { followups: Array<{ content: Array<{ type: stri
   return agent.followups[index]!.content
 }
 
+function followupFrame<T>(
+  agent: { followups: Array<{ content: Array<{ type: string; text: string }>; id: string }> },
+  type: string,
+  index = 0,
+): T {
+  for (const block of followupContent(agent, index)) {
+    if (block.type !== 'text') continue
+    try {
+      const parsed = JSON.parse(block.text) as { type?: unknown }
+      if (parsed.type === type) return parsed as T
+    } catch {
+      // Ordinary user prompt, not a JSON frame.
+    }
+  }
+  throw new Error(`missing followup frame ${type}`)
+}
+
 /** Fake CLI for the docs/15 bootstrap integration test: config show/init + one im list envelope. */
 const BOOTSTRAP_CLI_FIXTURE = `#!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -3031,6 +3061,86 @@ if (argv[0] === 'config' && argv[1] === 'show') {
 }
 `
 
+describe('turn-scoped Feishu runtime context', () => {
+  it('resolves a missing sender display name from the current message once', async () => {
+    const h = await makeHarness({ contextMode: 'off' })
+    const currentMessageId = `om_in_${messageSeq + 1}`
+    h.channel.messageItems.set(currentMessageId, { sender: { sender_name: '爱丽丝' } })
+    await h.emitMessage('你好')
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.get(h.agents.created[0]!.options.sessionId!)!
+    await waitFor(() => agent.followups.length === 1)
+    const frame = followupFrame<{ currentMessage: { sender: { name?: string } } }>(agent, 'feishu-runtime-context')
+    expect(frame.currentMessage.sender.name).toBe('爱丽丝')
+
+    await h.emitMessage('再问一次')
+    await waitFor(() => agent.followups.length === 2)
+    expect(h.channel.getMessageCalls).toEqual([currentMessageId])
+  })
+
+  it('tells the model which group/topic it is in and loads the exact replied document by parent id', async () => {
+    const h = await makeHarness({ contextMode: 'off' })
+    h.channel.chatModes.set('oc_grp', 'topic')
+    h.channel.chatNames.set('oc_grp', 'Curio 作战室')
+    h.channel.chatDescriptions.set('oc_grp', '项目交付讨论')
+    h.channel.chatMemberCounts.set('oc_grp', 12)
+    h.channel.messageItems.set('om_doc', {
+      message_id: 'om_doc',
+      chat_id: 'oc_grp',
+      msg_type: 'post',
+      body: { content: JSON.stringify({
+        zh_cn: {
+          title: '参考材料',
+          content: [[{ tag: 'a', text: '季度规划', href: 'https://example.feishu.cn/docx/doc_123' }]],
+        },
+      }) },
+      sender: { id: 'ou_bob', sender_type: 'user', sender_name: 'Bob' },
+      create_time: String(Date.now() - 5_000),
+      deleted: false,
+    })
+
+    await h.emitMessage('请按我回复的文档处理', {
+      chatType: 'group',
+      chatId: 'oc_grp',
+      senderId: 'ou_1',
+      senderName: 'Alice',
+      threadId: 'omt_topic',
+      rootId: 'om_root',
+      replyToMessageId: 'om_doc',
+      mentionedBot: true,
+    })
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.get(h.agents.created[0]!.options.sessionId!)!
+    await waitFor(() => agent.followups.length === 1)
+
+    const frame = followupFrame<{
+      conversation: Record<string, unknown>
+      currentMessage: Record<string, unknown>
+      reply: { status: string; messageId: string; content: string }
+    }>(agent, 'feishu-runtime-context')
+    expect(frame.conversation).toMatchObject({
+      kind: 'topic', chatId: 'oc_grp', name: 'Curio 作战室', description: '项目交付讨论',
+      memberCount: 12, threadId: 'omt_topic', rootMessageId: 'om_root',
+    })
+    expect(frame.currentMessage).toMatchObject({ replyToMessageId: 'om_doc', sender: { openId: 'ou_1', name: 'Alice' } })
+    expect(frame.reply).toMatchObject({ status: 'loaded', messageId: 'om_doc' })
+    expect(frame.reply.content).toContain('[季度规划](https://example.feishu.cn/docx/doc_123)')
+    expect(h.channel.getMessageCalls).toContain('om_doc')
+  })
+
+  it('marks an unreadable reply unavailable without blocking the current task', async () => {
+    const h = await makeHarness({ contextMode: 'off' })
+    h.channel.getMessageError = new Error('permission denied')
+    await h.emitMessage('继续处理', { senderName: 'Alice', replyToMessageId: 'om_hidden' })
+    await waitFor(() => h.agents.created.length === 1)
+    const agent = h.agents.live.get(h.agents.created[0]!.options.sessionId!)!
+    await waitFor(() => agent.followups.length === 1)
+    const frame = followupFrame<{ reply: { status: string; messageId: string } }>(agent, 'feishu-runtime-context')
+    expect(frame.reply).toEqual({ status: 'unavailable', messageId: 'om_hidden' })
+    expect(JSON.stringify(agent.followups[0])).toContain('继续处理')
+  })
+})
+
 describe('context backfill (docs/13)', () => {
   it('queues a tagged JSON context envelope and attributes stats to the exact turn', async () => {
     const provider = new FakeContextProvider()
@@ -3042,13 +3152,15 @@ describe('context backfill (docs/13)', () => {
     const agent = h.agents.live.get(sessionId)!
     await waitFor(() => agent.followups.length === 1)
     const content = followupContent(agent)
-    expect(content.length).toBe(2)
+    expect(content.length).toBe(3)
     expect(content[0]!.type).toBe('text')
-    const frame = JSON.parse(content[0]!.text) as { type: string; count: number; messages: Array<{ n: string }> }
+    const runtime = JSON.parse(content[0]!.text) as { type: string }
+    expect(runtime.type).toBe('feishu-runtime-context')
+    const frame = followupFrame<{ type: string; count: number; messages: Array<{ n: string }> }>(agent, 'feishu-context')
     expect(frame.type).toBe('feishu-context')
     expect(frame.count).toBe(1)
     expect(frame.messages[0]!.n).toBe('小明')
-    expect(content[1]!.text).toBe('接着干')
+    expect(content[2]!.text).toBe('接着干')
     // Stats remain available internally but ordinary turn cards stay concise.
     await h.emitClaim(sessionId, agent.followups[0]!.id, 1)
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
@@ -3073,7 +3185,7 @@ describe('context backfill (docs/13)', () => {
     await waitFor(() => agent.followups.length === 2)
     expect(provider.calls[1]!.watermark).toEqual({ messageId: 'om_h1', createdAtMs: stamp })
     // Window empty after the watermark → NO context block on the second turn.
-    expect(followupContent(agent, 1).length).toBe(1)
+    expect(followupContent(agent, 1).length).toBe(2)
     // Watermark persisted to the owner-only state file (docs/13 F6).
     let persisted = false
     const deadline = Date.now() + 1_000
@@ -3098,6 +3210,8 @@ describe('context backfill (docs/13)', () => {
     await h.emitMessage('/stop')
     await waitFor(() => h.channel.sent.length > 1)
     expect(provider.calls.length).toBe(0)
+    expect(h.channel.getMessageCalls.length).toBe(0)
+    expect(h.channel.getChatInfoCalls.length).toBe(0)
   })
 
   it('fails open: provider errors never block the message', async () => {
@@ -3109,8 +3223,8 @@ describe('context backfill (docs/13)', () => {
     const sessionId = h.agents.created[0]!.options.sessionId!
     const agent = h.agents.live.get(sessionId)!
     await waitFor(() => agent.followups.length === 1)
-    expect(followupContent(agent).length).toBe(1)
-    expect(followupContent(agent)[0]!.text).toBe('继续干')
+    expect(followupContent(agent).length).toBe(2)
+    expect(followupContent(agent).at(-1)!.text).toBe('继续干')
     expect(h.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('上下文拉取失败'), expect.anything())
   })
 
@@ -3126,7 +3240,7 @@ describe('context backfill (docs/13)', () => {
     const sessionId = h.agents.created[0]!.options.sessionId!
     const agent = h.agents.live.get(sessionId)!
     await waitFor(() => agent.followups.length === 1)
-    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<Record<string, unknown>> }
+    const frame = followupFrame<{ messages: Array<Record<string, unknown>> }>(agent, 'feishu-context')
     expect(frame.messages.length).toBe(1)
   })
 
@@ -3174,7 +3288,7 @@ describe('context backfill (docs/13)', () => {
     const sessionId = h.agents.created[0]!.options.sessionId!
     const agent = h.agents.live.get(sessionId)!
     await waitFor(() => agent.followups.length === 1)
-    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ n: string; x: string }> }
+    const frame = followupFrame<{ messages: Array<{ n: string; x: string }> }>(agent, 'feishu-context')
     expect(frame.messages[0]!.x).toContain('sdk 历史')
     expect(frame.messages[0]!.n).toBe('老王')
     expect(h.channel.listed[0]!.containerIdType).toBe('chat')
@@ -3235,7 +3349,7 @@ describe('context backfill (docs/13)', () => {
     const sessionId = h.agents.created[0]!.options.sessionId!
     const agent = h.agents.live.get(sessionId)!
     await waitFor(() => agent.followups.length === 1)
-    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ x: string }> }
+    const frame = followupFrame<{ messages: Array<{ x: string }> }>(agent, 'feishu-context')
     expect(frame.messages[0]!.x).toContain('sdk 兜底内容')
     expect(h.channel.listed.length).toBe(1)
     expect(h.ctx.logger.info).toHaveBeenCalledWith(expect.stringContaining('降级 SDK'))
@@ -3258,7 +3372,7 @@ describe('context backfill (docs/13)', () => {
     const sessionId = h.agents.created[0]!.options.sessionId!
     const agent = h.agents.live.get(sessionId)!
     await waitFor(() => agent.followups.length === 1, 'CLI bootstrap followup', 3_000)
-    const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ x: string }> }
+    const frame = followupFrame<{ messages: Array<{ x: string }> }>(agent, 'feishu-context')
     expect(frame.messages[0]!.x).toContain('cli 引导后内容')
     // SDK seam was never touched; the CLI was the serving backend.
     expect(h.channel.listed.length).toBe(0)
@@ -3284,7 +3398,7 @@ describe('context backfill (docs/13)', () => {
       4_000,
     )
     for (const agent of h.agents.live.values()) {
-      const frame = JSON.parse(followupContent(agent)[0]!.text) as { messages: Array<{ x: string }> }
+      const frame = followupFrame<{ messages: Array<{ x: string }> }>(agent, 'feishu-context')
       expect(frame.messages[0]!.x).toContain('cli 引导后内容')
     }
     expect(h.channel.listed).toHaveLength(0) // neither origin fell back to SDK
