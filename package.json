@@ -1,7 +1,7 @@
 {
   "name": "dsh-feishu-remote",
   "version": "0.1.0",
-  "description": "Feishu remote control for the running DeepSeek Harness: a web-profile plugin that turns a Feishu bot into a remote for the current dsh sessions (thread ↔ session mapping, approval cards, fail-closed allowlists).",
+  "description": "Feishu remote control for the running DeepSeek Harness: a web-profile plugin that turns a Feishu bot into a remote for the current dsh sessions (thread ↔ session mapping, approval cards, optional group scope).",
   "author": "dsh-feishu-remote contributors",
   "license": "MIT",
   "keywords": [

@@ -531,6 +531,8 @@ async function makeHarness(
     cwd: workspace,
     workspaceRoot: workspace,
     statePath,
+    // Keep a retired restrictive value in the shared harness so every bridge
+    // test would expose an accidental reintroduction of the sender gate.
     allowedOpenIds: ['ou_1'],
     allowedChatIds: ['oc_grp'],
     progressUpdateMs: 2,
@@ -732,7 +734,6 @@ describe('two live bridge isolation', () => {
       cwd: workspace,
       workspaceRoot: workspace,
       statePath,
-      allowedOpenIds: ['ou_1'],
       contextMode: 'off',
       progressUpdateMs: 2,
     }), { botId, sessionNamespace: 'app' as const, multiBot: true })
@@ -798,15 +799,12 @@ describe('two live bridge isolation', () => {
   })
 })
 
-describe('sender allowlist and optional group restriction', () => {
-  it('rejects unauthorized open_ids without any session work', async () => {
+describe('open sender access and optional group restriction', () => {
+  it('lets a sender outside a retired configured allowlist start work', async () => {
     const h = await makeHarness()
     await h.emitMessage('hello', { senderId: 'ou_stranger' })
-    await waitFor(() => h.ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('未授权飞书用户')))
-    expect(h.agents.created).toHaveLength(0)
-    expect(h.channel.sent).toHaveLength(0)
-    expect(h.ctx.logger.warn.mock.calls.some(call => String(call[1]).includes('…nger'))).toBe(true)
-    expect(JSON.stringify(h.ctx.logger.warn.mock.calls)).not.toContain('ou_stranger')
+    await waitFor(() => h.agents.created.length === 1)
+    expect(h.ctx.logger.warn.mock.calls.some(call => String(call[0]).includes('未授权飞书用户'))).toBe(false)
   })
 
   it('allows any group by default when allowedChatIds is empty', async () => {
@@ -938,7 +936,7 @@ describe('sender allowlist and optional group restriction', () => {
   })
 
   it('keeps one ordinary-group Session while replying each queued turn to its own mentioning member', async () => {
-    const h = await makeHarness({ allowedOpenIds: ['ou_alice', 'ou_bob'] })
+    const h = await makeHarness()
     h.channel.chatModes.set('oc_grp', 'group')
 
     await h.emitMessage('Alice 的任务', {
@@ -1447,8 +1445,8 @@ describe('session creation and mapping', () => {
     expect(JSON.stringify(agent.followups[0])).not.toContain('second message must not replace it')
   })
 
-  it('tells other authorized group members that the initiating user owns the open Workspace flow', async () => {
-    const h = await makeHarness({ allowedOpenIds: ['ou_1', 'ou_2'] })
+  it('tells other group members that the initiating user owns the open Workspace flow', async () => {
+    const h = await makeHarness()
     const otherPath = await tempWorkspace()
     h.workspaceRegistry.items.unshift(new FakeWorkspace('ws_other', otherPath, 'Other Project'))
     h.channel.chatModes.set('oc_grp', 'group')
@@ -3457,7 +3455,6 @@ describe('connect loop crash containment (H1)', () => {
       cwd: workspace,
       workspaceRoot: workspace,
       statePath,
-      allowedOpenIds: ['ou_1'],
       contextMode: 'off',
     })
     const bridge = new FeishuRemoteBridge(ctx as never, config, {

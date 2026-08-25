@@ -64,7 +64,8 @@ SDK 的 `addons` 仅接受五类公开配置：应用/用户身份权限、应�
 
 Lark Coding Agent Bridge 的首次向导调用 `registerApp()`，终端显示二维码，扫码后把返回的
 App ID / Secret 写入本地 profile。扫码者天然成为应用 owner；参考实现优先使用
-`result.user_info.open_id`，启动后还可用 `application/v6` 查询当前 owner，避免人工白名单。
+`result.user_info.open_id`，启动后还可用 `application/v6` 查询当前 owner。本项目只借鉴应用
+注册和凭据保存，不把 owner 身份用于操作者授权。
 
 参考：
 
@@ -181,11 +182,11 @@ idle
 4. `ctx.credentials.set(credentialRef(newRef), client_secret)` 写入 DSH provider 管理的
    `~/.dsh/.credentials.yaml`，不经过浏览器和 settings value。
 5. 使用 settings namespace 的一次原子写入提交完整绑定，让 watcher 只观察到一组一致的
-   新配置。legacy 模式更新根级 `appId`、`appSecretRef` 与白名单；多机器人模式用明确的
+   新配置。legacy 模式更新根级 `appId`、`appSecretRef` 并把旧用户过滤字段归一为开放；多机器人模式用明确的
    `destination: new-bot` 和开始扫码时的 settings revision，通过 CAS `mutate()` 把规范化的新元素
    追加到 `bots[]`，冲突时拒绝覆盖；绝不回写已失效的 legacy 根字段。
-   新 bot 自动使用 App-scoped Session、SDK 上下文、独立凭据引用，并把扫码 owner 设为唯一初始
-   `allowedOpenIds`；`allowedChatIds` 为空，`allowAllUsers` 保持 false。
+   新 bot 自动使用 App-scoped Session、SDK 上下文、独立凭据引用；`allowedChatIds` 为空，
+   个人操作者固定对所有人开放。
 6. settings watcher 热重载 bridge，等待 channel 进入 connected 或明确失败。
 7. 成功后清除内存 Secret；失败时显示可重试状态，按下述回滚规则处理。
 
@@ -196,7 +197,7 @@ idle
 
 DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用补偿式提交：
 
-- 开始前快照旧 App ID、credential ref、owner 与群白名单；新凭据探测成功后才落盘；
+- 开始前快照旧 App ID、credential ref、旧兼容字段与群范围；新凭据探测成功后才落盘；
 - 新 Secret 总是写入独立 `newRef`，旧 Secret 和旧 settings 在切换前保持原样；
 - credential 写成功但 settings `update()` 失败：`unset(newRef)`，旧配置无需重写即可继续工作；
 - settings 更新成功后，若这是重新绑定或补权，则任意连接健康检查失败都用一次 `update()`
@@ -208,19 +209,15 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 - 对已有应用使用 `appId` 增量授权时，默认只更新权限状态；若 SDK 返回替换凭据，也必须沿用
   上述「新 ref → 原子切换 → 健康检查」流程。
 
-### 4.5 owner 与访问控制
+### 4.5 操作者访问
 
-首次成功优先把 `result.user_info.open_id` 作为新应用唯一的 `allowedOpenIds`，从第一条消息开始
-保持 fail-closed。重新创建应用时不合并旧 `allowedOpenIds`，因为旧 open_id 不能当作新应用下
-的用户身份直接复用。若返回缺少 open_id：
+个人操作者固定对所有人开放。扫码结果是否携带 `user_info.open_id`、应用查询是否能解析 owner，
+都不影响本地配置提交或 channel 启动。新配置把兼容字段规范化为 `allowedOpenIds: []` 与
+`allowAllUsers: true`；旧部署保留的相反值也不会进入运行时配置。群范围仍由独立的
+`allowedChatIds` 控制。
 
-1. 使用新应用身份调用 `application.v6.application.get` 查询 owner，`user_id_type=open_id`；
-2. 查询仍失败则不切换本地配置，页面报告「无法确认 owner」；飞书侧已创建的应用保留并给出
-   手工处理说明，但 channel 不接受任何新消息；
-3. 不得临时设置 `allowAllUsers: true`，也不回退到“第一个发消息的人自动成为 owner”。
-
-首版继续以配置中的 `allowedOpenIds` 为运行时事实源；后续可增加周期性 owner 刷新，使飞书后台
-转移应用 owner 后自动跟随。扫码者/owner 天然免去人工抄 ID，不再需要聊天配对码。
+开放访问不取消交互所有权：Workspace 选择、审批卡、文字审批和停止 reaction 仍绑定到发起该
+流程的用户、聊天和 Session，其他人不能接管一个已经进行中的回合。
 
 ## 5. Web GUI 体验
 
@@ -269,9 +266,9 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 | --- | --- | --- |
 | A ✅ | 抽出 `PersonalAgentOnboardingService`，封装 `registerApp`、abort、脱敏状态 | 单元测试覆盖成功、取消、只读预检、迟到会话、凭据/设置与连接失败 |
 | B ✅ | 注册 loopback-only Host RPC，设置页加入 onboarding 状态机与本地二维码 | Secret 不进入 RPC、DOM、日志快照；二维码不经过第三方服务 |
-| C ✅ | 独立 credential ref + settings 原子 patch + 补偿回滚，owner 自动写入 | settings 失败删除新凭据；重新绑定任意连接失败恢复旧配置；首次超时保留重试 |
+| C ✅ | 独立 credential ref + settings 原子 patch + 补偿回滚，操作者固定开放 | settings 失败删除新凭据；重新绑定任意连接失败恢复旧配置；首次超时保留重试 |
 | D ✅ | v6 应用权限探测与核心/增强降级 | 已知缺核心权限时切换前 fail-closed；未知时以真实连接作最终健康闸 |
-| E ✅ | channel 热启动与 UI 健康状态 | settings watcher 热重载；页面轮询展示 bot、brand、owner 尾号和 connected |
+| E ✅ | channel 热启动与 UI 健康状态 | settings watcher 热重载；页面轮询展示 bot、brand 和 connected |
 | F ⏳ | scoped npm 发布与 fresh profile 安装 | 新 Mac 一条命令安装，包内容和来源可验证 |
 | G ⏳ | 真实 Feishu/Lark 租户验收 | 见 §8，全部通过才对外报告“一扫即用” |
 
@@ -282,7 +279,7 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 1. 全新 web profile、无 App ID/Secret/open_id：安装 → 设置页 → 扫码 → 创建应用 → 自动连接。
 2. 扫码确认页准确展示本插件声明的权限、消息事件与卡片回调。
 3. 私聊 `/help` 成功；发送真实任务并完成一次审批卡按钮闭环。
-4. 扫码用户自动成为唯一允许用户；另一用户私聊和群内 @均不能驱动 Agent。
+4. 扫码用户和另一名用户都能通过私聊或群内 @驱动 Agent；旧白名单配置不得改变结果。
 5. 普通群 @、话题首次 @与后续消息、上下文回填、working reaction 按实际授权能力工作。
 6. dsh 重启后凭据仍能解析，长连接自动恢复，不要求重新扫码。
 7. 浏览器网络面板、控制台、Host 日志和配置文件中无明文 Secret（凭据文件本身除外）。
@@ -303,10 +300,10 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 
 - 二维码 URL 含短期 device/user code，按凭据处理：不进持久日志、不发遥测、不复制到第三方；
 - App Secret 仅在 Host 内存短暂停留并写入 credential provider；浏览器永远不可见；
-- owner 未确认前访问控制保持关闭，绝不采用 TOFU「首个消息发送者」；
+- owner 是否能解析不影响开放操作者；同时绝不采用 TOFU「首个消息发送者成为特权用户」；
 - 选择或更新已有飞书应用会变更其权限，必须由用户在飞书确认页核对应用与权限差异并明确确认；
   只有明确点击「创建新机器人」时才传 `createOnly: true`；
-- 不自动删除/转移飞书应用，不自动开放群或其他用户；
+- 不自动删除/转移飞书应用，不自动加入新群；个人操作者按产品决策固定开放；
 - 所有外部权限以扫码确认页和连接后实际探测为准，不能仅依赖本地期望清单。
 
 ## 10. 非目标
@@ -314,5 +311,5 @@ DSH settings 与 credentials 当前不是同一个跨文件事务，必须使用
 - 扫码自动安装 DSH 或 npm 包；插件分发由 §6 单独解决；
 - 共享一个 App ID/Secret 给所有用户；
 - 建设商店应用、云端 webhook 或消息中继；
-- 团队多租户权限系统；扫码默认只授权应用 owner，其他人仍走显式邀请/白名单；
+- 团队多租户权限系统；本项目不提供个人邀请或白名单能力；
 - 自动替用户绕过企业管理员或飞书权限审批。

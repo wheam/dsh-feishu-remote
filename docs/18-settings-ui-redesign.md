@@ -1,6 +1,6 @@
 # 18 · 设置页重设计方案（草案）
 
-状态：已实施（分支 settings-ui-redesign，2026-08-24）。经 Codex 六轮 review/verify，结论可合入 main。配套设计稿：Claude Design 画布（4 张 artboard）。P1/P2 未做项见 §3.2 与 §5。
+状态：已实施（分支 settings-ui-redesign，2026-08-24；2026-08-25 按产品决策移除个人操作者白名单）。经 Codex 六轮 review/verify，结论可合入 main。配套设计稿：Claude Design 画布（4 张 artboard）。P1/P2 未做项见 §3.2 与 §5。
 
 ## 0. 问题定义
 
@@ -10,8 +10,8 @@
 2. **4 层折叠**：宿主手风琴 → 插件卡 → `<details>` BotEditor → `<details>` BotDisclosure；legacy 路径再并列一个「手动配置与高级设置」`<details>` 套 6 组 27 字段。
 3. **三套保存模型并存**：扁平字段逐项 `scope.set`（非事务，失败继续写）/ bots 一次 CAS RPC / `convertLegacy`、扫码**即时写配置无保存按钮**。两个 `dirty` 互相把按钮灰掉且不解释。
 4. **实现概念泄漏到文案**：「主机器人」（= `sessionNamespace==='legacy'`）、「legacy 字段」、「机器人内部标识」（主键可编辑）、「App Secret 凭据引用」、布尔/枚举下拉直接显示 `true/false/sdk/locked`。
-5. **暴露过多**：`contextBackend`、`contextP2pMaxMessages/Chars`、`contextMaxMessages/Chars`、`contextTimeoutMs`、`contextIncludeBot`、`progressUpdateMs`、`cwd`、`workspaceRoot`、`id` 都在 GUI 里；而 Day-1 最关键的「谁能用」却折进二级 disclosure，且没有 fail-closed 提示。
-6. **状态信息不到位**：`lastConnectedAt`、`missingCore[]`/`missingEnhanced[]`、`providerStatus(domain_switched)` 都有数据不上屏；「已连接」绿徽章可与「尚未授权用户」并存；「凭据已安全保存」是常量文案；删除无确认、错误只有一句通用话、后端异常原文上屏。
+5. **暴露过多**：`contextBackend`、`contextP2pMaxMessages/Chars`、`contextMaxMessages/Chars`、`contextTimeoutMs`、`contextIncludeBot`、`progressUpdateMs`、`cwd`、`workspaceRoot`、`id` 都在 GUI 里；操作者范围也折进二级 disclosure。2026-08-25 后操作者固定开放，GUI 只读说明该事实。
+6. **状态信息不到位**：`lastConnectedAt`、`missingCore[]`/`missingEnhanced[]`、`providerStatus(domain_switched)` 都有数据不上屏；「凭据已安全保存」是常量文案；删除无确认、错误只有一句通用话、后端异常原文上屏。
 
 ## 0.1 真机实测（2026-08-23，DSH rc.2）
 
@@ -27,7 +27,7 @@
 - **一个入口**：左栏「飞书遥控」整页。插件配置页里的卡只做**摘要 + 跳转**（三个状态点 + 「管理机器人 →」）。
 - **一个保存模型**：详情页底部粘性保存条（`● N 处修改未保存 · 放弃 / 保存`），bots 与全局字段一起走一次 CAS RPC。扫码、补权限、移除是**带确认的即时动作**，UI 上明确区分。
 - **先说人话，再说字段**：每个设置一行「标题 + 一句说明 + 控件」（宿主「通用设置」页的 setting-row 模式）；布尔用开关，枚举用中文下拉，列表用 chips。
-- **默认收起、按需暴露**：固定 4 组——工作区 / 谁能使用 / 角色与模型 / 高级。调优字段不进 GUI。
+- **默认收起、按需暴露**：固定 4 组——工作区 / 使用范围 / 角色与模型 / 高级。调优字段不进 GUI。
 - **状态要能行动**：每个非正常状态配一个指向下一步的按钮（补开权限 / 重试 / 重新扫码），不只给徽章。
 
 ## 2. 信息架构
@@ -37,13 +37,13 @@
 ├─ 空态（无机器人）：扫码卡（二维码 + 一句话 + 倒计时 + 取消）+ 底部「手动填写」链接
 ├─ 列表页
 │   ├─ 标题 + 「添加机器人」（主按钮，唯一）
-│   ├─ 机器人行 ×N：头像(首字) · 名称 · 平台 pill · 一行摘要(工作区 · 谁能用 · 运行中任务) · 状态点+文字 · ›
+│   ├─ 机器人行 ×N：头像(首字) · 名称 · 平台 pill · 一行摘要(工作区 · 所有人可用 · 群范围 · 运行中任务) · 状态点+文字 · ›
 │   └─ 「全部机器人」组：合计任务上限（远程只读提示只在页面顶部出现一次）
 └─ 详情页（/bot/:id）
     ├─ 面包屑 · 头像 · 名称 · 平台 · App 尾号 · 上次连接时间 · 启用开关
-    ├─ [条件] 注意横幅：缺少 N 项权限 / 连接失败 / 尚未授权用户 → 配动作按钮
+    ├─ [条件] 注意横幅：缺少 N 项权限 / 连接失败 → 配动作按钮
     ├─ 工作区：默认工作区(目录选择器) · 允许聊天切换(开关=workspacePolicy)
-    ├─ 谁能使用：允许的用户(chips, 扫码者自动加入) · 限定群聊 · 群里需要 @ · [红]对所有人开放
+    ├─ 使用范围：操作者「所有人可用」只读说明 · 限定群聊 · 群里需要 @
     ├─ 角色与模型：Profile(文件选择, 显示 basename+大小) · 模型(provider/model 合一下拉) · Agent 预设 · 读取聊天记录(开关=contextMode)
     ├─ 高级(可折叠)：连接信息(只读摘要 + 重新扫码绑定…) · 本机器人任务上限 · 移除机器人…
     └─ 粘性保存条
@@ -56,10 +56,9 @@
 | 头部 | 开关 | `enabled` | |
 | 工作区 | 目录输入+选择器 | `defaultWorkspace` | 复用宿主 directory-picker |
 | 工作区 | 开关「允许在聊天里切换」 | `workspacePolicy` | on=default, off=locked；off 且 defaultWorkspace 空 → 行内红字 |
-| 谁能使用 | chips（粘贴完整 `ou_…`，仅视觉脱敏） | `allowedOpenIds` | 扫码者自动注入；无人员目录，不假装有「选人」 |
-| 谁能使用 | chips | `allowedChatIds` | 空=「不额外限制群，但仍受用户名单限制」 |
-| 谁能使用 | 开关「话题首次使用需要 @机器人」 | `requireMention` | 固定说明「普通群每轮始终需要 @」——开关不影响普通群 |
-| 谁能使用 | 开关(红) | `allowAllUsers` | 开启需确认 |
+| 使用范围 | 只读说明「所有人可用」 | 无 | 不设个人白名单，任何能联系到机器人的人都可发任务 |
+| 使用范围 | chips | `allowedChatIds` | 空=不额外限制群；非空=只接受指定群 |
+| 使用范围 | 开关「话题首次使用需要 @机器人」 | `requireMention` | 固定说明「普通群每轮始终需要 @」——开关不影响普通群 |
 | 角色与模型 | 路径输入（显示 basename+大小） | `profileFile` | 只选路径不编辑正文（docs/17 §10.2）；宿主无 `pickFile` API，文件选择器留到有 Host 能力后 |
 | 角色与模型 | 下拉 | `provider`+`model` | 从宿主模型列表取；留空=跟随默认 |
 | 角色与模型 | 下拉 | `agentPreset` | 从宿主 preset 列表取 |
@@ -72,7 +71,7 @@
 
 ### 2.2 状态模型（每个机器人一个）
 
-优先级：已停用 → 配置不完整(appId/secretRef 缺) → 连接失败(带错误与「重试」) → 缺少权限(列出缺哪几项，「扫码补开」) → 已连接但无人可用(「添加用户」) → 已连接(运行 N 个任务 · 上次连接时间) → 连接中。
+优先级：已停用 → 配置不完整(appId/secretRef 缺) → 连接失败(带错误与「重试」) → 缺少权限(列出缺哪几项，「扫码补开」) → 已连接(运行 N 个任务 · 上次连接时间) → 连接中。
 
 列表行只显示一个状态；详情页用横幅展开原因 + 动作。
 
@@ -84,7 +83,6 @@
 | 扫码补开权限 | 详情横幅按钮 | 无（非破坏） |
 | 重新扫码绑定 | 高级 → 次按钮，文案明确「会替换当前 App」 | 是 |
 | 移除机器人 | 高级 → 红色次按钮 | 是（说明不删飞书侧应用与凭据） |
-| 对所有人开放 | 开关 | 是 |
 | 保存 / 放弃 | 粘性条 | 无；宿主无离页守卫契约，改为 controller 保留 draft、返回时继续显示未保存 |
 
 ### 2.4 文案规则

@@ -37,16 +37,15 @@ describe('security helpers', () => {
     expect(output.match(/\[REDACTED\]/gu)?.length).toBeGreaterThanOrEqual(4)
   })
 
+  it('keeps the legacy user-access helper open for API compatibility', () => {
+    expect(isOpenIdAllowed('ou_owner', false, ['ou_owner'])).toBe(true)
+    expect(isOpenIdAllowed('ou_other', false, ['ou_owner'])).toBe(true)
+    expect(isOpenIdAllowed('ou_other', false, [])).toBe(true)
+  })
+
   it('normalizes hostile attachment names', () => {
     expect(safeFileName('../../bad\\name?.txt', 'fallback.bin')).toBe('name_.txt')
     expect(safeFileName('...', 'fallback.bin')).toBe('fallback.bin')
-  })
-
-  it('applies the fail-closed bridge-wide user check', () => {
-    expect(isOpenIdAllowed('ou_owner', false, ['ou_owner'])).toBe(true)
-    expect(isOpenIdAllowed('ou_other', false, ['ou_owner'])).toBe(false)
-    expect(isOpenIdAllowed('ou_other', false, [])).toBe(false)
-    expect(isOpenIdAllowed('ou_other', true, [])).toBe(true)
   })
 
   it('rejects symlinks escaping the workspace and enforces size', async () => {

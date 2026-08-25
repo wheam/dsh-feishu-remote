@@ -56,7 +56,6 @@ function row(patch: Row = {}): Row {
     id: 'curio-ops',
     appId: 'cli_aa00abefea385be9',
     appSecretRef: 'DSH_FEISHU_CURIO_SECRET',
-    allowedOpenIds: ['ou_1234567890abcd'],
     defaultWorkspace: '/Users/me/curio',
     ...patch,
   })
@@ -94,8 +93,8 @@ describe('legacy Feishu transcript display', () => {
 })
 
 describe('single-bot (root config) projection', () => {
-  it('projects the flat root fields as ONE editable row with split lists', () => {
-    expect(projectLegacyRow({
+  it('projects the flat root fields as ONE editable row and drops retired user filters', () => {
+    const projected = projectLegacyRow({
       appId: 'cli_aa00a7baf7f8dbe8',
       appSecretRef: 'DSH_FEISHU_APP_SECRET',
       brand: 'lark',
@@ -106,15 +105,14 @@ describe('single-bot (root config) projection', () => {
       defaultWorkspace: '/tmp/w',
       maxLiveAgents: 4,
       contextMode: 'off',
-    })).toEqual({
+    })
+    expect(projected).toEqual({
       id: 'legacy',
       enabled: true,
       appId: 'cli_aa00a7baf7f8dbe8',
       appSecretRef: 'DSH_FEISHU_APP_SECRET',
       brand: 'lark',
-      allowedOpenIds: ['ou_a', 'ou_b'],
       allowedChatIds: [],
-      allowAllUsers: false,
       requireMention: false,
       defaultWorkspace: '/tmp/w',
       workspacePolicy: 'locked',
@@ -125,6 +123,8 @@ describe('single-bot (root config) projection', () => {
       maxLiveAgents: 4,
       contextMode: 'off',
     })
+    expect(projected).not.toHaveProperty('allowedOpenIds')
+    expect(projected).not.toHaveProperty('allowAllUsers')
   })
 
   it('shows the scan card instead of a row when nothing is bound yet', () => {
@@ -215,10 +215,10 @@ describe('bot status model', () => {
     expect(model.safeDetail?.toLowerCase()).not.toContain('revision')
   })
 
-  it('flags a connected bot that nobody is allowed to use', () => {
+  it('treats retired user-filter fields as inert', () => {
     expect(botStatusModel(row({ allowedOpenIds: [] }), { connected: true, liveAgents: 0 }, 'multi'))
-      .toMatchObject({ tone: 'warn', label: 'status.noUsers', action: 'users' })
-    expect(botStatusModel(row({ allowedOpenIds: [], allowAllUsers: true }), { connected: true, liveAgents: 0 }, 'multi'))
+      .toMatchObject({ tone: 'ok', label: 'status.connected' })
+    expect(botStatusModel(row({ allowedOpenIds: ['ou_someone'], allowAllUsers: false }), { connected: true, liveAgents: 0 }, 'multi'))
       .toMatchObject({ tone: 'ok', label: 'status.connected' })
   })
 
@@ -244,15 +244,15 @@ describe('bot list row summary', () => {
     expect(botRowSummary(row({ workspacePolicy: 'locked', allowedChatIds: ['oc_a'] }), { connected: true, liveAgents: 2 }))
       .toEqual([
         { key: 'row.workspaceLocked', params: { path: '/Users/me/curio' } },
-        { key: 'row.users', params: { count: 1 } },
+        { key: 'row.everyone' },
         { key: 'row.chats', params: { count: 1 } },
         { key: 'row.tasks', params: { count: 2 } },
       ])
   })
 
-  it('says what is missing when the bot is not usable yet', () => {
+  it('still reports open user access when no default workspace is configured', () => {
     expect(botRowSummary(row({ defaultWorkspace: '', allowedOpenIds: [] }), undefined))
-      .toEqual([{ key: 'row.workspaceUnset' }, { key: 'row.noUsers' }])
+      .toEqual([{ key: 'row.workspaceUnset' }, { key: 'row.everyone' }])
   })
 
   it('names a bot from its live name, then its App suffix, then as new', () => {
@@ -284,7 +284,7 @@ describe('save payload builders', () => {
     expect(payload.revision).toBe(7)
     expect(payload.maxTotalLiveAgents).toBe(3)
     const bot = (payload.bots as Row[])[0]!
-    expect(bot.allowedOpenIds).toEqual(['ou_a', 'ou_b'])
+    expect(bot).not.toHaveProperty('allowedOpenIds')
     expect(bot.allowedChatIds).toEqual(['oc_a'])
     expect(bot.id).toBe('bot-a')
     expect(bot).not.toHaveProperty('statePath')
@@ -293,11 +293,11 @@ describe('save payload builders', () => {
   })
 
   it('sends only the CHANGED root keys, with list fields as comma-separated STRINGS', () => {
-    const original = projectLegacyRow({ appId: 'cli_a', appSecretRef: 'REF', allowedOpenIds: 'ou_a', defaultWorkspace: '/a' })
-    const draft = { ...original, allowedOpenIds: ['ou_a', 'ou_b'], workspacePolicy: 'locked' }
+    const original = projectLegacyRow({ appId: 'cli_a', appSecretRef: 'REF', allowedChatIds: 'oc_a', defaultWorkspace: '/a' })
+    const draft = { ...original, allowedChatIds: ['oc_a', 'oc_b'], workspacePolicy: 'locked' }
     expect(buildLegacyPayload(original, draft, 11)).toEqual({
       revision: 11,
-      config: { allowedOpenIds: 'ou_a,ou_b', workspacePolicy: 'locked' },
+      config: { allowedChatIds: 'oc_a,oc_b', workspacePolicy: 'locked' },
     })
   })
 
@@ -308,9 +308,9 @@ describe('save payload builders', () => {
   })
 
   it('treats a re-serialised but equal list as unchanged', () => {
-    const original = projectLegacyRow({ appId: 'cli_a', appSecretRef: 'REF', allowedOpenIds: 'ou_a, ou_b' })
+    const original = projectLegacyRow({ appId: 'cli_a', appSecretRef: 'REF', allowedChatIds: 'oc_a, oc_b' })
     expect(buildLegacyPayload(original, { ...original }, 1)).toBeUndefined()
-    expect(changedBotKeys(original, { ...original, allowedOpenIds: ['ou_a', 'ou_b'] })).toEqual([])
+    expect(changedBotKeys(original, { ...original, allowedChatIds: ['oc_a', 'oc_b'] })).toEqual([])
   })
 })
 
@@ -688,10 +688,9 @@ describe('the detail page renders every action the status model claims (review M
   const buttonFor = (tree: ReturnType<typeof render>, label: string) =>
     tree.nodes.find(node => node.type === 'button' && (node.props ?? {}).children === label)
 
-  it('renders 「重试」 for a failed connection and 「添加用户」 for an unused bot', () => {
+  it('renders 「重试」 for a failed connection and no user-access action', () => {
     expect(buttonFor(render({}, { connected: false, reasonCode: 'connect_failed' }), 'status.actionRetry')).toBeDefined()
-    const noUsers = render({ bot: row({ id: 'bot-a', allowedOpenIds: [] }) }, { connected: true, liveAgents: 0 })
-    expect(buttonFor(noUsers, 'status.actionUsers')).toBeDefined()
+    expect(buttonFor(render({}, { connected: true, liveAgents: 0 }), 'status.actionUsers')).toBeUndefined()
   })
 
   it('retries through onboarding in single-bot mode', () => {
@@ -787,19 +786,19 @@ describe('save routing through the admin controller', () => {
   function multiEditor(revision: number, bots: Record<string, unknown>[], max = 2) {
     return { revision, writable: true, mode: 'multi', guiSafe: true, config: { maxTotalLiveAgents: max, bots } }
   }
-  const botA = { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A', allowedOpenIds: ['ou_a'] }
-  const botB = { id: 'bot-b', appId: 'cli_b', appSecretRef: 'REF_B', allowedOpenIds: ['ou_b'] }
+  const botA = { id: 'bot-a', appId: 'cli_a', appSecretRef: 'REF_A' }
+  const botB = { id: 'bot-b', appId: 'cli_b', appSecretRef: 'REF_B' }
 
   it('routes a single-bot edit to settings/save-legacy with only the changed root key', async () => {
     const mounted = await mountAdmin({
       revision: 9, writable: true, mode: 'legacy', guiSafe: true,
-      config: { appId: 'cli_a', appSecretRef: 'REF', allowedOpenIds: 'ou_a', defaultWorkspace: '/a', bots: [] },
+      config: { appId: 'cli_a', appSecretRef: 'REF', allowedChatIds: 'oc_a', defaultWorkspace: '/a', bots: [] },
     })
-    editBot(mounted.api)('legacy', 'allowedOpenIds', ['ou_a', 'ou_b'])
+    editBot(mounted.api)('legacy', 'allowedChatIds', ['oc_a', 'oc_b'])
     await save(mounted.api)()
     const call = mounted.calls.find(item => item.endpoint.startsWith('settings/save'))!
     expect(call.endpoint).toBe('settings/save-legacy')
-    expect(call.payload).toEqual({ revision: 9, config: { allowedOpenIds: 'ou_a,ou_b' } })
+    expect(call.payload).toEqual({ revision: 9, config: { allowedChatIds: 'oc_a,oc_b' } })
     mounted.stop()
   })
 

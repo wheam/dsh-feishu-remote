@@ -35,7 +35,7 @@
 - 两条命令的 flags、`om_`/`omt_` 解析、JSON 信封 `{ok,data,meta}` 与退出码契约。
 - chat 命令 `only_thread_root_messages=true` + 自动展开（50/500 上限、并发 8）。
 - CLI v1.0.88 bot 元数据权限：`im:message.group_msg`、`im:message.p2p_msg:readonly`、`im:message.reactions:read`。
-- 集成点正向确认：白名单 gate 顺序正确、3s 回调不占、双 content block 与 `createUserMessage`/账本兼容、SDK 已打入 bundle、`files` 与 node_modules 关系正常。
+- 集成点正向确认：当时的 gate 顺序正确、3s 回调不占、双 content block 与 `createUserMessage`/账本兼容、SDK 已打入 bundle、`files` 与 node_modules 关系正常。2026-08-25 已按产品决策移除发送者 gate，群范围 gate 仍在上下文拉取之前。
 - DeepSeek 1M 模型存在、缓存前缀匹配尽力而为。
 - 仓库保持只读（git status 前后一致）。
 

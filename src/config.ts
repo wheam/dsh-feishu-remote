@@ -3,10 +3,10 @@
  * legacy `cwd` / `workspaceRoot` values are accepted only for upgrade
  * compatibility and outbound-path policy, never as a new Feishu origin's
  * implicit project. Credentials resolve through the Harness credential
- * provider (`.credentials.yaml` is the single secret source); the sender
- * allowlist is fail-closed: empty `allowedOpenIds` rejects everyone unless
- * `allowAllUsers: true` is explicit. Group scope is open by default; a
- * non-empty `allowedChatIds` optionally narrows the bot to selected groups.
+ * provider (`.credentials.yaml` is the single secret source). Every Feishu
+ * user who can reach the bot may operate it; group scope is open by default,
+ * while a non-empty `allowedChatIds` optionally narrows the bot to selected
+ * groups.
  */
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -14,7 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import Schema from '@deepseek-ai/schemastery'
 import type { BotStatusReasonCode, LarkBrand, ResolvedConfig, SessionNamespace, WorkspacePolicy } from './types.js'
-import { canonicalPath, isInside, parseBooleanEnv, parseCsv } from './security.js'
+import { canonicalPath, isInside, parseCsv } from './security.js'
 
 /**
  * A configuration rejection with a STABLE machine code (Codex batch-3 B1).
@@ -38,9 +38,11 @@ export interface LegacySingleBotConfig {
   appSecretRef?: string
   brand?: LarkBrand
   statePath?: string
+  /** @deprecated Accepted for upgrade compatibility but ignored. User access is always open. */
   allowedOpenIds?: string[]
   /** Optional group restriction. Empty means every group the bot joins. */
   allowedChatIds?: string[]
+  /** @deprecated Accepted for upgrade compatibility but ignored. User access is always open. */
   allowAllUsers?: boolean
   /** Require the first message in each topic to @mention; ordinary groups always require every @. */
   requireMention?: boolean
@@ -98,9 +100,9 @@ const BotSchema: Schema<BotConfig> = Schema.object({
   brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
   statePath: Schema.string().default(''),
   inboundDir: Schema.string().default(''),
-  allowedOpenIds: Schema.array(Schema.string()).default([]),
+  allowedOpenIds: Schema.array(Schema.string()).default([]).hidden().deprecated(),
   allowedChatIds: Schema.array(Schema.string()).default([]),
-  allowAllUsers: Schema.boolean().default(false),
+  allowAllUsers: Schema.boolean().default(true).hidden().deprecated(),
   requireMention: Schema.boolean().default(true),
   provider: Schema.string().default(''),
   model: Schema.string().default(''),
@@ -136,9 +138,9 @@ export const ConfigSchema: Schema<Config> = Schema.object({
   appSecretRef: Schema.string().role('credential-ref').default('DSH_FEISHU_APP_SECRET'),
   brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
   statePath: Schema.string().default(''),
-  allowedOpenIds: Schema.array(Schema.string()).default([]),
+  allowedOpenIds: Schema.array(Schema.string()).default([]).hidden().deprecated(),
   allowedChatIds: Schema.array(Schema.string()).default([]),
-  allowAllUsers: Schema.boolean().default(false),
+  allowAllUsers: Schema.boolean().default(true).hidden().deprecated(),
   requireMention: Schema.boolean().default(true),
   provider: Schema.string().default(''),
   model: Schema.string().default(''),
@@ -177,9 +179,11 @@ function unique(values: string[]): string[] {
 }
 
 /**
- * Resolve schema-normalized config with environment-only secrets and
- * allowlists. The legacy cwd/workspaceRoot pair may be absent; when supplied,
- * both must be present and retain the old containment invariant.
+ * Resolve schema-normalized config with environment-only secrets and an
+ * optional group restriction. Retired user-allowlist settings are accepted
+ * by the schema for upgrades but project only canonical open-access values.
+ * The legacy cwd/workspaceRoot pair may be absent; when supplied, both must
+ * be present and retain the old containment invariant.
  */
 export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.env): ResolvedConfig {
   const appId = (config.appId || env.DSH_FEISHU_APP_ID || '').trim()
@@ -216,11 +220,6 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     throw new Error('dsh-feishu-remote: locked workspace requires defaultWorkspace')
   }
 
-  const allowAllUsers = Boolean(config.allowAllUsers) || parseBooleanEnv(env.DSH_FEISHU_ALLOW_ALL_USERS)
-  const allowedOpenIds = unique([
-    ...(config.allowedOpenIds ?? []),
-    ...parseCsv(env.DSH_FEISHU_ALLOWED_OPEN_IDS),
-  ])
   const allowedChatIds = unique([
     ...(config.allowedChatIds ?? []),
     ...parseCsv(env.DSH_FEISHU_ALLOWED_CHAT_IDS),
@@ -233,9 +232,9 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     appSecretRef,
     brand: config.brand ?? 'feishu',
     statePath,
-    allowedOpenIds,
+    allowedOpenIds: [],
     allowedChatIds,
-    allowAllUsers,
+    allowAllUsers: true,
     requireMention: config.requireMention ?? true,
     ...(provider === undefined || provider === '' ? {} : { provider }),
     ...(model === undefined || model === '' ? {} : { model }),
@@ -372,9 +371,7 @@ export async function resolveBotRuntimeConfig(
     botId: bot.id,
     appId: bot.appId.trim(),
     appSecretRef: ref,
-    allowedOpenIds: unique(bot.allowedOpenIds ?? []),
     allowedChatIds: unique(bot.allowedChatIds ?? []),
-    allowAllUsers: bot.allowAllUsers ?? false,
     feishuCliPath: (bot.feishuCliPath ?? '').trim(),
     sessionNamespace: bot.sessionNamespace ?? 'app',
     workspacePolicy: bot.workspacePolicy ?? 'default',

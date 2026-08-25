@@ -18,8 +18,8 @@
 
 1. **内嵌当前服务**：插件运行在 `dsh web` profile 进程内；飞书创建的会话与 Web GUI 会话列表是同一批（共享存储）。
 2. **飞书长连接**：官方 WebSocket 长连接模式，无公网回调地址；国际版 Lark 通过品牌参数支持（后置）。
-3. **白名单**：仅允许本人 open_id 驱动 agent；**fail-closed**——空配置 = 拒绝一切，仅显式 `allowAllUsers: true` 才全开放（mock/echo 环境除外）。群范围默认不限：机器人加入任意群后，白名单内用户均可 @它；非空 `allowedChatIds` 可选地将部署收窄到指定群。拒绝日志仅显示脱敏 ID；白名单建议由 Host 本机扫码绑定，或在飞书管理端查询完整 open_id。
-4. **普通群与话题群**：用飞书官方 `chat_mode` 区分两类群。话题群中，飞书话题/线程 ↔ dsh session 一一映射，多话题并行互不干扰；每个话题首次由白名单用户 @机器人后激活，首次 @ 回填此前完整有界话题历史，后续同话题消息免 @自动进入同一 session，未激活的其他话题静默，激活跨重启持久化。普通群按 chatId 共用一个 session；机器人接收全群消息供历史回填，但**每一轮都必须由白名单用户明确 @才执行**，未 @消息只作为下次触发时的有界上下文、绝不创建会话/执行命令；输出直接发回群内。`/new` 显式开新会话。
+3. **操作者对所有人开放**：不按用户 `open_id` 做白名单判断，任何能联系到机器人的用户都可以驱动 agent。群范围默认不限；非空 `allowedChatIds` 可选地将部署收窄到指定群。旧版 `allowedOpenIds` / `allowAllUsers` 配置与环境变量只作升级兼容，运行时忽略。
+4. **普通群与话题群**：用飞书官方 `chat_mode` 区分两类群。话题群中，飞书话题/线程 ↔ dsh session 一一映射，多话题并行互不干扰；每个话题首次由任意用户 @机器人后激活，首次 @ 回填此前完整有界话题历史，后续同话题消息免 @自动进入同一 session，未激活的其他话题静默，激活跨重启持久化。普通群按 chatId 共用一个 session；机器人接收全群消息供历史回填，但**每一轮都必须由任意用户明确 @才执行**，未 @消息只作为下次触发时的有界上下文、绝不创建会话/执行命令；输出直接发回群内。`/new` 显式开新会话。
 5. **审批闭环**：agent 请求审批 → 飞书卡片（批准/拒绝按钮）→ 回调 respond；文字兜底 `/approve` `/reject`（按钮重复点击被 SDK 去重，文字兜底是必需路径）。结构化提问移 P1（飞书会话屏蔽 ask-user 类工具，避免问题打进浏览器导致远端挂起）。
 6. **基本会话操作**：`/workspace` `/status` `/stop` `/resume` `/sessions` `/new` `/approve` `/reject` `/steer` `/help`。首次使用从 DSH Workspace Registry 选择或新建 Workspace；每个飞书来源持久绑定一个 Workspace，切换时创建新 Session。
 7. **流式节流**：agent 输出按约 1 秒批量更新卡片（遵守飞书限流），绝不逐 token 发消息。
@@ -28,8 +28,8 @@
 
 - Web GUI 设置卡片（借鉴 im-hub）
 - **PersonalAgent 扫码开通**：插件安装后从 Web GUI 调用官方 SDK `registerApp()`；扫码自动
-  创建/授权用户自己的机器人应用，凭据只落 DSH credential provider，扫码者自动成为
-  `allowedOpenIds` owner；不要求手工进入开放平台、复制 App ID/Secret 或从日志抄 open_id。
+  创建/授权用户自己的机器人应用，凭据只落 DSH credential provider；操作者无需登记
+  open_id，不要求手工进入开放平台或复制 App ID/Secret。
   详细方案与验收见 docs/16。
 - 结构化提问恢复（userQuestions multiplexer 或 agent-scoped 覆盖方案验证后）
 - 超长消息分片 / 截断，全文落工作区文件并回显 session id（手机打不开 loopback Web UI）

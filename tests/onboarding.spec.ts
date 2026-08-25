@@ -138,7 +138,6 @@ describe('PersonalAgent onboarding', () => {
         id: 'primary',
         appId: 'cli_primary',
         appSecretRef: 'REF_PRIMARY',
-        allowedOpenIds: ['ou_primary_owner'],
       }],
     }).bots[0]!
     const h = harness({ initialSettings: { bots: [primary] }, settingsCas: true })
@@ -160,8 +159,8 @@ describe('PersonalAgent onboarding', () => {
       enabled: true,
       appId: 'cli_second',
       brand: 'lark',
-      allowedOpenIds: ['ou_second_owner'],
-      allowAllUsers: false,
+      allowedOpenIds: [],
+      allowAllUsers: true,
       contextBackend: 'sdk',
       sessionNamespace: 'app',
     })
@@ -229,8 +228,8 @@ describe('PersonalAgent onboarding', () => {
     await waitForPhase(h.service, 'ready')
     expect(h.updates[0]).toMatchObject({
       appId: 'cli_existing',
-      allowedOpenIds: 'ou_existing_owner',
-      allowAllUsers: false,
+      allowedOpenIds: '',
+      allowAllUsers: true,
     })
   })
 
@@ -269,13 +268,27 @@ describe('PersonalAgent onboarding', () => {
       appId: 'cli_new',
       brand: 'lark',
       onboardingManaged: true,
-      allowedOpenIds: 'ou_owner',
+      allowedOpenIds: '',
       allowedChatIds: '',
-      allowAllUsers: false,
+      allowAllUsers: true,
     })
     expect(h.updates[0]?.appSecretRef).toMatch(/^DSH_FEISHU_APP_SECRET_[A-F0-9]{12}_[A-F0-9]{8}$/u)
     expect(JSON.stringify(h.updates)).not.toContain('top-secret-value')
     expect(JSON.stringify(h.service.status())).not.toContain('top-secret-value')
+    expect(h.service.status().connected).toBe(true)
+  })
+
+  it('does not require an owner open_id because user access is always open', async () => {
+    const h = harness({ probe: okProbe({ ownerOpenId: undefined }) })
+    await h.service.start('select')
+    h.resolveRegistration({ client_id: 'cli_noowner', client_secret: 'open-access-secret' })
+    await waitForPhase(h.service, 'ready')
+
+    expect(h.updates[0]).toMatchObject({
+      appId: 'cli_noowner',
+      allowedOpenIds: '',
+      allowAllUsers: true,
+    })
     expect(h.service.status().connected).toBe(true)
   })
 

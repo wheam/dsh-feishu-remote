@@ -38,8 +38,10 @@ export interface ResolvedConfig {
   appSecretRef: string
   brand: LarkBrand
   statePath: string
+  /** @deprecated Always empty; retained only for API compatibility. */
   allowedOpenIds: string[]
   allowedChatIds: string[]
+  /** @deprecated Always true; sender access is not configurable. */
   allowAllUsers: boolean
   requireMention: boolean
   provider?: string

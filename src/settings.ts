@@ -84,9 +84,11 @@ export const flatSchema: Schema<FlatSettings> = Schema.object({
   // Host-only provenance bit. It never carries a secret and is deliberately
   // omitted from the hand-edited field list in src/client.js.
   onboardingManaged: Schema.boolean().default(false),
-  allowedOpenIds: Schema.string().default(''),
+  // Retired user-allowlist fields stay hidden in the schema only so settings
+  // written by older versions can be loaded and migrated without an error.
+  allowedOpenIds: Schema.string().default('').hidden().deprecated(),
   allowedChatIds: Schema.string().default(''),
-  allowAllUsers: Schema.boolean().default(false),
+  allowAllUsers: Schema.boolean().default(true).hidden().deprecated(),
   requireMention: Schema.boolean().default(true),
   cwd: Schema.string().default(''),
   workspaceRoot: Schema.string().default(''),
@@ -126,9 +128,9 @@ export const flatSchema: Schema<FlatSettings> = Schema.object({
     brand: Schema.union(['feishu', 'lark', 'larkoffice'] as const).default('feishu'),
     // statePath / inboundDir / feishuCliPath: see the NOTE above — host-only,
     // never in the GUI schema and never in FlatSettings.
-    allowedOpenIds: Schema.array(Schema.string()).default([]),
+    allowedOpenIds: Schema.array(Schema.string()).default([]).hidden().deprecated(),
     allowedChatIds: Schema.array(Schema.string()).default([]),
-    allowAllUsers: Schema.boolean().default(false),
+    allowAllUsers: Schema.boolean().default(true).hidden().deprecated(),
     requireMention: Schema.boolean().default(true),
     defaultWorkspace: Schema.string().default(''),
     workspacePolicy: Schema.union(['default', 'locked'] as const).default('default'),
@@ -240,9 +242,9 @@ function flattenBots(bots: Config['bots']): FlatSettings['bots'] {
     brand: bot.brand ?? 'feishu',
     // statePath / inboundDir / feishuCliPath are deliberately absent: they are
     // host-only and would otherwise ride the registration `base` to the browser.
-    allowedOpenIds: [...(bot.allowedOpenIds ?? [])],
+    allowedOpenIds: [],
     allowedChatIds: [...(bot.allowedChatIds ?? [])],
-    allowAllUsers: bot.allowAllUsers ?? false,
+    allowAllUsers: true,
     requireMention: bot.requireMention ?? true,
     defaultWorkspace: bot.defaultWorkspace ?? '',
     workspacePolicy: bot.workspacePolicy ?? 'default',
@@ -278,9 +280,9 @@ export function flatten(config: Config): FlatSettings {
     appSecretRef: config.appSecretRef ?? 'DSH_FEISHU_APP_SECRET',
     brand: config.brand ?? 'feishu',
     onboardingManaged: false,
-    allowedOpenIds: (config.allowedOpenIds ?? []).join(', '),
+    allowedOpenIds: '',
     allowedChatIds: (config.allowedChatIds ?? []).join(', '),
-    allowAllUsers: config.allowAllUsers ?? false,
+    allowAllUsers: true,
     requireMention: config.requireMention ?? true,
     cwd: config.cwd ?? '',
     workspaceRoot: config.workspaceRoot ?? '',
@@ -421,6 +423,11 @@ function overlayHostOnlyBots(
   const legacyIndex = legacyContinuationIndex(bots, entry, root)
   return bots.map((bot, index) => {
     const carried = structuredClone(bot) as Record<string, unknown>
+    // Canonicalize retired user-access fields during every settings → config
+    // projection. Runtime does not consume them, and a future write should
+    // never resurrect the old fail-closed meaning.
+    carried.allowedOpenIds = []
+    carried.allowAllUsers = true
     // What a stale user layer still carries — kept only as the LAST fallback.
     const retainedBot = hostOnlyFields(carried as HostOnlyBotFields)
     for (const key of FORBIDDEN_ROOT_KEYS) delete carried[key]
@@ -586,9 +593,9 @@ export function unflatten(flat: Partial<FlatSettings> | undefined, entry: Config
     appId: value.appId ?? '',
     appSecretRef: value.appSecretRef?.trim() || 'DSH_FEISHU_APP_SECRET',
     brand: value.brand ?? 'feishu',
-    allowedOpenIds: splitIds(value.allowedOpenIds),
+    allowedOpenIds: [],
     allowedChatIds: splitIds(value.allowedChatIds),
-    allowAllUsers: value.allowAllUsers ?? false,
+    allowAllUsers: true,
     requireMention: value.requireMention ?? true,
     cwd: value.cwd ?? '',
     workspaceRoot: value.workspaceRoot ?? '',

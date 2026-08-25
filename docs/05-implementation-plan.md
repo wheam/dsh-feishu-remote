@@ -13,7 +13,7 @@
 > 2026-08-23：工作目录改为 DSH Workspace Registry 驱动；新增首次选择/新建、
 > `originKey → workspaceId` 持久绑定、旧会话 cwd 自动迁移和 `/workspace` 切换。
 > 2026-08-23：首次开通目标改为官方 `registerApp()` PersonalAgent Device Flow；一次扫码
-> 创建/授权应用、保存凭据并识别 owner。实现与自动化测试已完成，真实租户验收及包发布
+> 创建/授权应用并保存凭据；owner 身份不再用于操作者授权。实现与自动化测试已完成，真实租户验收及包发布
 > 前置见 docs/16。
 > Round 12 修复后相关契约测试全绿；当前总数以 `pnpm run test` 输出为准。
 > 本文档是本仓库的"当前方案"单一事实源；
@@ -39,7 +39,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 | `src/state.ts` | **借 + 砍** | 保留原子写+0600+串行变更队列骨架；删 pairing/token 逻辑。不保存 threadKey→sessionId；只保存用户明确选择的 originKey→workspaceId（见 §2.6），session 事实源仍是 persistence。 |
 | `src/cards.ts` | **借 + 改** | 卡片模板全套保留；删 project 字段显示，精简为单会话语境 |
 | `src/bridge.ts` | **借 + 砍** | 保留：消息路由、answerer、流式节流、会话生命周期、命令集。砍：上游 project ACL、claim/bind/unbind、群绑定、`lark_deliver`（P2 文件能力再议）。**改**：接入 DSH Workspace Registry；userQuestions 不直接注册单例 provider，飞书会话 setup 内 restrict 屏蔽 ask-user 类工具（§2.4）、SDK 批处理关闭（§1.3）、命令透传改 allowlist（§2.7） |
-| `src/config.ts` | **改** | Workspace 由 DSH Registry 选择；旧 `workspaceRoot/cwd` 仅成对保留为升级兼容项。保留 credentialRef/env/ctx.credentials 三级凭据解析；白名单 fail-closed（§2.9）。 |
+| `src/config.ts` | **改** | Workspace 由 DSH Registry 选择；旧 `workspaceRoot/cwd` 仅成对保留为升级兼容项。保留 credentialRef/env/ctx.credentials 三级凭据解析；操作者固定开放，旧用户白名单字段仅兼容读取（§2.9）。 |
 | `src/index.ts` | **改** | inject 核对 web profile 服务；去掉独立 profile 假设 |
 | `src/cli.ts` | **砍** | 不恢复独立 CLI 配对；首次开通由 Web GUI → Host 的 PersonalAgent 扫码服务承担（docs/16），手工配置保留为兜底 |
 | `src/identity.ts` | **借 + 砍** | session 前缀/`/sessions` 枚举保留；删 project 维度 |
@@ -186,7 +186,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    `originKey`：p2p → `p2p:<chatId>`；普通群 → `group:<chatId>:chat`；群话题 →
    `group:<chatId>:thread:<thread_id>`（thread_id 优先，缺失回退 root_id）；话题群中不属于任何
    thread 的消息仅在明确 @时提示"请在话题内 @我"。普通群的未 @消息静默，不创建/恢复
-   session、不执行命令；白名单用户每次 @后才进入该群唯一 session。
+   session、不执行命令；任意用户每次 @后才进入该群唯一 session。
    首次未绑定来源：Registry 为空或有多个 Workspace 时发选择卡，只有一个时自动绑定；选择卡可
    选 Registry 现有项、在常用 Mac 父目录下新建一个末级目录，或由用户提供绝对/`~/` 路径。
    新建目录严格限于一个末级目录，拒绝文件系统根、用户 Home 和系统目录等过宽范围；群卡不显示
@@ -223,20 +223,20 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    "只有按钮与 `/approve` `/reject` 生效"。
    **maxLiveAgents**：live agent 硬上限（P1 起），超限拒绝新 origin 并给可操作提示；
    idle/LRU dispose 前先关闭该 origin 入口队列（dispose 与 followup/approval 竞态收敛）。
-9. **安全（Codex R1/R2/R3）**：
-   - 白名单 **fail-closed**：`allowedOpenIds` 为空时拒绝一切；仅显式
-     `allowAllUsers: true` 且带启动警告时才开放（mock/echo 环境可开）。
+9. **边界（2026-08-25 产品决策覆盖 Codex R1）**：
+   - 操作者固定开放：不按用户 open_id 做白名单判断；旧 `allowedOpenIds` / `allowAllUsers`
+     配置及环境变量仅作升级兼容并在运行时忽略。
    - 群聊范围：私聊 + 普通群 + 群聊话题；群范围默认不限，非空 `allowedChatIds` 可选收窄。
-     默认每个话题首次由白名单用户 @机器人后持久化激活：首次 @ 回填此前有界话题历史，
+     默认每个话题首次由任意用户 @机器人后持久化激活：首次 @ 回填此前有界话题历史，
      后续同话题免 @自动进入同一 session，其他话题静默。`im:message.group_msg` 用于接收
-     未 @后续及上下文读取。普通群接收所有成员消息但每轮必须由白名单用户明确 @；未 @消息
-     只在下一次触发时作为有界增量历史注入。@ 是触发信号，`allowedOpenIds` 才是操作者授权边界；
+     未 @后续及上下文读取。普通群接收所有成员消息但每轮必须由任意用户明确 @；未 @消息
+     只在下一次触发时作为有界增量历史注入。@ 只是触发信号；
      输出会向所在群公开。
    - 卡片 pending 记录绑定 appId/chatId/messageId/operatorOpenId/sessionId/callId/
      deadline，处理即原子删除；错误操作者/跨群/过期留审计日志（重复点击被 SDK 去重，
      到不了插件，由文字兜底覆盖）。
-   - open_id 绑定：优先使用 Host 本机 PersonalAgent 扫码把 owner 原子写入
-     `allowedOpenIds`；手工部署从飞书管理端查询完整 ID。拒绝日志只保留末四位，不允许作为 ID 回显接口。
+   - 交互所有权：任何用户都可发起任务；Workspace/审批卡和停止 reaction 只接受该回合或
+     待处理流程的发起者，防止另一名群成员接管已有交互。
    - 群聊输出视为公开：卡片不展示完整工具参数与结果，只展示摘要。
    - 凭据不进仓库；出站 `redactSecrets`。
 
@@ -260,7 +260,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
   宿主可读、0600 明文落盘（写入文档口径）。
 - **扫码开通（P1，已实现，真实租户待验收）**：默认加载空配置以注册 onboarding RPC 和设置页；Host 调用
   `registerApp()`，浏览器只持有短期二维码 URL；返回 Secret 写入按 App ID 派生的独立
-  credential ref，App ID/ref/owner/群白名单通过一次 settings `update()` 原子切换，随后沿
+  credential ref，App ID/ref/开放操作者/可选群范围通过一次 settings `update()` 原子切换，随后沿
   现有 watcher 热启动 bridge。跨 credentials/settings 采用补偿式提交，完整方案见 docs/16。
 
 ## 4. 开发顺序（替代原 Phase 0）
@@ -268,13 +268,13 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 | 步骤 | 内容 | 验收 |
 | --- | --- | --- |
 | 0 | 环境前置（Node ≥22 / pnpm）+ 仓库骨架 + `security/state/cards` 移植 + lark-bridge 测试搬来跑绿 | vitest 全绿 + 裁剪后契约测试（队列/provider/映射/权限语义已变，不能只跑上游测试） |
-| 1 | **echo spike**：空壳 cordis 插件 + SDK 通道（batch/chatQueue 关闭）+ fail-closed 发送者白名单（`allowedChatIds` 可选收窄群范围）→ 飞书发什么回什么 | 手机发消息，Mac 回显；断网重连可用；普通群/话题群/p2p 三态行为正确；应用形态（个人应用 vs 企业自建）定案并文档固化 |
+| 1 | **echo spike**：空壳 cordis 插件 + SDK 通道（batch/chatQueue 关闭）+ 开放操作者（`allowedChatIds` 可选收窄群范围）→ 飞书发什么回什么 | 手机发消息，Mac 回显；断网重连可用；普通群/话题群/p2p 三态行为正确；应用形态（个人应用 vs 企业自建）定案并文档固化 |
 | 2 | **共存 spike**：web profile 内创建带 preset 的飞书 session（有工具）；answerer `prepend` 生效且双向隔离（飞书回合审批只到飞书卡、GUI 回合审批只回 GUI）；飞书会话无通往浏览器的提问路径（ask-user 被拒） | 三项都有可复现证据 |
 | 3 | 单会话对话：create/resume + followup + whenIdle + 全文回复（暂不流式） | 飞书会话出现在 Web GUI 列表；GUI 对飞书会话发言=双写回合（输出按 session 流、审批回 GUI） |
 | 4 | **审批闭环**：answerer（prepend）+ 卡片 + 五条结算路径 + 断线/崩溃/通道终态失效状态机 + 终态 updateCard | 飞书完成一次需审批的真实任务；按钮重复点击被去重但文字兜底可用 |
 | 5 | 私聊/普通群/话题映射 + 全套命令 + 每 origin 控制队列 + `/new` pending 协议 + `/resume` 原子切换 | 普通群仅 @触发且读取全群有界历史；群内多话题并行互不干扰；`/resume` 失败保留旧会话；重启回落规则符合文档 |
 | 6 | 流式节流 + 进度/终态卡片 + 应用级出站调度器 + 体积预算与永久错误兜底 + 超长分片 | 1s 级卡片更新；429/限流码可恢复；chunk+final 去重与状态映射表测试全绿；30KB/14 天边界兜底生效 |
-| 7 | **PersonalAgent 扫码开通**：RegistrationService + Host RPC + Web GUI 二维码 + credential/settings 补偿提交 + owner 自动识别 + 权限探测 | 全新 profile 一条安装命令后扫码一次即可私聊并完成审批；Secret 不出 Host；失败不破坏旧配置；验收矩阵见 docs/16 §8 |
+| 7 | **PersonalAgent 扫码开通**：RegistrationService + Host RPC + Web GUI 二维码 + credential/settings 补偿提交 + 开放操作者 + 权限探测 | 全新 profile 一条安装命令后扫码一次即可私聊并完成审批；Secret 不出 Host；失败不破坏旧配置；验收矩阵见 docs/16 §8 |
 
 原 Phase 0（装原版 im-hub 隔离验证）**跳过**：步骤 1 的 echo spike 用自有代码验证
 相同链路，且代码是最终交付物的一部分。
@@ -282,7 +282,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 ## 5. 已定决策（2026-08-16 用户定案）
 
 1. **会话范围**：飞书只管理自己创建的会话，与 GUI 同列表共享；不接管 GUI 已有会话。
-2. **白名单默认**：fail-closed；显式 `allowAllUsers: true` 才开放。
+2. **操作者访问（2026-08-25 更新）**：固定对所有人开放，不提供个人白名单。
 3. **群聊范围**：私聊 + 普通群 + 群聊话题；默认允许机器人加入的任意群，非空 `allowedChatIds`
    才限制到指定群；每个话题首次需 @，激活后同话题免 @并跨重启保留；普通群每轮必须 @，
    未 @消息仅作为下一轮有界上下文。
@@ -295,8 +295,8 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    混淆；仅存轻量元数据，session 事实源在 persistence）。
 7. **session id 前缀**：`feishu-<24hex>-<base36 ts>`，同毫秒冲突 ++ 避让（避免与
    上游 lark-bridge 的 `lark-` 前缀在 GUI 列表混列）。
-8. **首次开通（2026-08-23 更新）**：采用官方 SDK `registerApp()` 创建 PersonalAgent；
-   首次 `createOnly: true`，扫码者自动成为 owner，手工 App ID/Secret 流程只作兜底；不建设
+8. **首次开通（2026-08-25 更新）**：采用官方 SDK `registerApp()` 创建 PersonalAgent；
+   首次 `createOnly: true`，无需解析或保存扫码者 open_id，手工 App ID/Secret 流程只作兜底；不建设
    共享商店应用或云端中继。
 
 ## 6. 验收标准（Phase 1）
@@ -304,8 +304,8 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 1. 人在外面，用飞书指挥 Mac 完成一次**需要审批**的真实任务，会话同步出现在 Web GUI
    会话列表（架构文档里程碑不变）。
 2. 断网重连后长连接恢复；未结审批按 §2.3 状态机结算（六条路径各有测试，含通道终态失效）。
-3. 白名单外的 open_id 无法驱动任何操作；空 `allowedOpenIds` = 拒绝一切；owner 在机器人
-   新加入的群可直接 @使用；配置非空 `allowedChatIds` 时，列表外群被拒。
+3. 任意 open_id 都可驱动操作；即使旧配置仍带非空 `allowedOpenIds` 或 `allowAllUsers: false`
+   也不得拦截；配置非空 `allowedChatIds` 时，列表外群仍被拒。
 4. 全局出站速率受限（不随会话数线性放大）；429/限流码可恢复；目标仍可写时终态最终
    送达，否则有持久审计与显式失败状态；30KB/14 天边界有兜底。
 5. 飞书 agent 具备部署 preset 的工具能力（bash/fs/skill 等按 preset 挂载）；飞书会话上

@@ -14,7 +14,7 @@
 | [Zilliz MFS + Open Tag](https://github.com/zilliztech/mfs)（Apache-2.0） | 检索 harness + 极薄 glue | MFS（多源文件式检索，server+600MB 嵌入模型）对 P0/P1 过重；P2 做飞书文档/消息索引时再评估 |
 | [lark-coding-agent-bridge](https://github.com/zarazhangrui/lark-coding-agent-bridge)（MIT）★ | Node + 官方 SDK | **架构与我们最像**：`chatId:threadId` 话题 scope + ChatModeCache、流式卡（streaming_mode+reasoning 面板+工具折叠+footer 终态）、PendingQueue 600ms 合并、owner/admin/allowedChats 分层、policyFingerprint（cwd+access+attachments 摘要） |
 | [feishu-bridge](https://github.com/feir/feishu-bridge)（MIT）★ | Python 多后端 | **唯一有真审批闭环的开源实现**：agent 输出内嵌 confirm/ask/choices marker → 卡片按钮；bg_supervisor cancel/timeout 状态机（Cancel SLO≤10s、崩溃续跑）；sentinel probe 探测 `/resume` 可续性；CardKit 100ms 级 patch 证明卡片可承受高频更新 |
-| [devbot](https://github.com/pangbit/devbot)（无 LICENSE） | Go | 必填白名单 fail-closed（与我们同款）；每 chat 队列；目录↔会话关联 |
+| [devbot](https://github.com/pangbit/devbot)（无 LICENSE） | Go | 必填白名单 fail-closed（本项目 2026-08-25 起不再采用）；每 chat 队列；目录↔会话关联 |
 | [agent-bridge](https://github.com/Ken-Chy129/agent-bridge)（MIT） | Node 守护 | SessionStart hook **接管全部本地会话**——与我们"不接管 GUI 会话"相反（反例）；JSONL→卡片渲染管线可参考 |
 | [cc-connect](https://github.com/ChanningYul/cc-connect)（MIT） | Go 多平台 | `thread_isolation=true` 与我们 P0 完全一致；auto-compress、/mode 权限模式 |
 
@@ -56,7 +56,7 @@
 | 卡片按钮一次性 value 约定（perm:allow/deny） | jiangkuo888/cc-connect | §2.3 |
 | 工具参数卡片摘要（不展全量） | cc-connect | §2.9 群聊公开假设 |
 | 入站 durable queue + 每话题 lane FIFO | OpenClaw | §2.8 控制队列 |
-| 白名单 fail-closed 必填 | devbot | §2.9（已定案） |
+| 白名单 fail-closed 必填 | devbot | 历史借鉴；2026-08-25 产品决策已明确不采用，操作者固定开放 |
 
 **不引入**：MFS（过重，P2 再议）、PTY/tmux 注入、SessionStart hook 接管、显式 SessionCatalog、多后端支持。
 

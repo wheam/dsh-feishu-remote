@@ -156,8 +156,8 @@ type FlatBot = FlatSettings['bots'][number]
  * re-overlaid from the entry config by `unflatten()`.
  */
 const EDITABLE_BOT_KEY_LIST = [
-  'enabled', 'appId', 'appSecretRef', 'brand', 'allowedOpenIds', 'allowedChatIds',
-  'allowAllUsers', 'requireMention', 'defaultWorkspace', 'workspacePolicy', 'agentPreset',
+  'enabled', 'appId', 'appSecretRef', 'brand', 'allowedChatIds', 'requireMention',
+  'defaultWorkspace', 'workspacePolicy', 'agentPreset',
   'profileFile', 'provider', 'model', 'maxLiveAgents', 'contextMode', 'contextBackend',
 ] as const satisfies readonly (keyof FlatBot)[]
 
@@ -182,8 +182,8 @@ const CLIENT_BOT_KEYS = new Set<string>(CLIENT_BOT_KEY_LIST)
 export type ClientBotConfig = Pick<FlatBot, (typeof CLIENT_BOT_KEY_LIST)[number]>
 
 const ROOT_WIRE_KEYS = [
-  'appId', 'appSecretRef', 'brand', 'onboardingManaged', 'allowedOpenIds', 'allowedChatIds',
-  'allowAllUsers', 'requireMention', 'cwd', 'workspaceRoot', 'provider', 'model', 'agentPreset',
+  'appId', 'appSecretRef', 'brand', 'onboardingManaged', 'allowedChatIds', 'requireMention',
+  'cwd', 'workspaceRoot', 'provider', 'model', 'agentPreset',
   'progressUpdateMs', 'interactiveTimeoutMs', 'maxLiveAgents', 'commandAllowlist', 'contextMode',
   'contextBackend', 'contextP2pMaxMessages', 'contextP2pMaxChars', 'contextMaxMessages',
   'contextMaxChars', 'contextTimeoutMs', 'contextIncludeBot', 'defaultWorkspace', 'workspacePolicy',
@@ -228,8 +228,8 @@ const LEGACY_ROOT_FIELDS = [
  * convert the config shape (docs/17 §10.3, docs/18 §5 item 1).
  */
 const EDITABLE_LEGACY_KEY_LIST = [
-  'appId', 'appSecretRef', 'brand', 'allowedOpenIds', 'allowedChatIds', 'allowAllUsers',
-  'requireMention', 'provider', 'model', 'agentPreset', 'progressUpdateMs', 'interactiveTimeoutMs',
+  'appId', 'appSecretRef', 'brand', 'allowedChatIds', 'requireMention', 'provider', 'model',
+  'agentPreset', 'progressUpdateMs', 'interactiveTimeoutMs',
   'maxLiveAgents', 'commandAllowlist', 'contextMode', 'contextBackend', 'contextP2pMaxMessages',
   'contextP2pMaxChars', 'contextMaxMessages', 'contextMaxChars', 'contextTimeoutMs',
   'contextIncludeBot', 'defaultWorkspace', 'workspacePolicy', 'profileFile',
@@ -273,9 +273,9 @@ function toLegacyBot(current: FlatSettings, entry: Config): BotConfig {
     appId: current.appId.trim(),
     appSecretRef: current.appSecretRef.trim() || 'DSH_FEISHU_APP_SECRET',
     brand: current.brand,
-    allowedOpenIds: current.allowedOpenIds.split(/[\s,]+/u).filter(Boolean),
+    allowedOpenIds: [],
     allowedChatIds: current.allowedChatIds.split(/[\s,]+/u).filter(Boolean),
-    allowAllUsers: current.allowAllUsers,
+    allowAllUsers: true,
     requireMention: current.requireMention,
     defaultWorkspace: current.defaultWorkspace,
     workspacePolicy: current.workspacePolicy,
@@ -408,6 +408,8 @@ export class FeishuAdminService {
       for (const key of EDITABLE_BOT_KEY_LIST) {
         if (Object.hasOwn(input, key)) (base as unknown as Record<string, unknown>)[key] = structuredClone(input[key])
       }
+      base.allowedOpenIds = []
+      base.allowAllUsers = true
       base.sessionNamespace = previous.sessionNamespace ?? 'app'
       base.contextBackend = base.contextBackend === 'cli' ? 'sdk' : base.contextBackend
       return base
@@ -428,7 +430,7 @@ export class FeishuAdminService {
   }
 
   /**
-   * Whitelist + schema-check one single-bot root edit. Ranges and unions are
+   * Allow-key + schema-check one single-bot root edit. Ranges and unions are
    * validated by re-resolving the WHOLE flat value through `flatSchema`, so
    * the accepted bounds can never drift from the registered schema.
    */

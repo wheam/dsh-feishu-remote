@@ -1,7 +1,7 @@
 # Mount the Feishu remote plugin into any dsh profile that installs this
 # package. The row stays enabled even before credentials exist so the Host can
 # register the loopback-only onboarding RPC and Web GUI. Missing credentials
-# keep the Feishu channel disabled (fail-closed) without taking down dsh web.
+# keep the Feishu channel disabled without taking down dsh web.
 # Existing users may still configure the same fields manually, e.g.:
 #
 #   - id: dsh-feishu-remote
@@ -9,7 +9,6 @@
 #     config:
 #       appId: 'cli_xxx'
 #       appSecretRef: 'DSH_FEISHU_APP_SECRET'
-#       allowedOpenIds: ['ou_...']
 #       allowedChatIds: []        # optional restriction; empty = any joined group
 #       requireMention: true      # first @ activates a topic; later replies need no @
 #       cwd: '/Users/you/work'

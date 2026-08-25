@@ -84,8 +84,11 @@ describe('FeishuAdminService', () => {
     Object.assign(initial.bots[0]!, { appSecret: 'must-not-leak', futureSecret: 'also-hidden' })
     const h = harness(initial)
     const editor = await h.service.handleRpc('settings/editor-snapshot', {}, new AbortController().signal)
-    expect(JSON.stringify(editor)).not.toContain('must-not-leak')
-    expect(JSON.stringify(editor)).not.toContain('also-hidden')
+    const json = JSON.stringify(editor)
+    expect(json).not.toContain('must-not-leak')
+    expect(json).not.toContain('also-hidden')
+    expect(json).not.toContain('allowedOpenIds')
+    expect(json).not.toContain('allowAllUsers')
   })
 
   it('never sends host-only paths (feishuCliPath/statePath/inboundDir) to the browser', async () => {
@@ -115,6 +118,7 @@ describe('FeishuAdminService', () => {
     const bots = (ops as Array<{ op: string; path: string[]; value?: unknown }>).find(op => op.path[0] === 'bots')?.value as Array<Record<string, unknown>>
     expect(bots[0]).toMatchObject({
       appId: 'cli_primary', appSecretRef: 'REF_PRIMARY', sessionNamespace: 'legacy', contextBackend: 'sdk',
+      allowedOpenIds: [], allowAllUsers: true,
     })
     // Host-only paths must NOT be copied into the settings layer; the entry
     // ROOT values are re-overlaid host-side by unflatten() instead.
@@ -248,7 +252,6 @@ describe('FeishuAdminService', () => {
     const result = await h.service.handleRpc('settings/save-legacy', {
       revision: 7,
       config: {
-        allowedOpenIds: 'ou_owner, ou_mate',
         defaultWorkspace: '/work/project',
         workspacePolicy: 'locked',
         maxLiveAgents: 3,
@@ -261,11 +264,11 @@ describe('FeishuAdminService', () => {
     expect(expected).toBe(7)
     expect(ops.every(op => op.op === 'set')).toBe(true)
     expect(ops.map(op => op.path[0]).sort()).toEqual([
-      'allowedOpenIds', 'contextMode', 'defaultWorkspace', 'maxLiveAgents', 'workspacePolicy',
+      'contextMode', 'defaultWorkspace', 'maxLiveAgents', 'workspacePolicy',
     ])
     expect(h.current()).toMatchObject({
-      allowedOpenIds: 'ou_owner, ou_mate', defaultWorkspace: '/work/project',
-      workspacePolicy: 'locked', maxLiveAgents: 3, contextMode: 'off', appId: 'cli_primary',
+      defaultWorkspace: '/work/project', workspacePolicy: 'locked', maxLiveAgents: 3,
+      contextMode: 'off', appId: 'cli_primary',
     })
     expect(h.current().bots).toEqual([])
   })
@@ -278,6 +281,8 @@ describe('FeishuAdminService', () => {
       { cwd: '/evil' },
       { workspaceRoot: '/evil' },
       { onboardingManaged: true },
+      { allowedOpenIds: 'ou_owner' },
+      { allowAllUsers: false },
       { appSecret: 'super-secret' },
       { bots: [] },
       { maxTotalLiveAgents: 4 },

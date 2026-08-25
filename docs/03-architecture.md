@@ -40,11 +40,11 @@
   （去重）；卡片体积预算超限截断/折叠/新卡，全文落工作区文件并回显 session id
   （手机打不开 loopback Web UI）；输出脱敏。
 
-- **D5 安全 → 发送者白名单 fail-closed + 不绕过护栏。**
-  IM 消息以普通用户输入注入会话（受部署审批策略约束）；空 `allowedOpenIds` 拒绝一切；
-  群范围默认不限，非空 `allowedChatIds` 才收窄；每个话题首次由白名单用户 @后持久化激活，
+- **D5 边界 → 操作者开放 + 不绕过护栏。**
+  IM 消息以普通用户输入注入会话（受部署审批策略约束）；不按用户 open_id 做白名单判断；
+  群范围默认不限，非空 `allowedChatIds` 才收窄；每个话题首次由任意用户 @后持久化激活，
   首次 @ 回填前文，后续同话题免 @，其他话题静默；普通群则每一轮都必须 @，未 @消息只进入
-  下一轮有界历史上下文。@ 是触发信号，open_id 白名单才是操作者授权边界；卡片 pending 记录绑定操作者/会话/截止时间；
+  下一轮有界历史上下文。@ 是触发信号，不是用户授权；卡片 pending 仍绑定发起操作者、会话与截止时间，防止其他人接管正在进行的交互；
   凭据写本地私密文件（唯一来源 `.credentials.yaml`）；入站附件净化。
 
 - **D6 配置 → 首版 cordis.patch.yml（仅做配置覆盖）；P1 加 Web GUI 设置卡片（借 im-hub 的 client 注入）。**
@@ -58,7 +58,7 @@
 
 - **D9 首次开通 → PersonalAgent Device Flow，一次扫码创建并绑定。** Web GUI 通过 Host
   调用官方 SDK `registerApp()`；浏览器只显示短期二维码，App Secret 只进入 DSH credential
-  provider，扫码用户 open_id 自动成为 fail-closed owner。首次创建用 `createOnly: true`，
+  provider，操作者访问固定对所有人开放，不依赖扫码用户 open_id。首次创建用 `createOnly: true`，
   权限/事件/回调经 addons 在确认页明示；不采用聊天配对码、共享商店应用或云端消息中继。
   详细状态机、补偿式提交、权限降级与发布前置见 docs/16。
 

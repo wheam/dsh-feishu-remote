@@ -53,7 +53,7 @@ app identity 的隔离身份。每个 bot 使用独立 `appSecretRef`，并可�
 `defaultWorkspace`、`workspacePolicy: default|locked`、`profileFile` 和 `agentPreset`。
 
 新增机器人点击「添加机器人」：选择已有 PersonalAgent 或创建新机器人后，Host 会自动
-保存 Secret、追加 `bots[]` 配置、把扫码者设为初始允许用户并等待连接成功。App ID 与 Secret
+保存 Secret、追加 `bots[]` 配置并等待连接成功。个人操作者固定对所有人开放，App ID 与 Secret
 凭据引用无需手填；「手动配置（高级）」仅用于已经在外部管理凭据的应用。
 
 多机器人上下文后端固定为 `sdk`；不要配置 `contextBackend: cli`，共享 lark-cli profile 无法安全
@@ -66,7 +66,6 @@ app identity 的隔离身份。每个 bot 使用独立 `appSecretRef`，并可�
   disabled: false
   config:
     appId: 'cli_xxxx'
-    allowedOpenIds: ['ou_xxxx']   # 建议用 Host 本机扫码自动绑定；手工配置时从飞书管理端取完整 open_id
     allowedChatIds: []            # 空 = 任意已加入群可用；填写 oc_xxxx 可选地限制群范围
     requireMention: true          # 话题首次需 @；普通群始终每轮必须 @
 ```
@@ -83,19 +82,19 @@ app identity 的隔离身份。每个 bot 使用独立 `appSecretRef`，并可�
 > ✅ 2026-08-19 真实租户初验通过：应用「DSH MBP · 通用」（企业自建，
 > （App ID 略），版本 1.0.1，订阅 im.message.receive_v1 +
 > card.action.trigger）→ 飞书私聊 `/help` → 插件回命令卡（见飞书聊天截图）。
-> 白名单 = 应用创建者 open_id。经验：事件订阅必须随**新版本发布**才生效，
+> 当时测试使用应用创建者 open_id；2026-08-25 起不再按该 ID 限制操作者。经验：事件订阅必须随**新版本发布**才生效，
 > 且 app 详情的 `subscribed_callbacks` 只显示卡片回调，完整事件清单在
 > **版本详情**的 `event_infos` 里（勿被该字段误导）。
 
 1. 飞书完成一次需审批的真实任务，会话出现在 Web GUI 列表。
 2. 断网重连后长连接恢复；未结审批按状态机结算（六条路径均有单测，租户内抽查按钮/文字两条）。
-3. 白名单外 open_id 无法驱动任何操作；空 `allowedOpenIds` 拒绝一切；默认可在机器人加入的
-   任意群 @使用；配置非空 `allowedChatIds` 时，列表外群被拒。
+3. 任意 open_id 都可驱动操作；旧用户白名单字段即使仍存在也不生效；默认可在机器人加入的
+   任意群 @使用，配置非空 `allowedChatIds` 时列表外群被拒。
 4. 新话题先发两条不 @的资料（应无响应），第三条 @机器人（应结合前文回答）；之后在同话题
    直接发消息不 @（应继续进入同一 session）；另一个从未 @过的话题应保持静默；重启后已激活
    话题仍可免 @继续。
 5. 新建一个**普通群**（`chat_mode=group`），加入多名成员和机器人：多人连续聊天但不 @时
-   机器人应完全静默且不创建/推进 Session；白名单用户 @机器人后，应结合所有成员此前的
+   机器人应完全静默且不创建/推进 Session；任意用户 @机器人后，应结合所有成员此前的
    有界群历史执行并直接在群内回复；下一轮未 @仍静默，再次 @才执行，且复用同一群 Session。
 6. 连续发消息观察卡片更新频率（约 600ms 一次，全局限速）；断网期间发消息 → 重连后终态送达。
 7. 飞书会话具备 preset 工具能力（让 agent 执行一个 bash/fs 任务验证）。

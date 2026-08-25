@@ -54,12 +54,13 @@ DSH 仍处于 RC 阶段，相邻 RC 版本可能包含破坏性变化。安装�
 
 | 飞书场景 | 触发规则 | DSH Session |
 | --- | --- | --- |
-| 私聊 | 白名单用户直接发消息 | 每个私聊来源独立 |
-| 普通群 | 每一轮都必须由白名单用户明确 `@机器人` | 整个群共用一个 |
+| 私聊 | 任意用户直接发消息 | 每个私聊来源独立 |
+| 普通群 | 每一轮都必须由任意用户明确 `@机器人` | 整个群共用一个 |
 | 话题群 | 每个话题第一次必须 `@机器人` 激活；之后该话题可免 `@` | 每个话题独立 |
 
 普通群里未 `@` 的聊天不会单独启动 Agent，但在下次明确 `@` 时可以作为有界历史上下文注入。
-未激活的话题保持静默。白名单外用户不能激活话题、执行命令或驱动 Agent。
+未激活的话题保持静默。机器人不设个人操作者白名单：任何能联系到它的用户都可以激活话题、
+执行命令或驱动 Agent。
 
 ### 远程任务体验
 
@@ -77,7 +78,7 @@ DSH 仍处于 RC 阶段，相邻 RC 版本可能包含破坏性变化。安装�
 - 每轮都会告诉模型当前群名/群类型、发言人、消息/话题标识、@对象和附件元数据；
 - 回复群消息时按 `replyToMessageId` 精确读取被回复内容，保留其中的文档标题与链接；
 - 可选读取最近的私聊、群聊或话题历史，作为不可信上下文发送给当前模型；
-- 一个插件实例可管理多个飞书 App，每个机器人独立配置凭据、白名单、Workspace、模型和并发；
+- 一个插件实例可管理多个飞书 App，每个机器人独立配置凭据、可选群范围、Workspace、模型和并发；
 - 每个机器人可加载一份本机 Markdown Profile，作为稳定的角色和工作方式说明；
 - 可选配合 [`dsh-session-groups`](https://github.com/wheam/dsh-session-groups) 在 Web 左栏按飞书来源分组。
 
@@ -162,7 +163,7 @@ dsh plugin --profile web add "link:$DSH_FEISHU_PLUGIN_DIR"
 状态，但不能发起创建或补权，这是防止远端页面接触短期二维码和本机凭据写入能力的安全边界。
 
 选择已有机器人时不会重复创建应用；创建新机器人会生成归扫码者所有的 PersonalAgent。两种流程都会将 App Secret 写入 DSH 管理的
-`~/.dsh/.credentials.yaml`，并把扫码者的 `open_id` 设为初始白名单。Secret 不会返回浏览器，
+`~/.dsh/.credentials.yaml`，操作者无需登记 open_id 且固定对所有人开放。Secret 不会返回浏览器，
 也不会写入 `cordis.patch.yml`。
 
 卸载插件不会删除飞书侧应用、`~/.dsh/.credentials.yaml` 中的凭据或插件状态。重新安装后，如果
@@ -238,15 +239,13 @@ chmod 600 ~/.dsh/.credentials.yaml
     appId: cli_xxxxxxxxxxxxx
     appSecretRef: DSH_FEISHU_APP_SECRET
     brand: feishu
-    allowedOpenIds:
-      - ou_xxxxxxxxxxxxx
     allowedChatIds: []
     requireMention: true
 ```
 
-`allowedOpenIds` 为空时插件会拒绝所有用户；只有显式设置 `allowAllUsers: true` 才会开放给所有人。
-`allowedChatIds` 为空表示不额外限制群范围，但操作者仍必须通过用户白名单。保存后重启或等待设置
-热重载，再发送 `/help` 验证。
+操作者默认且固定对所有人开放，不需要填写用户 `open_id`。`allowedChatIds` 为空表示不额外限制
+群范围；非空时只限制机器人在哪些群接受任务，不影响私聊。保存后重启或等待设置热重载，再发送
+`/help` 验证。
 
 ## 常用命令
 
@@ -289,7 +288,7 @@ Workspace：
 不会替换或重复显示原机器人。
 
 添加时可以选择自己已有的 PersonalAgent，也可以扫码创建一个新的。
-插件会自动保存 App Secret、生成独立凭据引用、把扫码者加入初始白名单并建立长连接；不需要
+插件会自动保存 App Secret、生成独立凭据引用、开放所有操作者并建立长连接；不需要
 手抄 App ID 或 Secret。只有凭据已由外部单独管理的自建应用，才使用「手动配置（高级）」。
 
 多机器人模式中：
@@ -316,7 +315,6 @@ API key、密码或不希望发送给模型的内容。
         enabled: true
         appId: cli_xxxxxxxxxxxxx
         appSecretRef: DSH_FEISHU_PROJECT_SECRET
-        allowedOpenIds: [ou_xxxxxxxxxxxxx]
         defaultWorkspace: /Users/me/Projects/example
         workspacePolicy: locked
         profileFile: /Users/me/.dsh/bot-profiles/project-bot.md
@@ -327,7 +325,6 @@ API key、密码或不希望发送给模型的内容。
         enabled: true
         appId: cli_yyyyyyyyyyyyy
         appSecretRef: DSH_FEISHU_GENERAL_SECRET
-        allowedOpenIds: [ou_xxxxxxxxxxxxx]
         defaultWorkspace: /Users/me/Projects
         workspacePolicy: default
         contextBackend: sdk
@@ -346,9 +343,7 @@ API key、密码或不希望发送给模型的内容。
 | `appId` | `DSH_FEISHU_APP_ID` 环境变量 | 飞书 App ID |
 | `appSecretRef` | `DSH_FEISHU_APP_SECRET` | DSH 凭据引用名，不是 Secret 本身 |
 | `brand` | `feishu` | `feishu`、`lark` 或兼容别名 `larkoffice` |
-| `allowedOpenIds` | `[]` | 允许操作机器人的用户；空列表拒绝所有人 |
 | `allowedChatIds` | `[]` | 可选群白名单；空列表不限制已加入的群 |
-| `allowAllUsers` | `false` | 显式开放给所有用户，生产环境不建议开启 |
 | `requireMention` | `true` | 话题首次是否需要 `@`；普通群始终每轮需要 `@` |
 | `defaultWorkspace` | 空 | 首次绑定使用的 Workspace 路径、ID 或名称 |
 | `workspacePolicy` | `default` | `default` 允许切换；`locked` 强制默认 Workspace |
@@ -383,17 +378,17 @@ API key、密码或不希望发送给模型的内容。
 
 - `DSH_FEISHU_APP_ID`
 - `DSH_FEISHU_APP_SECRET`
-- `DSH_FEISHU_ALLOWED_OPEN_IDS`（逗号分隔）
 - `DSH_FEISHU_ALLOWED_CHAT_IDS`（逗号分隔）
-- `DSH_FEISHU_ALLOW_ALL_USERS`
 - `DSH_FEISHU_CLI_PATH`
 
 多机器人应使用各自的 `appSecretRef`，不要依赖共享的 legacy 环境变量。
 
 ## 隐私与安全边界
 
-- **访问控制默认关闭。** `allowedOpenIds` 为空时拒绝所有人，除非明确启用 `allowAllUsers`。
-- **群范围与用户权限分开。** `allowedChatIds: []` 只表示不限制群，不代表群成员都有操作权限。
+- **操作者固定开放。** 插件不按用户 `open_id` 做白名单判断；任何能联系到机器人的用户都可以
+  发起任务。旧配置中的 `allowedOpenIds`、`allowAllUsers` 以及同名环境变量只为升级兼容而接受，
+  运行时会忽略。
+- **群范围可选收窄。** `allowedChatIds: []` 表示不限制机器人已加入的群；非空列表只接受指定群。
 - **审批只授权一次。** 审批卡与操作者、聊天、Session 和截止时间绑定，重复或越权操作被拒绝。
 - **聊天历史会发给模型。** 开启 `contextMode: auto` 后，被读取的群聊、话题和私聊历史会注入
   DSH durable history，并发送给当前模型提供商。它们被标记为不可信上下文，但插件只做密钥
@@ -461,11 +456,10 @@ dsh --profile web --dump-config
 依次检查：
 
 1. 设置页是否显示已连接；
-2. `allowedOpenIds` 是否包含当前 App 身份域下的完整 `open_id`；
-3. 非空 `allowedChatIds` 是否包含当前群；
-4. 普通群本轮是否明确 `@机器人`，话题是否已由白名单用户激活；
-5. 飞书应用版本是否已经发布并包含消息事件；
-6. Host 日志是否出现凭据、权限、长连接或限流错误。
+2. 非空 `allowedChatIds` 是否包含当前群；
+3. 普通群本轮是否明确 `@机器人`，话题是否已由任意用户激活；
+4. 飞书应用版本是否已经发布并包含消息事件；
+5. Host 日志是否出现凭据、权限、长连接或限流错误。
 
 ### 卡片按钮没有反应
 

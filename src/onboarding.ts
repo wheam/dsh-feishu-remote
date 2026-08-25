@@ -107,7 +107,6 @@ export interface OnboardingStatus {
   providerStatus?: 'polling' | 'slow_down' | 'domain_switched'
   app?: {
     appIdSuffix: string
-    ownerOpenIdSuffix?: string
     botName?: string
     brand?: LarkBrand
   }
@@ -244,7 +243,6 @@ function onboardedBot(
   appId: string,
   appSecretRef: string,
   brand: LarkBrand,
-  ownerOpenId: string,
   existing: readonly FlatSettings['bots'][number][],
 ): FlatSettings['bots'][number] {
   return {
@@ -255,9 +253,9 @@ function onboardedBot(
     brand,
     // statePath / inboundDir / feishuCliPath are host-only and never live in
     // the settings layer; the host overlays them in unflatten().
-    allowedOpenIds: [ownerOpenId],
+    allowedOpenIds: [],
     allowedChatIds: [],
-    allowAllUsers: false,
+    allowAllUsers: true,
     requireMention: true,
     defaultWorkspace: '',
     workspacePolicy: 'default',
@@ -810,18 +808,7 @@ export class PersonalAgentOnboardingService {
           `飞书没有授予核心能力：${probe.capabilities.missingCore.join('、')}。请重新扫码确认权限。`,
         )
       }
-      const scannedOwner = result.user_info?.open_id?.trim()
       const previousSettings = session.previousSettings!
-      const previousOwners = session.destination === 'legacy'
-        ? previousSettings.allowedOpenIds
-          .split(/[\s,]+/u)
-          .map(item => item.trim())
-          .filter(Boolean)
-        : []
-      const ownerOpenId = scannedOwner || probe.ownerOpenId || (session.mode === 'update' ? previousOwners[0] : undefined)
-      if (ownerOpenId === undefined || ownerOpenId === '') {
-        throw new OnboardingError('owner_missing', '应用已创建，但无法确认 owner；为保证安全，未切换本地配置。')
-      }
       const settingsUnchanged = session.destination === 'new-bot'
         ? sameBotBindings(this.settings.get(), previousSettings)
         : sameBinding(this.settings.get(), previousSettings)
@@ -860,7 +847,7 @@ export class PersonalAgentOnboardingService {
             if (!sameBotBindings(this.settings.get(), previousSettings)) {
               throw new OnboardingError('settings_changed', '保存扫码结果前机器人列表已被修改；未覆盖较新的设置。', false)
             }
-            const bot = onboardedBot(appId, refName, brand, ownerOpenId, previousSettings.bots)
+            const bot = onboardedBot(appId, refName, brand, previousSettings.bots)
             const bots = [...previousSettings.bots, bot]
             validateMultiBotConfig(bots)
             await this.ctx.settings.mutate(SETTINGS_NAMESPACE, [
@@ -872,8 +859,10 @@ export class PersonalAgentOnboardingService {
               appSecretRef: refName,
               brand,
               onboardingManaged: true,
+              allowedOpenIds: '',
+              allowAllUsers: true,
               ...(session.mode === 'create' || appId !== previousSettings.appId
-                ? { allowedOpenIds: ownerOpenId, allowedChatIds: '', allowAllUsers: false }
+                ? { allowedChatIds: '' }
                 : {}),
             })
           }
@@ -893,7 +882,6 @@ export class PersonalAgentOnboardingService {
           destination: session.destination,
           app: {
             appIdSuffix: suffix(appId),
-            ownerOpenIdSuffix: suffix(ownerOpenId, 4),
             ...(probe.appName === undefined ? {} : { botName: probe.appName }),
             brand,
           },
@@ -908,7 +896,6 @@ export class PersonalAgentOnboardingService {
             destination: session.destination,
             app: {
               appIdSuffix: suffix(appId),
-              ownerOpenIdSuffix: suffix(ownerOpenId, 4),
               ...(health.botName === undefined && probe.appName === undefined
                 ? {}
                 : { botName: health.botName ?? probe.appName }),
@@ -962,7 +949,6 @@ export class PersonalAgentOnboardingService {
             ...(rolledBack || selectionChanged ? {} : {
               app: {
                 appIdSuffix: suffix(appId),
-                ownerOpenIdSuffix: suffix(ownerOpenId, 4),
                 ...(probe.appName === undefined ? {} : { botName: probe.appName }),
                 brand,
               },

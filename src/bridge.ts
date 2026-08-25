@@ -12,7 +12,7 @@
  * - per-origin control queue; `/stop` = `cancel({kind:'user'}, {keepInbox:true})`
  * - mutable cards via `session/event` with ~1s throttled updates, step-level
  *   chunk/final replacement, seq watermark dedup, terminal outcome mapping (D4/§2.5)
- * - fail-closed sender allowlist + optional group restriction; ask-user tools are restricted on Feishu sessions
+ * - open sender access + optional group restriction; ask-user tools are restricted on Feishu sessions
  *   (no browser-routed questions; D5/D8/§2.4)
  * - every outbound API call flows through the application-level scheduler (D7)
  */
@@ -427,13 +427,8 @@ export class FeishuRemoteBridge {
 
   // ---------------------------------------------------------------- guards
 
-  private isGloballyAllowed(openId: string): boolean {
-    return this.config.allowAllUsers || this.config.allowedOpenIds.includes(openId)
-  }
-
   private isAuthorizedAction(entry: BridgeSession, openId: string, chatId: string): boolean {
-    if (entry.route.chatId !== chatId || !this.isGloballyAllowed(openId)) return false
-    return entry.route.ownerOpenId === openId
+    return entry.route.chatId === chatId && entry.route.ownerOpenId === openId
   }
 
   private freshHeaders(): Promise<SessionHeader[]> {
@@ -1084,20 +1079,10 @@ export class FeishuRemoteBridge {
   // ---------------------------------------------------------------- inbound
 
   private async onMessage(message: NormalizedMessage): Promise<void> {
-    // 3-second callback budget: authenticate synchronously, enqueue the rest.
+    // 3-second callback budget: reject stopped bridges synchronously and
+    // enqueue the rest. User access is intentionally open; chat scope and
+    // per-flow ownership are enforced independently below.
     if (this.stopped) return
-    if (!this.isGloballyAllowed(message.senderId)) {
-      // Sticky-topic mode receives every group reply. Keep normal conversation
-      // from unauthorized participants silent; audit only explicit attempts to
-      // invoke the bot (private messages or @mentions).
-      if (message.chatType !== 'group' || message.mentionedBot) {
-        this.logger.warn(
-          '已拒绝未授权飞书用户（open_id 已脱敏；请在 Host 本机设置页扫码绑定，或从飞书管理端确认完整 ID）：sender=%s chat=%s message=%s',
-          diagnosticId(message.senderId), message.chatId, message.messageId,
-        )
-      }
-      return
-    }
     if (
       message.chatType === 'group'
       && this.config.allowedChatIds.length > 0
@@ -3362,8 +3347,7 @@ export class FeishuRemoteBridge {
         this.logger.warn('Workspace 卡片 token 无效或已过期')
         return
       }
-      if (event.operator.openId !== flow.expectedOpenId || event.chatId !== flow.chatId
-        || !this.isGloballyAllowed(event.operator.openId)) {
+      if (event.operator.openId !== flow.expectedOpenId || event.chatId !== flow.chatId) {
         this.logger.warn('拒绝越权 Workspace 卡片操作：operator=%s chat=%s', diagnosticId(event.operator.openId), event.chatId)
         return
       }
@@ -3511,7 +3495,7 @@ export class FeishuRemoteBridge {
     if (event.action !== 'added' || !['CrossMark', 'STOP', 'NO'].includes(event.emojiType)) return
     const entry = [...this.sessions.values()].find(item => item.progress?.progressMessageId === event.messageId)
     if (entry === undefined) return
-    if (!this.isGloballyAllowed(event.operator.openId) || entry.route.ownerOpenId !== event.operator.openId) return
+    if (entry.route.ownerOpenId !== event.operator.openId) return
     entry.handle.agent.cancel({ kind: 'user' }, { keepInbox: true })
   }
 

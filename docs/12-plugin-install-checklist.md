@@ -52,7 +52,7 @@ grep -m1 '"version"' /opt/homebrew/lib/node_modules/@deepseek-ai/dsh/package.jso
 | 4 | **浏览器控制台无插件报错** | DevTools 控制台检查：无 `Failed to load plugins`、无 slot/key 报错 |
 | 5 | **打开插件对应设置页/主要 UI** | 如「Feishu Remote」设置卡片能渲染、能编辑保存 |
 | 6 | 前端注册成功 | 卡片出现在插件设置列表，保存后 host 热重载正常 |
-| 6a | 多机器人管理面板 | 点击「添加机器人」时在后台将 legacy 配置原子迁移；扫码新增自动生成 bot/凭据引用/owner 白名单；默认只显示机器人列表与运行状态，高级字段保持折叠 |
+| 6a | 多机器人管理面板 | 点击「添加机器人」时在后台将 legacy 配置原子迁移；扫码新增自动生成 bot/凭据引用并固定开放操作者；默认只显示机器人列表与运行状态，高级字段保持折叠 |
 | 6b | 双 App 身份隔离 | 两 App 同群/同话题分别 @，Session ID、分组、回复和审批卡互不串线 |
 
 > 红线：**"dump-config 通过"或"HTTP 200"单独都不能作为安装成功的依据**——

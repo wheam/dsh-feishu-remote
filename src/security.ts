@@ -64,13 +64,13 @@ export function parseBooleanEnv(value: string | undefined): boolean {
   return value !== undefined && ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())
 }
 
-/** Fail-closed bridge-wide user check (no per-project dimension anymore). */
+/** @deprecated User access is always open; retained for API compatibility. */
 export function isOpenIdAllowed(
-  openId: string,
-  allowAllUsers: boolean,
-  allowedOpenIds: readonly string[],
+  _openId: string,
+  _allowAllUsers: boolean,
+  _allowedOpenIds: readonly string[],
 ): boolean {
-  return allowAllUsers || allowedOpenIds.includes(openId)
+  return true
 }
 
 export function safeFileName(value: string | undefined, fallback: string): string {

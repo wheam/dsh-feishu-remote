@@ -15,7 +15,7 @@ import {
 } from '../src/settings.js'
 
 describe('settings namespace (flat ↔ nested)', () => {
-  it('flattens the bridge config into the scalar-only shape', () => {
+  it('flattens the bridge config and canonicalizes retired user filters to open access', () => {
     const flat = flatten({
       appId: 'cli_1',
       allowedOpenIds: ['ou_1', 'ou_2'],
@@ -26,7 +26,8 @@ describe('settings namespace (flat ↔ nested)', () => {
       commandAllowlist: ['status'],
     })
     expect(flat.appId).toBe('cli_1')
-    expect(flat.allowedOpenIds).toBe('ou_1, ou_2')
+    expect(flat.allowedOpenIds).toBe('')
+    expect(flat.allowAllUsers).toBe(true)
     expect(flat.allowedChatIds).toBe('')
     expect(flat.appSecretRef).toBe('DSH_FEISHU_APP_SECRET')
     expect(flat.brand).toBe('feishu')
@@ -67,7 +68,8 @@ describe('settings namespace (flat ↔ nested)', () => {
     })
     const config = unflatten(flat, entry)
     expect(config.appId).toBe('cli_1')
-    expect(config.allowedOpenIds).toEqual(['ou_1'])
+    expect(config.allowedOpenIds).toEqual([])
+    expect(config.allowAllUsers).toBe(true)
     expect(config.allowedChatIds).toEqual(['oc_1'])
     expect(config.progressUpdateMs).toBe(500)
     expect(config.appSecretRef).toBe('DSH_FEISHU_APP_SECRET')

@@ -8,13 +8,14 @@ const BASE = {
   workspaceRoot: '/tmp/workspace',
 }
 
-describe('resolveConfig (Workspace Registry routing, fail-closed sender access)', () => {
+describe('resolveConfig (Workspace Registry routing, open sender access)', () => {
   it('resolves required fields with defaults', () => {
     const config = resolveConfig(BASE)
     expect(config.appId).toBe('cli_test')
     expect(config.cwd).toBe('/tmp/workspace')
     expect(config.workspaceRoot).toBe('/tmp/workspace')
-    expect(config.allowAllUsers).toBe(false)
+    expect(config.allowedOpenIds).toEqual([])
+    expect(config.allowAllUsers).toBe(true)
     expect(config.requireMention).toBe(true)
     expect(config.progressUpdateMs).toBe(600)
     expect(config.workingReaction).toBe(true)
@@ -44,20 +45,18 @@ describe('resolveConfig (Workspace Registry routing, fail-closed sender access)'
       .toThrow('cwd must be inside workspaceRoot')
   })
 
-  it('merges allowlists from config and environment', () => {
+  it('ignores retired user allowlists while retaining the optional group restriction', () => {
     const config = resolveConfig(
-      { ...BASE, allowedOpenIds: ['ou_1'], allowedChatIds: ['oc_1'] },
-      { DSH_FEISHU_ALLOWED_OPEN_IDS: 'ou_2,ou_3', DSH_FEISHU_ALLOWED_CHAT_IDS: 'oc_2' },
+      { ...BASE, allowedOpenIds: ['ou_1'], allowAllUsers: false, allowedChatIds: ['oc_1'] },
+      {
+        DSH_FEISHU_ALLOWED_OPEN_IDS: 'ou_2,ou_3',
+        DSH_FEISHU_ALLOW_ALL_USERS: '0',
+        DSH_FEISHU_ALLOWED_CHAT_IDS: 'oc_2',
+      },
     )
-    expect(config.allowedOpenIds).toEqual(['ou_1', 'ou_2', 'ou_3'])
+    expect(config.allowedOpenIds).toEqual([])
+    expect(config.allowAllUsers).toBe(true)
     expect(config.allowedChatIds).toEqual(['oc_1', 'oc_2'])
-  })
-
-  it('keeps allowAllUsers false unless explicitly enabled', () => {
-    const config = resolveConfig(BASE)
-    expect(config.allowAllUsers).toBe(false)
-    expect(resolveConfig({ ...BASE, allowAllUsers: true }).allowAllUsers).toBe(true)
-    expect(resolveConfig(BASE, { DSH_FEISHU_ALLOW_ALL_USERS: '1' }).allowAllUsers).toBe(true)
   })
 
   it('reads credentials through the environment reference', () => {
@@ -124,9 +123,11 @@ describe('resolveConfig (Workspace Registry routing, fail-closed sender access)'
       DSH_FEISHU_CLI_PATH: '/wrong/cli',
     })
     expect(resolved).toMatchObject({
-      botId: 'bot-a', appId: 'cli_a', appSecret: 'bot-secret', allowAllUsers: false,
-      allowedOpenIds: [], contextBackend: 'sdk', feishuCliPath: '', multiBot: true,
+      botId: 'bot-a', appId: 'cli_a', appSecret: 'bot-secret',
+      contextBackend: 'sdk', feishuCliPath: '', multiBot: true,
     })
+    expect(resolved.allowedOpenIds).toEqual([])
+    expect(resolved.allowAllUsers).toBe(true)
   })
 
   /**

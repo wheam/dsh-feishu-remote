@@ -183,8 +183,8 @@ window.__ModuleLoader__.load({
 
 		/** Per-bot keys the GUI owns. `id` rides along so the Host can merge by bot. */
 		const BOT_DRAFT_KEYS = [
-			"id", "enabled", "appId", "appSecretRef", "brand", "allowedOpenIds", "allowedChatIds",
-			"allowAllUsers", "requireMention", "defaultWorkspace", "workspacePolicy", "agentPreset",
+			"id", "enabled", "appId", "appSecretRef", "brand", "allowedChatIds", "requireMention",
+			"defaultWorkspace", "workspacePolicy", "agentPreset",
 			"profileFile", "provider", "model", "maxLiveAgents", "contextMode"
 		];
 		/**
@@ -192,7 +192,7 @@ window.__ModuleLoader__.load({
 		 * EDITABLE_LEGACY_KEY_LIST; `id`/`enabled` have no root counterpart.
 		 */
 		const LEGACY_DRAFT_KEYS = BOT_DRAFT_KEYS.filter((key) => key !== "id" && key !== "enabled");
-		const LIST_KEYS = ["allowedOpenIds", "allowedChatIds"];
+		const LIST_KEYS = ["allowedChatIds"];
 		const LEGACY_ROW_ID = "legacy";
 
 		function str(value) {
@@ -262,9 +262,7 @@ window.__ModuleLoader__.load({
 				appId: str(bot.appId).trim(),
 				appSecretRef: str(bot.appSecretRef).trim(),
 				brand: bot.brand === "lark" || bot.brand === "larkoffice" ? bot.brand : "feishu",
-				allowedOpenIds: toList(bot.allowedOpenIds),
 				allowedChatIds: toList(bot.allowedChatIds),
-				allowAllUsers: bot.allowAllUsers === true,
 				requireMention: bot.requireMention !== false,
 				defaultWorkspace: str(bot.defaultWorkspace),
 				workspacePolicy: bot.workspacePolicy === "locked" ? "locked" : "default",
@@ -421,7 +419,7 @@ window.__ModuleLoader__.load({
 
 		/**
 		 * Status model (docs/18 §2.2). Priority: 已停用 → 配置不完整 → 读取中 →
-		 * 配置有问题 → 连接失败 → 限流 → 已连接但无人可用 → 已连接 → 连接中 → 未连接.
+		 * 配置有问题 → 连接失败 → 限流 → 已连接 → 连接中 → 未连接.
 		 * Permission-missing/providerStatus stay inside the scan card (P1).
 		 * `label`/`detail` are dictionary keys so every string stays translatable;
 		 * `safeDetail` is the Host's already-safe sentence, run through `safeText`
@@ -455,9 +453,6 @@ window.__ModuleLoader__.load({
 				return { tone: "err", label: "status.failed", detail: "status.failedDetail", ...extra, action: "retry" };
 			}
 			const live = Number.isFinite(status.liveAgents) ? status.liveAgents : 0;
-			if (status.connected === true && bot.allowAllUsers !== true && toList(bot.allowedOpenIds).length === 0) {
-				return { tone: "warn", label: "status.noUsers", detail: "status.noUsersDetail", action: "users" };
-			}
 			if (status.connected === true) {
 				return { tone: "ok", label: "status.connected", detail: "status.connectedDetail", params: { live } };
 			}
@@ -465,17 +460,14 @@ window.__ModuleLoader__.load({
 			return { tone: "err", label: "status.offline", detail: "status.offlineDetail", ...extra };
 		}
 
-		/** One-line list summary: 工作区 · 谁能用 · 运行中任务. */
+		/** One-line list summary: 工作区 · 用户/群范围 · 运行中任务. */
 		function botRowSummary(bot, status) {
 			const segments = [];
 			const workspace = bot.defaultWorkspace.trim();
 			if (workspace === "") segments.push({ key: "row.workspaceUnset" });
 			else segments.push({ key: bot.workspacePolicy === "locked" ? "row.workspaceLocked" : "row.workspace", params: { path: workspace } });
-			const users = toList(bot.allowedOpenIds).length;
 			const chats = toList(bot.allowedChatIds).length;
-			if (bot.allowAllUsers === true) segments.push({ key: "row.everyone" });
-			else if (users === 0) segments.push({ key: "row.noUsers" });
-			else segments.push({ key: "row.users", params: { count: users } });
+			segments.push({ key: "row.everyone" });
 			if (chats > 0) segments.push({ key: "row.chats", params: { count: chats } });
 			const live = Number.isFinite(status?.liveAgents) ? status.liveAgents : 0;
 			if (status?.connected === true && live > 0) segments.push({ key: "row.tasks", params: { count: live } });
@@ -952,26 +944,16 @@ window.__ModuleLoader__.load({
 			const changes = changedBotKeys(props.original, bot).length;
 			const isLegacy = admin.mode === "legacy";
 			const lastBot = admin.bots.length <= 1;
-			// 「已连接但无人可用」 jumps to the 允许的用户 row instead of describing it.
-			const usersRow = react.useRef(null);
 			const [retryHint, setRetryHint] = react.useState(false);
 			react.useEffect(() => { setRetryHint(false); }, [bot.id, model.label]);
-			const focusUsers = () => {
-				const node = usersRow.current;
-				if (node === null || node === void 0) return;
-				node.scrollIntoView?.({ block: "center", behavior: "smooth" });
-				node.querySelector?.("input")?.focus?.();
-			};
 			// Retry is a single-bot action only: multi-bot slots reconnect from the
 			// saved config, so the page says that instead of inventing an RPC.
-			const statusAction = model.action === "users"
-				? h("button", { type: "button", className: cx.secondary, onClick: focusUsers }, t("status.actionUsers"), "users")
-				: model.action === "retry"
-					? h("button", {
-						type: "button", className: cx.secondary, disabled,
-						onClick: () => { if (isLegacy) props.onboardingRetry(); else setRetryHint(true); }
-					}, t("status.actionRetry"), "retry")
-					: void 0;
+			const statusAction = model.action === "retry"
+				? h("button", {
+					type: "button", className: cx.secondary, disabled,
+					onClick: () => { if (isLegacy) props.onboardingRetry(); else setRetryHint(true); }
+				}, t("status.actionRetry"), "retry")
+				: void 0;
 			return h("div", { className: cx.page }, [
 				h("div", { className: cx.crumbs }, [
 					h("button", { type: "button", className: cx.link, onClick: props.onBack }, t("settings.navLabel"), "back"),
@@ -1032,13 +1014,9 @@ window.__ModuleLoader__.load({
 				h("p", { className: cx.secTitle }, t("group.access"), "gAccess"),
 				h("div", { className: cx.card }, [
 					settingRow({
-						key: "allowedOpenIds", column: true, ref: usersRow,
-						label: t("f.users"), hint: t("f.usersHint"),
-						control: h(ChipsControl, {
-							values: bot.allowedOpenIds, disabled, label: t("f.users"),
-							placeholder: t("p.users"), removeLabel: t("f.chipRemove"),
-							onChange: (value) => edit("allowedOpenIds", value)
-						})
+						key: "userAccess",
+						label: t("f.userAccess"), hint: t("f.userAccessHint"),
+						control: h("span", { className: cx.sub }, t("row.everyone"))
 					}),
 					settingRow({
 						key: "allowedChatIds", column: true,
@@ -1055,17 +1033,6 @@ window.__ModuleLoader__.load({
 						control: h(Toggle, {
 							on: bot.requireMention !== false, disabled, label: t("f.requireMention"),
 							onToggle: (value) => edit("requireMention", value)
-						})
-					}),
-					settingRow({
-						key: "allowAllUsers", danger: true,
-						label: t("f.allowAll"), hint: t("f.allowAllHint"),
-						control: h(Toggle, {
-							on: bot.allowAllUsers === true, disabled, danger: true, label: t("f.allowAll"),
-							onToggle: (value) => {
-								if (value && typeof window !== "undefined" && !window.confirm(t("f.allowAllConfirm"))) return;
-								edit("allowAllUsers", value);
-							}
 						})
 					})
 				], "cAccess"),
@@ -1748,8 +1715,7 @@ window.__ModuleLoader__.load({
 			"brand.feishu": "Feishu", "brand.lark": "Lark",
 			"row.newBot": "New bot", "row.unnamed": "Bot …{suffix}",
 			"row.workspace": "{path}", "row.workspaceLocked": "{path} (fixed)", "row.workspaceUnset": "No default workspace",
-			"row.everyone": "Open to everyone", "row.noUsers": "No user allowed yet",
-			"row.users": "{count} user(s)", "row.chats": "{count} group(s)", "row.tasks": "{count} task(s) running",
+			"row.everyone": "Open to everyone", "row.chats": "{count} group(s)", "row.tasks": "{count} task(s) running",
 			"status.disabled": "Disabled", "status.disabledDetail": "This bot is turned off and ignores messages.",
 			"status.incomplete": "Incomplete", "status.incompleteDetail": "Connection details are missing — scan again to bind it.",
 			"status.loading": "Loading", "status.loadingDetail": "Reading the connection state…",
@@ -1767,9 +1733,8 @@ window.__ModuleLoader__.load({
 			"status.reason.presetUnavailable": "The agent preset is unavailable — pick another one or leave it empty.",
 			"status.reason.configInvalid": "Some settings are incomplete or not allowed — check the rows below.",
 			"status.rateLimited": "Slowed down by Feishu", "status.rateLimitedDetail": "Feishu is limiting requests; the bot keeps retrying on its own.",
-			"status.actionRetry": "Retry", "status.actionUsers": "Add a user",
+			"status.actionRetry": "Retry",
 			"status.retryMultiHint": "Check the settings below and save — the bot reconnects on its own.",
-			"status.noUsers": "Nobody can use it", "status.noUsersDetail": "Connected, but no one is allowed to send it tasks yet.",
 			"status.connected": "Connected", "status.connectedDetail": "{live} task(s) running",
 			"status.connecting": "Connecting", "status.connectingDetail": "Establishing the connection…",
 			"status.offline": "Not connected", "status.offlineDetail": "The bot is currently not connected.",
@@ -1777,22 +1742,19 @@ window.__ModuleLoader__.load({
 			"detail.app": "App …{suffix}",
 			"detail.lastConnectedToday": "last connected {time} (this run)",
 			"detail.lastConnected": "last connected {time} (this run)",
-			"group.workspace": "Workspace", "group.access": "Who can use it",
+			"group.workspace": "Workspace", "group.access": "Chat access",
 			"group.agent": "Role and model", "group.advanced": "Advanced", "group.advancedOpen": "Connection, limits and removal",
 			"f.defaultWorkspace": "Default workspace",
 			"f.defaultWorkspaceHint": "Directory a new chat binds to. Leave empty to let people pick it in Feishu.",
 			"f.workspaceSwitch": "Allow switching workspace in chat",
 			"f.workspaceSwitchHint": "Off: every chat is fixed to the default workspace and /workspace is rejected.",
-			"f.users": "Allowed users",
-			"f.usersHint": "People not listed are rejected silently. Whoever scanned the QR is already included.",
+			"f.userAccess": "User access",
+			"f.userAccessHint": "There is no per-user allowlist. Anyone who can reach the bot can send it tasks.",
 			"f.chats": "Restrict to groups",
-			"f.chatsHint": "Empty adds no extra group restriction, but the user list still applies.",
+			"f.chatsHint": "Empty accepts messages from any group the bot has joined. Add group IDs only when this bot should be limited to specific groups.",
 			"f.chipRemove": "Remove",
 			"f.requireMention": "First use in a topic needs an @mention",
 			"f.requireMentionHint": "Topic chats go @-free after the first mention. Ordinary groups ALWAYS need an @ for every task.",
-			"f.allowAll": "Open to everyone",
-			"f.allowAllHint": "Ignores the user list: anyone who can reach the bot can drive the Agent. Test environments only.",
-			"f.allowAllConfirm": "Let anyone who can reach this bot run tasks on this machine?",
 			"f.profile": "Role description (Profile)",
 			"f.profileHint": "A local Markdown file sent as the system prompt. Never put secrets in it.",
 			"f.provider": "Model provider", "f.providerHint": "Empty follows the DSH default.",
@@ -1812,7 +1774,6 @@ window.__ModuleLoader__.load({
 			"f.removeLastHint": "Keep at least one bot — turn it off instead if you do not need it.",
 			"f.removeConfirm": "Remove “{name}” from DSH? The Feishu app itself is not deleted.",
 			"p.defaultWorkspace": "e.g. /Users/you/Projects/curio",
-			"p.users": "Paste ou_… and press Enter",
 			"p.chats": "Paste oc_… and press Enter",
 			"p.profile": "e.g. /Users/you/.dsh/bot-profiles/curio.md",
 			"p.provider": "e.g. deepseek", "p.model": "e.g. deepseek-v4-flash", "p.preset": "e.g. standard",
@@ -1850,9 +1811,9 @@ window.__ModuleLoader__.load({
 			"gui.blocked.userLayerDirty": "The settings file was changed outside this page. Editing is paused here so those changes are not overwritten.",
 			"gui.blocked.generic": "These settings cannot be edited safely from this page right now. Check the DSH settings file on this machine, then reopen this page.",
 			"onboarding.firstTitle": "Scan with Feishu to connect your first bot",
-			"onboarding.firstDescription": "Pick a bot you already own, or create a new one. Its secret is stored on this machine and your account becomes the first allowed user.",
+			"onboarding.firstDescription": "Pick a bot you already own, or create a new one. Its secret is stored on this machine and anyone who can reach the bot can use it.",
 			"onboarding.addTitle": "Add a bot",
-			"onboarding.addDescription": "Scan to pick an existing bot or create a new one. App ID, secret storage, owner access and the connection are configured automatically.",
+			"onboarding.addDescription": "Scan to pick an existing bot or create a new one. App ID, secret storage and the connection are configured automatically; user access is open.",
 			"onboarding.manageTitle": "Rebind this bot",
 			"onboarding.manageDescription": "Scanning here replaces the app this bot uses; it does not add another bot.",
 			"onboarding.select": "Use an existing bot", "onboarding.create": "Create a new bot",
@@ -1891,8 +1852,7 @@ window.__ModuleLoader__.load({
 			"brand.feishu": "飞书", "brand.lark": "Lark",
 			"row.newBot": "新机器人", "row.unnamed": "机器人 …{suffix}",
 			"row.workspace": "{path}", "row.workspaceLocked": "{path}（已锁定）", "row.workspaceUnset": "未设置默认工作区",
-			"row.everyone": "所有人可用", "row.noUsers": "尚未授权任何用户",
-			"row.users": "{count} 位用户", "row.chats": "限定 {count} 个群聊", "row.tasks": "正在运行 {count} 个任务",
+			"row.everyone": "所有人可用", "row.chats": "限定 {count} 个群聊", "row.tasks": "正在运行 {count} 个任务",
 			"status.disabled": "已停用", "status.disabledDetail": "这个机器人已停用，不会接收消息。",
 			"status.incomplete": "待完成", "status.incompleteDetail": "还缺少连接信息，请重新扫码绑定。",
 			"status.loading": "读取中", "status.loadingDetail": "正在读取连接状态…",
@@ -1910,9 +1870,8 @@ window.__ModuleLoader__.load({
 			"status.reason.presetUnavailable": "Agent 预设不可用，请换一个或留空。",
 			"status.reason.configInvalid": "有设置不完整或不被允许，请检查下面的项目。",
 			"status.rateLimited": "已被飞书限流", "status.rateLimitedDetail": "飞书正在限制请求频率，机器人会自动重试。",
-			"status.actionRetry": "重试", "status.actionUsers": "添加用户",
+			"status.actionRetry": "重试",
 			"status.retryMultiHint": "请检查配置后保存，机器人会自动重连",
-			"status.noUsers": "无人可用", "status.noUsersDetail": "已连接，但还没有人被允许给它发任务。",
 			"status.connected": "已连接", "status.connectedDetail": "正在运行 {live} 个任务",
 			"status.connecting": "连接中", "status.connectingDetail": "正在建立连接…",
 			"status.offline": "未连接", "status.offlineDetail": "机器人当前未连接。",
@@ -1920,22 +1879,19 @@ window.__ModuleLoader__.load({
 			"detail.app": "App …{suffix}",
 			"detail.lastConnectedToday": "本次运行最近连接 今天 {time}",
 			"detail.lastConnected": "本次运行最近连接 {time}",
-			"group.workspace": "工作区", "group.access": "谁能使用",
+			"group.workspace": "工作区", "group.access": "使用范围",
 			"group.agent": "角色与模型", "group.advanced": "高级", "group.advancedOpen": "连接信息、任务上限与移除",
 			"f.defaultWorkspace": "默认工作区",
 			"f.defaultWorkspaceHint": "新会话首次绑定的目录。留空时由使用者在飞书里选择。",
 			"f.workspaceSwitch": "允许在聊天里切换工作区",
 			"f.workspaceSwitchHint": "关闭后所有聊天固定使用默认工作区，/workspace 命令会被拒绝。",
-			"f.users": "允许的用户",
-			"f.usersHint": "未列出的人发消息会被静默拒绝。扫码的人已自动加入。",
+			"f.userAccess": "操作者",
+			"f.userAccessHint": "不设个人白名单，任何能联系到机器人的人都可以给它发任务。",
 			"f.chats": "限定群聊",
-			"f.chatsHint": "留空不额外限制群，但仍受上面的用户名单限制。",
+			"f.chatsHint": "留空时接受机器人已加入的任意群；只有需要限定到特定群时才填写群 ID。",
 			"f.chipRemove": "移除",
 			"f.requireMention": "话题首次使用需要 @机器人",
 			"f.requireMentionHint": "话题群首次 @ 之后该话题免 @。普通群每一轮任务始终需要 @，不受此开关影响。",
-			"f.allowAll": "对所有人开放",
-			"f.allowAllHint": "忽略用户名单：任何能联系到机器人的人都可以驱动 Agent。仅限测试环境。",
-			"f.allowAllConfirm": "确定让任何能联系到这个机器人的人都能在本机执行任务吗？",
 			"f.profile": "角色说明（Profile）",
 			"f.profileHint": "本机 Markdown 文件，作为 system prompt 发给模型。不要放密钥。",
 			"f.provider": "模型提供方", "f.providerHint": "留空跟随 DSH 当前默认。",
@@ -1955,7 +1911,6 @@ window.__ModuleLoader__.load({
 			"f.removeLastHint": "至少要保留一个机器人；暂时不用可以先停用它。",
 			"f.removeConfirm": "从 DSH 移除「{name}」？飞书里的应用本身不会被删除。",
 			"p.defaultWorkspace": "例如：/Users/you/Projects/curio",
-			"p.users": "粘贴 ou_… 后回车添加",
 			"p.chats": "粘贴 oc_… 后回车添加",
 			"p.profile": "例如：/Users/you/.dsh/bot-profiles/curio.md",
 			"p.provider": "例如：deepseek", "p.model": "例如：deepseek-v4-flash", "p.preset": "例如：standard",
@@ -1993,9 +1948,9 @@ window.__ModuleLoader__.load({
 			"gui.blocked.userLayerDirty": "设置文件在本页之外被改动过，为避免覆盖这些改动，界面暂时停止编辑。",
 			"gui.blocked.generic": "当前设置无法在界面里安全编辑。请在这台电脑上检查 DSH 设置文件后重新打开本页。",
 			"onboarding.firstTitle": "用手机飞书扫码，连接第一个机器人",
-			"onboarding.firstDescription": "扫码后选择一个你已有的机器人，或创建一个新的。Secret 会保存在本机，你的账号会自动成为第一个允许的用户。",
+			"onboarding.firstDescription": "扫码后选择一个你已有的机器人，或创建一个新的。Secret 会保存在本机，任何能联系到机器人的人都可以使用它。",
 			"onboarding.addTitle": "添加机器人",
-			"onboarding.addDescription": "扫码选择已有机器人，或创建一个新的。App ID、Secret 存储、使用者权限和长连接都会自动配置。",
+			"onboarding.addDescription": "扫码选择已有机器人，或创建一个新的。App ID、Secret 存储和长连接会自动配置，操作者默认对所有人开放。",
 			"onboarding.manageTitle": "重新扫码绑定",
 			"onboarding.manageDescription": "在这里扫码会替换这个机器人使用的应用，不会新增机器人。",
 			"onboarding.select": "选择已有机器人", "onboarding.create": "创建新机器人",

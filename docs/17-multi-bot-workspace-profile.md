@@ -57,7 +57,7 @@ dsh web（一个进程）
    - 与 Workspace 解耦；
    - 两个机器人可以共享 Workspace 但拥有不同 Profile；
    - Profile 不得改变 DSH 审批、安全和工具限制等硬边界。
-5. 每个机器人可以独立选择 `agentPreset`、provider/model、白名单和上下文策略。
+5. 每个机器人可以独立选择 `agentPreset`、provider/model、可选群范围和上下文策略；个人操作者固定开放。
 6. 一个机器人的错误、凭据失效、Profile 损坏或通道断线不会停止其他机器人和 Web GUI。
 7. 现有单机器人配置无须迁移即可继续工作，行为和 Session 身份保持不变。
 
@@ -286,9 +286,7 @@ export interface BotConfig {
   appSecretRef: string
   brand?: 'feishu' | 'lark' | 'larkoffice'
 
-  allowedOpenIds?: string[]
   allowedChatIds?: string[]
-  allowAllUsers?: boolean
   requireMention?: boolean
 
   defaultWorkspace?: string
@@ -343,7 +341,6 @@ export interface BotConfig {
       - id: curio-ops
         appId: cli_xxxxxxxxxxxxx
         appSecretRef: DSH_FEISHU_CURIO_OPS_SECRET
-        allowedOpenIds: [ou_xxx]
         defaultWorkspace: /Users/me/Projects/curio
         workspacePolicy: locked
         agentPreset: standard
@@ -355,7 +352,6 @@ export interface BotConfig {
       - id: general-helper
         appId: cli_yyyyyyyyyyyyy
         appSecretRef: DSH_FEISHU_GENERAL_SECRET
-        allowedOpenIds: [ou_xxx]
         defaultWorkspace: /Users/me/Projects
         workspacePolicy: default
         agentPreset: code
@@ -371,7 +367,7 @@ export interface BotConfig {
 1. `bots` 非空时，`bots[]` 是唯一生效的机器人配置；来自 schema default、`base: flatten(config)` 或 user 层的 legacy `appId` 及其他根 bot 字段全部忽略，并在设置页显示“legacy 字段当前未生效”。坏的 `bots[]` 必须 fail closed，不能偷偷回退 legacy。这样即使 `cordis.patch.yml` 的 base 层仍有 appId，也能完成转换和回滚。
 2. `id` 必须匹配 `[a-z][a-z0-9-]{0,47}` 并全局唯一。
 3. `appId` 必须非空且在 bots 中唯一。
-4. `appSecretRef` 必须是合法 credential ref；`bots[]` 里禁止任何 secret value 字段，只允许引用。multi mode 不执行当前共享环境 fallback：`DSH_FEISHU_APP_ID`、`DSH_FEISHU_APP_SECRET`、`DSH_FEISHU_ALLOW_ALL_USERS`、`DSH_FEISHU_ALLOWED_OPEN_IDS`、`DSH_FEISHU_ALLOWED_CHAT_IDS` 与 `DSH_FEISHU_CLI_PATH`；这些 fallback 只服务 legacy 模式。每个 bot 的显式 credential ref 仍可由 DSH credential provider 解析到各自的环境变量，这是安全、独立的引用，不属于共享 fallback。
+4. `appSecretRef` 必须是合法 credential ref；`bots[]` 里禁止任何 secret value 字段，只允许引用。multi mode 不执行共享环境 fallback：`DSH_FEISHU_APP_ID`、`DSH_FEISHU_APP_SECRET`、`DSH_FEISHU_ALLOWED_CHAT_IDS` 与 `DSH_FEISHU_CLI_PATH`；这些 fallback 只服务 legacy 模式。旧 `DSH_FEISHU_ALLOW_ALL_USERS` 与 `DSH_FEISHU_ALLOWED_OPEN_IDS` 在所有模式都忽略。每个 bot 的显式 credential ref 仍可由 DSH credential provider 解析到各自的环境变量，这是安全、独立的引用，不属于共享 fallback。
 5. `enabled` 默认 true。
 6. `defaultWorkspace` 配置后必须能解析为存在、范围不过宽的本机目录。
 7. `workspacePolicy: locked` 必须同时配置 `defaultWorkspace`。
@@ -854,8 +850,8 @@ RPC host 必须自己从当前 descriptor 生成允许迁移的字段白名单�
 
 QR onboarding 的写入目标保持模式感知：legacy 模式继续更新根字段；multi mode 携带
 `destination: new-bot`，由 Host 在扫码期间确认 `bots[]` 未被并发修改，再使用开始扫码时的
-settings revision 执行一次 CAS，追加规范化 bot。新 bot 的 Secret 只写 credential provider，App ID、credential ref、扫码 owner
-白名单、App Session namespace 与 SDK 上下文均自动生成。重复 App ID 在写凭据前拒绝；配置写入
+settings revision 执行一次 CAS，追加规范化 bot。新 bot 的 Secret 只写 credential provider，App ID、credential ref、
+开放操作者、App Session namespace 与 SDK 上下文均自动生成。重复 App ID 在写凭据前拒绝；配置写入
 失败时补偿清理新 credential。设置页以「添加机器人」为主入口，手工填写折叠在高级设置中。
 
 ### 10.4 Bot 状态展示
@@ -867,14 +863,14 @@ settings revision 执行一次 CAS，追加规范化 bot。新 bot 的 Secret �
 - 一张 bot 卡显示 connected/degraded/disabled、最后错误与最后连接时间；
 - runtime status 不写回 settings.yaml。
 
-该 RPC 使用现有 `{authority: 'loopback'}` 注册边界，只服务本机 Web GUI。runtime payload 做脱敏，不含 secret、完整 Profile 正文、allowlist 成员或用户消息。
+该 RPC 使用现有 `{authority: 'loopback'}` 注册边界，只服务本机 Web GUI。runtime payload 做脱敏，不含 secret、完整 Profile 正文或用户消息。
 
 ### 10.5 热重载边界
 
 | 变更 | 行为 |
 | --- | --- |
 | 显示名/botId | 视为 remove + add；UI 应提供重命名并明确影响日志标签，不影响 appId session namespace |
-| allowlist | 重启该 bot Bridge，立即采用新安全边界 |
+| `allowedChatIds` | 重启该 bot Bridge，立即采用新的群范围 |
 | credential ref/secret | 重启该 bot Bridge |
 | default Workspace | 重启该 bot Bridge；绑定按 policy 在下次消息收敛 |
 | Profile 路径/上限 | 重启该 bot Bridge；active Agent dispose，下一次 resume 用新 Profile |
@@ -915,7 +911,6 @@ connected/degraded ──禁用、删除或配置替换──> stopping ──> 
 - 最终 assembled prompt 看不到 `feishu-remote`，或配置 Profile 时看不到 `feishu-bot-profile`；
 - 重复 appId、botId、statePath；
 - preset 不存在或损坏；
-- allowlist 为空且没有显式 `allowAllUsers: true` 时，继续保持拒绝所有用户。
 
 ### 11.3 Profile 信任
 
@@ -926,7 +921,7 @@ Profile 是本机管理员控制的 system prompt，信任级别高于飞书聊�
 - Profile 内容不自动 include/import 其他文件；
 - 不执行 Markdown 中的命令；
 - 文件权限必须防止其他本机普通用户篡改；
-- Profile 无权绕过 DSH sandbox、approval、tool restriction、sender allowlist 和 chat allowlist。
+- Profile 无权绕过 DSH sandbox、approval、tool restriction 和 chat allowlist。
 
 ### 11.4 多机器人隔离清单
 
@@ -954,7 +949,8 @@ Profile 是本机管理员控制的 system prompt，信任级别高于飞书聊�
 - Settings provider；
 - manager 插件级总容量计数器。
 
-另外，多 bot 不读取当前共享的 App ID/Secret、allowlist 与 CLI path 环境 fallback。否则表面上独立的访问控制或账号仍可能被一个进程变量同时改写。
+另外，多 bot 不读取当前共享的 App ID/Secret、群范围与 CLI path 环境 fallback。旧用户 allowlist
+环境变量在所有模式都忽略。否则表面上独立的账号或群范围仍可能被一个进程变量同时改写。
 
 ---
 
@@ -1143,7 +1139,7 @@ Profile 是本机管理员控制的 system prompt，信任级别高于飞书聊�
 - bots 与 base/user legacy appId 同时存在时 bots 胜出并提示；坏 bots 不回退 legacy；
 - botId/appId/path 重复；
 - 每 bot credential ref 独立解析；
-- bots 不继承共享 `DSH_FEISHU_*` App ID/Secret、allowlist 或 CLI path；legacy 仍保留旧 fallback；
+- bots 不继承共享 `DSH_FEISHU_*` App ID/Secret、群范围或 CLI path；legacy 只保留仍受支持字段的旧 fallback；
 - 一个 bot 配置坏只禁用该 bot；
 - 多 bot auto → sdk、显式 cli → disabled；
 - locked 无 default Workspace 被拒绝；

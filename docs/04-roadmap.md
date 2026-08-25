@@ -18,7 +18,7 @@
 
 - 环境前置：Node ≥22、安装 pnpm（`dsh plugin` 依赖 pnpm）、飞书 SDK 精确版本 + 构建期 bundle。
 - 步骤 0：仓库骨架 + `security/state/cards` 移植 + lark-bridge 测试搬来跑绿（+ 裁剪后契约测试）。
-- 步骤 1（echo spike）：空壳 cordis 插件 + SDK 长连接 + fail-closed 发送者白名单
+- 步骤 1（echo spike）：空壳 cordis 插件 + SDK 长连接 + 开放操作者（2026-08-25 产品决策）
   （`allowedChatIds` 作为可选群范围限制），跑通"飞书 → Mac → 回显"链路；普通群/话题群/p2p 三态行为验证；
   飞书应用形态（个人应用 vs 企业自建）定案并文档固化开通清单。
 
