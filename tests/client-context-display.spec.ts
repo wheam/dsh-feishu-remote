@@ -29,6 +29,24 @@ function loadClientExports(
 const client = loadClientExports()
 const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
 
+describe('snapshot store host compatibility', () => {
+  it.each(['@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-runtime/client'])(
+    'loads with only %s available', (storeModule) => {
+      const required: string[] = []
+      const exports = loadClientExports(name => {
+        required.push(name)
+        if (name === 'react' || name === 'react/jsx-runtime') return {}
+        if (name === storeModule) return { createSnapshotStore: () => ({}) }
+        throw new Error(`Module unavailable: ${name}`)
+      })
+      expect(exports.apply).toBeTypeOf('function')
+      if (storeModule === '@deepseek-ai/dsh-client-store') {
+        expect(required).not.toContain('@deepseek-ai/dsh-client-runtime/client')
+      }
+    },
+  )
+})
+
 type Row = Record<string, unknown>
 type Issue = { botId: string; field: string; message: string }
 type StatusModel = { tone: string; label: string; detail: string; params?: Record<string, unknown>; safeDetail?: string; action?: string }
