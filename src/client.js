@@ -14,7 +14,13 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
 		let react_jsx_runtime = require("react/jsx-runtime");
-		let runtime = require("@deepseek-ai/dsh-client-runtime/client");
+		// dsh 0.1.2 exposes the store as a platform module; older hosts export it
+		// from client-runtime. Keep both hosts supported during upgrades.
+		let runtime;
+		try { runtime = require("@deepseek-ai/dsh-client-store"); } catch {}
+		if (typeof runtime?.createSnapshotStore !== "function") {
+			runtime = require("@deepseek-ai/dsh-client-runtime/client");
+		}
 
 		// ---------------------------------------------------------------- css
 		// Colours come from host alias tokens only (light/dark safe). The single
