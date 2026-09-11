@@ -474,7 +474,7 @@ function loadRenderableClient(): Record<string, unknown> {
   return loadClientExports((name) => {
     if (name === 'react') return reactStub
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx }
-    if (name === '@deepseek-ai/dsh-client-runtime/client') {
+    if (name === '@deepseek-ai/dsh-client-store') {
       return { createSnapshotStore: (initial: unknown) => ({ get: () => initial, set: () => undefined, subscribe: () => () => undefined }) }
     }
     return {}
@@ -723,7 +723,7 @@ describe('save routing through the admin controller', () => {
       let value = initial
       return { get: () => value, set: (next: T) => { value = next }, subscribe: () => () => undefined }
     }
-    const requireModule = (name: string) => name === '@deepseek-ai/dsh-client-runtime/client'
+    const requireModule = (name: string) => name === '@deepseek-ai/dsh-client-store'
       ? { createSnapshotStore: store }
       : {}
     const registered: Record<string, unknown>[] = []
@@ -918,7 +918,7 @@ describe('save routing through the admin controller', () => {
         let value = initial
         return { get: () => value, set: (next: T) => { value = next }, subscribe: () => () => undefined }
       }
-      const loaded = loadClientExports(name => name === '@deepseek-ai/dsh-client-runtime/client'
+      const loaded = loadClientExports(name => name === '@deepseek-ai/dsh-client-store'
         ? { createSnapshotStore: store }
         : {})
       const Controller = loaded.FeishuBotAdminController as new (connection: unknown) => AdminController
@@ -1268,7 +1268,7 @@ describe('settings slot registration isolation', () => {
       error: (...args: unknown[]) => { errors.push(args.map(String).join(' ')) },
     }
     // Only createSnapshotStore is reached during apply(); react is never rendered here.
-    const requireModule = (name: string) => name === '@deepseek-ai/dsh-client-runtime/client'
+    const requireModule = (name: string) => name === '@deepseek-ai/dsh-client-store'
       ? {
           createSnapshotStore: (initial: unknown) => {
             let value = initial
