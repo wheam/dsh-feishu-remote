@@ -71,7 +71,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
   恢复且终态最终送达"。
 - **永久错误兜底**：230025（超长）/230031（超 14 天）/消息撤回/目标失效归类为 permanent，patch 失败改发新终态卡；`patchCard` 是裸调用（无重试、无 classifyError 包装），必须走本插件出站调度器。
 - **3 秒回调预算**：入站回调 handler 只做鉴权+入队即返回（chatQueue 关闭后 handler 内联执行，长任务会拖垮 SDK 事件循环）；耗时的 state I/O、agent 创建、卡片更新全部异步。
-- SDK 版本锁死（package.json 精确版本），当前与 dsh `0.1.1-rc.2` 一起冻结。
+- SDK 版本锁死（package.json 精确版本），当前与 dsh `0.1.5-rc.1` 一起冻结。
 - 备选通道：im-hub 手写 protobuf 帧层（约 200 行零依赖），接口隔离保证可替换。
 
 ## 2. 关键机制设计
@@ -137,7 +137,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
    （GUI 打开该 session 时同样无提问，因为恢复按记录的 preset 组合）。
    P1：provider multiplexer 或 agent-scoped 覆盖方案验证后恢复原生结构化提问。
 5. **可变进度卡片**：监听 `session/event`，
-   按回合聚合 `TurnProgress`（`assistant/chunk` text-delta + `assistant/message` 兜底；
+   按回合聚合 `TurnProgress`（进程内 `agent/assistant-stream` text-delta + 持久化 `assistant/message` 兜底；
    `tool/call` 只标记该 assistant step 属于临时过程）；`scheduleProgress` 节流默认 **600ms**
    （单消息 patch 5 QPS 内留裕量）；首条发卡、之后 `updateCard` 更新同一 messageId；
    `turn/end` 终态卡（`turn/end.reason.kind` 为 completed/aborted/blocked/error/
@@ -244,8 +244,11 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 
 - **inject 核对（补全）**：`agents / agentDefaultModel / credentials / tools / systemPrompt`
   均为 web profile 已有服务（已查本机 profile dump 与 dsh 包清单）；此外
-  `agentPresets / sessionPersistence / approval / userQuestions / workspaceRegistry`
-  亦为必填注入（§2 直接依赖），缺失时 fail-closed 禁用通道。
+  `agentPresets / connection / webServer / sessionPersistence / approval / userQuestions / workspaceRegistry / settings`
+  亦为必填注入（§2 直接依赖）。DSH `0.1.5-rc.1` 的 `connection.rpc.handle()` 会把
+  路由注册为调用方 effect，因此调用方还必须显式注入 `webServer`；同时它的嵌套 `rpc`
+  getter 会保留 provider shadow，注册前须用 Cordis `Service.extend` 把原始 connection
+  service 重新绑定到当前插件上下文。缺失任一步时均 fail-closed 禁用管理 RPC 与通道。
 - **preset / answerer / userQuestions 三项共存**是 web profile 内嵌的真正难点
   （§2.2/2.3/2.4），全部进 spike。
 - **故障隔离底线**：`apply()` 只做同步注册与服务注入、**永不 reject**；channel 连接放
@@ -314,7 +317,7 @@ session 事件）直接进程内对接。会话由飞书创建、与 Web GUI 同
 
 ## 7. 风险
 
-- dsh rc 期内部接口变动 → 锁死 `0.1.1-rc.2`（peerDependencies 精确版本，不用 `^`），升级自适配后再解锁。
+- dsh rc 期内部接口变动 → 锁死 `0.1.5-rc.1`（peerDependencies 精确版本，不用 `^`），升级自适配后再解锁。
 - SDK 大依赖 → 接口隔离 + 版本锁死 + 构建期 bundle；断网期间审批走超时 fail-closed。
 - web profile 三项共存（preset/answerer/userQuestions）→ spike 先行，不过不写主线代码。
 - live agent 无上限 → `maxLiveAgents` 硬上限（P1），超限拒绝新话题。

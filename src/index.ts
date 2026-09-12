@@ -13,8 +13,9 @@
  * again BEFORE touching the current bridge in both success and failure
  * paths, so a stale reload can never stop a newer bridge.
  */
-import type { Context } from '@deepseek-ai/cordis'
+import { Service, symbols, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { FeishuAdminService } from './admin.js'
 import { FeishuBotManager } from './bots.js'
@@ -78,6 +79,10 @@ export const inject = [
   'systemPrompt',
   'agentPresets',
   'connection',
+  // dsh-client-connection 0.1.5 registers caller-owned RPC routes through
+  // the caller's webServer binding. Declaring only `connection` leaves that
+  // nested effect without authority to read webServer at runtime.
+  'webServer',
   'sessionPersistence',
   'approval',
   'userQuestions',
@@ -86,6 +91,21 @@ export const inject = [
 ]
 
 export const Config = ConfigSchema
+
+/**
+ * DSH 0.1.5's `connection.rpc` is a nested getter. Reading it through the
+ * traced service preserves the provider's shadow context, so the route effect
+ * otherwise tries to read `webServer` from the Connection provider instead of
+ * this plugin (and throws "without inject"). Rebinding the service through
+ * Cordis's public extension symbol makes this plugin the effect owner.
+ */
+function ownedConnection(ctx: Context): Context['connection'] {
+  type ExtendConnection = (props: { ctx: Context }) => Context['connection']
+  const traced = ctx.connection as unknown as Record<symbol, unknown>
+  const raw = traced[symbols.original] ?? ctx.connection
+  const extend = (raw as Record<symbol, unknown>)[Service.extend] as ExtendConnection
+  return extend.call(raw, { ctx })
+}
 
 function settingsDescriptor(ctx: Context): { revision: number; base?: unknown; value?: unknown; user?: unknown } | undefined {
   if (typeof ctx.settings?.describe !== 'function') return undefined
@@ -337,13 +357,12 @@ export async function apply(ctx: Context, config: BridgeConfig): Promise<void> {
   const admin = new FeishuAdminService(ctx, settings, manager, config, guiGuard)
   ctx.effect(() => () => onboarding.stop(), 'dsh-feishu-remote onboarding lifecycle')
   try {
-    ctx.connection.rpc.handle(
+    ownedConnection(ctx).rpc.handle(
       ONBOARDING_RPC_CHANNEL,
       async (endpoint, payload, signal) => (
         await admin.handleRpc(endpoint, payload, signal)
         ?? onboarding.handleRpc(endpoint, payload, signal)
       ),
-      { authority: 'loopback' },
     )
   } catch (error) {
     ctx.logger?.warn?.(

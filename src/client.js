@@ -700,7 +700,10 @@ window.__ModuleLoader__.load({
 		 * response) is treated as unsafe and gets the generic message.
 		 */
 		function guiBlocked(admin) {
-			return admin?.loaded === true && admin.mode !== "unavailable" && admin.guiSafe !== true;
+			return admin?.loaded === true
+				&& admin.mode !== "unavailable"
+				&& admin.mode !== "failed"
+				&& admin.guiSafe !== true;
 		}
 		/** GUI fail-closed banner: one sentence, no editors. */
 		function guiBlockedKey(reason) {
@@ -1194,6 +1197,13 @@ window.__ModuleLoader__.load({
 					h("p", { className: cx.intro, role: "status" }, t("page.remote"), "remote")
 				]);
 			}
+			if (admin.mode === "failed") {
+				return h("div", { className: cx.page }, [
+					h("h2", { className: cx.h1 }, t("settings.title"), "title"),
+					h("p", { className: cx.intro, role: "status" }, t("page.unavailable"), "unavailable"),
+					errorBlock(t, friendlyError(admin.error), "error")
+				]);
+			}
 			if (!admin.loaded) return h("p", { className: cx.intro }, t("page.loading"));
 			// Fail closed: the Host says the settings file cannot be edited safely,
 			// so the section renders one sentence and NO editor or action at all.
@@ -1276,6 +1286,7 @@ window.__ModuleLoader__.load({
 			const admin = props.useFeishuBotAdmin?.((value) => value);
 			if (t === void 0) return null;
 			const remote = admin?.mode === "unavailable";
+			const failed = admin?.mode === "failed";
 			const statuses = new Map((admin?.statuses ?? []).map((item) => [item.id, item]));
 			const bots = admin?.bots ?? [];
 			if (guiBlocked(admin)) {
@@ -1287,7 +1298,7 @@ window.__ModuleLoader__.load({
 			return h("li", { className: cx.summary }, [
 				h("span", { className: cx.summaryName }, t("settings.title"), "title"),
 				h("span", { className: cx.summaryDesc }, t("settings.description"), "desc"),
-				remote || bots.length === 0 ? null : h("span", { className: cx.summaryDots }, bots.map((bot) => {
+				remote || failed || bots.length === 0 ? null : h("span", { className: cx.summaryDots }, bots.map((bot) => {
 					const status = statuses.get(bot.id);
 					const model = botStatusModel(bot, status, admin.mode);
 					const identity = botIdentity(bot, status);
@@ -1296,7 +1307,7 @@ window.__ModuleLoader__.load({
 						h("span", {}, identity.name ?? tp(t, identity.key, identity.params), "name")
 					], void 0, bot.id);
 				}), "dots"),
-				h("span", { className: cx.summaryDesc }, t(remote ? "page.remote" : "card.manageHint"), "hint")
+				h("span", { className: cx.summaryDesc, role: failed ? "alert" : void 0 }, t(remote ? "page.remote" : failed ? "page.unavailable" : "card.manageHint"), "hint")
 			]);
 		}
 
@@ -1520,7 +1531,7 @@ window.__ModuleLoader__.load({
 					if (this.stopped || superseded()) return;
 					this.publish({
 						loaded: true,
-						...(this.snapshot.mode === "loading" ? { mode: "unavailable", writable: false } : {}),
+						...(this.snapshot.mode === "loading" ? { mode: "failed", writable: false } : {}),
 						error: error instanceof Error ? error : new Error(String(error))
 					});
 				}
@@ -1716,6 +1727,7 @@ window.__ModuleLoader__.load({
 			"page.preparing": "Preparing…",
 			"page.loading": "Loading bots…",
 			"page.remote": "This page is not open on the Host machine, so bots cannot be managed here.",
+			"page.unavailable": "Feishu Remote is unavailable. Restart DSH; if it still does not recover, check that the plugin version matches DSH.",
 			"page.allBots": "All bots",
 			"card.manageHint": "Manage it under “Feishu Remote” in the left sidebar.",
 			"brand.feishu": "Feishu", "brand.lark": "Lark",
@@ -1853,6 +1865,7 @@ window.__ModuleLoader__.load({
 			"page.preparing": "正在准备…",
 			"page.loading": "正在读取机器人…",
 			"page.remote": "此页面不是在 Host 本机打开，无法管理机器人",
+			"page.unavailable": "飞书遥控服务暂时不可用。请重启 DSH；如果仍未恢复，请检查插件版本是否与 DSH 一致。",
 			"page.allBots": "全部机器人",
 			"card.manageHint": "请在左栏「飞书遥控」中管理",
 			"brand.feishu": "飞书", "brand.lark": "Lark",
@@ -2077,7 +2090,7 @@ window.__ModuleLoader__.load({
 			}
 			// 前端优雅降级（docs/11 事故教训）：无论未来 slot/API 契约如何变化，
 			// 本模块的任何注册失败只影响自己的设置入口（不显示 + 控制台报错），
-			// 绝不拖垮宿主界面。keyed-slot 契约已在 dsh 0.1.1-rc.2 复核。
+			// 绝不拖垮宿主界面。keyed-slot 契约已在 dsh 0.1.5-rc.1 复核。
 			try {
 				ctx.effect(() => ctx.locale.register(NS, { en, zh }), "dsh-feishu-remote: dictionaries");
 				const onboardingController = new PersonalAgentOnboardingController(ctx.connection);

@@ -450,6 +450,11 @@ describe('settings copy rules', () => {
     expect(dictionaries).toContain('"page.remote": "此页面不是在 Host 本机打开，无法管理机器人"')
   })
 
+  it('distinguishes a failed Host service from a genuinely remote page', () => {
+    expect(dictionaries).toContain('"page.unavailable": "飞书遥控服务暂时不可用。')
+    expect(source).toContain('{ mode: "failed", writable: false }')
+  })
+
   it('translates every bot-editor string instead of hardcoding zh in the components', () => {
     const components = source.slice(0, source.indexOf('const en = {'))
     expect(components).not.toMatch(/children: "[^"]*[一-龥]/u)
@@ -636,6 +641,11 @@ describe('GUI fail-closed rendering', () => {
     const { types, text } = inspect(Section(props(admin({ guiSafe: true }))))
     expect(text.some(line => line.startsWith('gui.blocked.'))).toBe(false)
     expect(types.some(type => typeof type === 'function')).toBe(true)
+  })
+
+  it('shows transport failures instead of misclassifying them as an unsafe editor', () => {
+    expect(guiBlocked(admin({ mode: 'failed', guiSafe: false }))).toBe(false)
+    expect(guiBlocked(admin({ mode: 'unavailable', guiSafe: false }))).toBe(false)
   })
 
   it('reduces the summary card to the same message, with no status dots', () => {

@@ -1,8 +1,8 @@
 /**
- * Contract tests for the bridge against a hand-rolled fake of the rc.6
+ * Contract tests for the bridge against a hand-rolled fake of the 0.1.5-rc.1
  * services (agents / sessionPersistence / agentPresets / workspaceRegistry /
  * approval waterfall / session events) and a fake Feishu channel. The real
- * API shapes were verified against the installed dsh 0.1.0-rc.6 sources
+ * API shapes were verified against the installed dsh 0.1.5-rc.1 sources
  * (see docs/05 and docs/08).
  */
 import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
@@ -64,8 +64,8 @@ class FakeAgent {
   readonly followups: unknown[] = []
   readonly steers: unknown[] = []
   readonly cancels: Array<{ cause: unknown; options?: unknown }> = []
-  /** Authoritative inbox state (rc.6 Inbox.hasPending) — switch guards read it. */
-  inbox = { hasPending: false }
+  /** Authoritative inbox state — switch guards read both pending lists. */
+  inbox = { nextTurn: [] as unknown[], nextStep: [] as unknown[] }
   disposed = false
   readonly session: { header: SessionHeader; id: string; events: never[] }
 
@@ -130,7 +130,6 @@ class FakeAgents {
       const sections: Array<{ name: string; order: number; text: string | ((context: unknown) => string) }> = []
       const variables = new Map<string, () => string | undefined>()
       await setup({
-        agent,
         tools: { restrict: vi.fn() },
         systemPrompt: {
           variable: (name: string, provider: () => string | undefined) => { variables.set(name, provider) },
@@ -146,7 +145,7 @@ class FakeAgents {
           }),
         },
         on: vi.fn(() => () => undefined),
-      } as never)
+      } as never, agent)
     }
     this.live.set(id, agent)
     return {
@@ -189,13 +188,32 @@ class FakePersistence {
   headers: SessionHeader[] = []
   private inspections = new Map<string, { meta: SessionHeader; events: SessionEvent[] }>()
 
-  async list(): Promise<SessionHeader[]> { return [...this.headers] }
-  async inspect(id: SessionId): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
+  async list(): Promise<Array<{ header: SessionHeader; revision: number }>> {
+    return this.headers.map(header => ({ header, revision: 1 }))
+  }
+  async open(id: SessionId, access: 'read'): Promise<{
+    header: SessionHeader
+    access: 'read'
+    read: () => Promise<{ events: SessionEvent[]; eventState: 'owned' }>
+    close: () => Promise<void>
+  }> {
     const cached = this.inspections.get(String(id))
-    if (cached !== undefined) return cached
+    if (cached !== undefined) {
+      return {
+        header: cached.meta,
+        access,
+        read: async () => ({ events: cached.events, eventState: 'owned' }),
+        close: async () => undefined,
+      }
+    }
     const meta = this.headers.find(header => String(header.id) === String(id))
     if (meta === undefined) throw new Error(`no inspection for ${String(id)}`)
-    return { meta, events: [] }
+    return {
+      header: meta,
+      access,
+      read: async () => ({ events: [], eventState: 'owned' }),
+      close: async () => undefined,
+    }
   }
   remember(id: string, events: SessionEvent[] = []): void {
     const header = this.headers.find(item => String(item.id) === id)
@@ -503,6 +521,7 @@ interface Harness {
   workspace: string
   statePath: string
   emitSessionEvent: (sessionId: string, type: SessionEvent['type'], data: SessionEvent['data']) => Promise<void>
+  emitAssistantChunk: (sessionId: string, data: { turn: number; step: number; chunk: { type: 'text-delta'; text: string } }) => Promise<void>
   emitClaim: (sessionId: string, messageId: unknown, turn: number) => Promise<void>
   emitMessage: (content: string, overrides?: Parameters<typeof message>[1]) => Promise<void>
   emitCardAction: (value: unknown, operatorOpenId?: string, chatId?: string, messageId?: string) => Promise<void>
@@ -576,6 +595,22 @@ async function makeHarness(
   const emitSessionEvent = async (sessionId: string, type: SessionEvent['type'], data: SessionEvent['data']): Promise<void> => {
     await ctx.emit('session/event', { id: sessionId, header: { id: SessionId(sessionId) } } as never, sessionEvent(type, data, sessionId) as never)
   }
+  const emitAssistantChunk = async (
+    sessionId: string,
+    data: { turn: number; step: number; chunk: { type: 'text-delta'; text: string } },
+  ): Promise<void> => {
+    const agent = agents.get(sessionId)
+    if (agent === undefined) throw new Error(`no live agent for ${sessionId}`)
+    const attemptId = `attempt-${sessionId}-${data.turn}-${data.step}`
+    await ctx.emit('agent/assistant-stream', {
+      agent,
+      frame: { type: 'start', attemptId, revision: 1, turn: data.turn, step: data.step },
+    } as never)
+    await ctx.emit('agent/assistant-stream', {
+      agent,
+      frame: { type: 'chunk', attemptId, revision: 1, index: 0, time: Date.now(), chunk: data.chunk },
+    } as never)
+  }
   const emitMessage = async (content: string, overrides?: Parameters<typeof message>[1]): Promise<void> => {
     channel.emit('message', message(content, overrides) as never)
   }
@@ -597,7 +632,7 @@ async function makeHarness(
 
   return {
     bridge, ctx, agents, persistence, channel, scheduler, workspaceRegistry, config, workspace, statePath,
-    emitSessionEvent, emitClaim, emitMessage, emitCardAction,
+    emitSessionEvent, emitAssistantChunk, emitClaim, emitMessage, emitCardAction,
   }
 }
 
@@ -1701,7 +1736,7 @@ describe('session creation and mapping', () => {
     const privateMessage = privateAgent.followups.at(-1) as { id?: unknown }
     await privateHarness.emitSessionEvent(privateSessionId, 'turn/start', { turn: 1 })
     await privateHarness.emitClaim(privateSessionId, privateMessage.id, 1)
-    await privateHarness.emitSessionEvent(privateSessionId, 'assistant/chunk', {
+    await privateHarness.emitAssistantChunk(privateSessionId, {
       turn: 1,
       step: 1,
       chunk: { type: 'text-delta', text: 'working' },
@@ -1724,7 +1759,7 @@ describe('session creation and mapping', () => {
     const threadMessage = threadAgent.followups.at(-1) as { id?: unknown }
     await threadHarness.emitSessionEvent(threadSessionId, 'turn/start', { turn: 1 })
     await threadHarness.emitClaim(threadSessionId, threadMessage.id, 1)
-    await threadHarness.emitSessionEvent(threadSessionId, 'assistant/chunk', {
+    await threadHarness.emitAssistantChunk(threadSessionId, {
       turn: 1,
       step: 1,
       chunk: { type: 'text-delta', text: 'working' },
@@ -2093,7 +2128,7 @@ describe('progress aggregation', () => {
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hel' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hel' } })
     // Let the throttled progress card land (a SEND), so the terminal card is a PATCH.
     await new Promise(resolve => setTimeout(resolve, 30))
     await h.emitSessionEvent(sessionId, 'assistant/message', {
@@ -2189,7 +2224,7 @@ describe('progress aggregation', () => {
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', {
+    await h.emitAssistantChunk(sessionId, {
       turn: 1,
       step: 1,
       chunk: { type: 'text-delta', text: '已完成到一半。' },
@@ -2211,7 +2246,7 @@ describe('progress aggregation', () => {
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
     // The first card lands as a regular mutable SEND while the turn runs.
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
     const live = h.channel.sent.find(item => item.input.card !== undefined)!
@@ -2230,13 +2265,13 @@ describe('progress aggregation', () => {
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'first' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'first' } })
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
     const live = h.channel.sent.find(item => item.input.card !== undefined)!
     const messageId = live.messageId
     expect((live.input.card as { config: Record<string, unknown> }).config).not.toHaveProperty('streaming_mode')
     // More output → a live PATCH on the SAME message.
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' more' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' more' } })
     await waitFor(() => h.channel.patched.length > 0)
     const livePatch = h.channel.patched.at(-1)!
     expect(livePatch.messageId).toBe(messageId)
@@ -2258,11 +2293,11 @@ describe('progress aggregation', () => {
     let release!: () => void
     h.channel.cardGate = new Promise<void>(resolve => { release = resolve })
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
     await waitFor(() => h.scheduler.pendingCount > 0, 'live send dispatched')
     // One more progress tick while the chain is busy: let its timer fire so
     // the upsert is CHAINED behind the blocked send, then the turn ends.
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' x' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' x' } })
     await new Promise(resolve => setTimeout(resolve, 15))
     await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
     release()
@@ -2283,12 +2318,12 @@ describe('progress aggregation', () => {
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined))
     // Hold the next live PATCH in flight (dispatched but not settled).
     let release!: () => void
     h.channel.patchGate = new Promise<void>(resolve => { release = resolve })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' x' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: ' x' } })
     // Let the throttled upsert enqueue AND the scheduler dispatch it (the
     // dispatch then blocks on patchGate) — a settled in-flight patch cannot
     // be coalesced away, so the terminal patch must queue alongside it.
@@ -2316,7 +2351,7 @@ describe('progress aggregation', () => {
     let release!: () => void
     h.channel.cardGate = new Promise<void>(resolve => { release = resolve })
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'live' } })
     await waitFor(() => h.scheduler.pendingCount > 0, 'initial send in flight')
     // The chained terminal PATCH will fail permanently (230031: 超 14 天).
     h.channel.patchErrors.push({
@@ -2337,14 +2372,24 @@ describe('progress aggregation', () => {
     await waitFor(() => h.agents.created.length === 1)
     const sessionId = h.agents.created[0]!.options.sessionId!
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'x' } })
+    await h.emitSessionEvent(sessionId, 'assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'x' }] },
+      stream: [],
+    })
     // Let the throttled progress patch settle first.
     await new Promise(resolve => setTimeout(resolve, 40))
     const before = h.channel.patched.length
     // Replay the exact same event (same seq) — must be ignored.
     eventSeq -= 1
     const list = h.ctx.listeners.get('session/event')!
-    await list[0]!.fn({ id: sessionId } as never, sessionEvent('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'y' } }, sessionId) as never)
+    await list[0]!.fn({ id: sessionId } as never, sessionEvent('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'y' }] },
+      stream: [],
+    }, sessionId) as never)
     await new Promise(resolve => setTimeout(resolve, 40))
     expect(h.channel.patched.length).toBe(before)
   })
@@ -2535,7 +2580,8 @@ describe('preset setup and ask-user blocking', () => {
       },
       on: (name: string) => { order.push(`on:${name}`); return () => undefined },
     }
-    await (h.bridge as unknown as { setupAgent: (agentCtx: never, presetId?: string) => Promise<void> }).setupAgent(agentCtx as never, 'standard')
+    await (h.bridge as unknown as { setupAgent: (agentCtx: never, agent: never, presetId?: string) => Promise<void> })
+      .setupAgent(agentCtx as never, agentCtx.agent, 'standard')
     const presets = h.ctx.services.get('agentPresets') as { mount: ReturnType<typeof vi.fn>; resolve: ReturnType<typeof vi.fn> }
     expect(presets.mount).toHaveBeenCalledTimes(1)
     expect(order).toEqual([
@@ -2561,8 +2607,8 @@ describe('preset setup and ask-user blocking', () => {
       },
       on: vi.fn(() => () => undefined),
     }
-    await (h.bridge as unknown as { setupAgent: (ctx: never, preset?: string, profile?: ProfileSnapshot) => Promise<void> })
-      .setupAgent(agentCtx as never, 'standard', profile)
+    await (h.bridge as unknown as { setupAgent: (ctx: never, agent: never, preset?: string, profile?: ProfileSnapshot) => Promise<void> })
+      .setupAgent(agentCtx as never, agentCtx.agent, 'standard', profile)
     expect([...variables.keys()]).toEqual(['feishu_bot_profile'])
     expect(variables.get('feishu_bot_profile')?.()).toContain('{{example}}')
     expect(sections.map(section => section.name)).toEqual(['feishu-bot-profile', 'feishu-remote'])
@@ -2579,8 +2625,8 @@ describe('preset setup and ask-user blocking', () => {
       },
       on: vi.fn(() => () => undefined),
     }
-    await expect((h.bridge as unknown as { setupAgent: (ctx: never, preset?: string) => Promise<void> })
-      .setupAgent(agentCtx as never, 'complete')).rejects.toThrow('suppresses the required feishu-remote')
+    await expect((h.bridge as unknown as { setupAgent: (ctx: never, agent: never, preset?: string) => Promise<void> })
+      .setupAgent(agentCtx as never, agentCtx.agent, 'complete')).rejects.toThrow('suppresses the required feishu-remote')
   })
 })
 
@@ -2763,7 +2809,7 @@ describe('switch guards — authoritative inbox (Codex review #3 F1)', () => {
     await h.emitClaim(sessionId, msg!.id, 1)
     await h.emitSessionEvent(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
     agent.status = 'idle'
-    agent.inbox.hasPending = true // GUI/injected context we cannot see
+    agent.inbox.nextTurn.push({}) // GUI/injected context we cannot see
     await h.emitMessage('/new')
     await waitFor(() => h.channel.sent.some(item => String(item.input.markdown).includes('下一条普通消息')))
     await h.emitMessage('second')
@@ -3580,7 +3626,7 @@ describe('connect loop crash containment (H1)', () => {
     const claimed = agent.followups.at(-1) as { id?: unknown }
     await h.emitSessionEvent(sessionId, 'turn/start', { turn: 1 })
     await h.emitClaim(sessionId, claimed!.id, 1)
-    await h.emitSessionEvent(sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hi' } })
+    await h.emitAssistantChunk(sessionId, { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hi' } })
     await waitFor(() => h.channel.sent.some(item => item.input.card !== undefined), 'progress card sent')
     const progressMessageId = h.channel.sent.filter(item => item.input.card !== undefined).at(-1)!.messageId
 

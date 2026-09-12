@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { Service, symbols } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.js'
 
@@ -16,7 +17,7 @@ function fakeSettings() {
 }
 
 describe('dsh-feishu-remote loader contract', () => {
-  it('declares the official Harness bundle metadata with exact 0.1.1-rc.2 pins', () => {
+  it('declares the official Harness bundle metadata with exact 0.1.5-rc.1 pins', () => {
     const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string } }
       keywords?: string[]
@@ -29,8 +30,9 @@ describe('dsh-feishu-remote loader contract', () => {
     expect(manifest.dsh?.client?.platform).toBe('web')
     expect(manifest.keywords).toContain('dsh-plugin')
     // Locked, not ranged (docs/05 §7: 精确版本，不用 ^).
-    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-agent']).toBe('0.1.1-rc.2')
-    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-user-approval']).toBe('0.1.1-rc.2')
+    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-agent']).toBe('0.1.5-rc.1')
+    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-host-webserver']).toBe('0.1.5-rc.1')
+    expect(manifest.peerDependencies?.['@deepseek-ai/dsh-user-approval']).toBe('0.1.5-rc.1')
     expect(manifest.devDependencies?.qrcode).toBe('1.5.4')
     expect(manifest.dependencies?.qrcode).toBeUndefined()
     expect(manifest.peerDependencies?.['dsh-session-groups']).toBeUndefined()
@@ -44,7 +46,7 @@ describe('dsh-feishu-remote loader contract', () => {
     expect(bundlePatch).toContain('disabled: false')
   })
 
-  it('keeps the keyed settings slot contract used by 0.1.1-rc.2', () => {
+  it('keeps the keyed settings slot contract used by 0.1.5-rc.1', () => {
     const client = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(client).toContain('name: "settings.plugin.item"')
     expect(client).toContain('key: SETTINGS_NS')
@@ -70,6 +72,7 @@ describe('dsh-feishu-remote loader contract', () => {
       'systemPrompt',
       'agentPresets',
       'connection',
+      'webServer',
       'sessionPersistence',
       'approval',
       'userQuestions',
@@ -94,6 +97,31 @@ describe('dsh-feishu-remote loader contract', () => {
       { appId: 'cli_x', cwd: '/tmp', workspaceRoot: '/tmp' } as never,
     )).resolves.toBeUndefined()
     expect(warnings.some(args => String(args[0]).includes('配置无效'))).toBe(true)
+  })
+
+  it('rebinds the 0.1.5 connection service before registering the RPC route', async () => {
+    const handle = vi.fn()
+    let owner: unknown
+    const rawConnection = {
+      [Service.extend](props: { ctx: unknown }) {
+        owner = props.ctx
+        return { rpc: { handle } }
+      },
+    }
+    const ctx = {
+      logger: { warn: vi.fn() },
+      credentials: { resolve: async () => undefined },
+      settings: fakeSettings(),
+      connection: { [symbols.original]: rawConnection },
+      effect: () => () => undefined,
+    }
+    await (plugin.apply as (ctx: never, config: never) => Promise<void>)(
+      ctx as never,
+      { appId: 'cli_x', cwd: '/tmp', workspaceRoot: '/tmp' } as never,
+    )
+    expect(owner).toBe(ctx)
+    expect(handle).toHaveBeenCalledOnce()
+    expect(handle.mock.calls[0]?.[0]).toBe('/dsh-feishu-remote')
   })
 
   it('apply() hot-reloads through the settings watcher and stops the old bridge', async () => {
