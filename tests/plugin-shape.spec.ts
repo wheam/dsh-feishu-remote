@@ -19,7 +19,7 @@ function fakeSettings() {
 describe('dsh-feishu-remote loader contract', () => {
   it('declares the official Harness bundle metadata with exact 0.1.5-rc.1 pins', () => {
     const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-      dsh?: { bundle?: { patch?: string }; client?: { platform?: string } }
+      dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }
       keywords?: string[]
       peerDependencies?: Record<string, string>
       peerDependenciesMeta?: Record<string, { optional?: boolean }>
@@ -28,6 +28,7 @@ describe('dsh-feishu-remote loader contract', () => {
     }
     expect(manifest.dsh?.bundle?.patch).toBe('./cordis.patch.yml')
     expect(manifest.dsh?.client?.platform).toBe('web')
+    expect(manifest.dsh?.client?.inject).toContain('@deepseek-ai/dsh-client-store')
     expect(manifest.keywords).toContain('dsh-plugin')
     // Locked, not ranged (docs/05 §7: 精确版本，不用 ^).
     expect(manifest.peerDependencies?.['@deepseek-ai/dsh-agent']).toBe('0.1.5-rc.1')
