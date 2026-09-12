@@ -28,11 +28,11 @@
  * value fills the gap where it does not. Without that the purge's `retained`
  * promise was a lie — the bot silently moved to the default state file.
  */
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import type { BotConfig, Config } from './config.js'
 
-export const SETTINGS_NAMESPACE = settingsNamespace('feishu-remote')
+/** Stable settings key; dsh-settings 0.1.5 no longer exports the old branding helper. */
+export const SETTINGS_NAMESPACE = 'feishu-remote' as const
 
 /**
  * Per-bot keys that must never enter the settings layer in either direction.

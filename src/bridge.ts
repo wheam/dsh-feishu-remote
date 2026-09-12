@@ -20,9 +20,16 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Context } from '@deepseek-ai/cordis'
-import { assembleContextFor, type Agent, type AgentHandle, type AgentOptions, type PreStepDecision } from '@deepseek-ai/dsh-agent'
+import {
+  assembleContextFor,
+  type Agent,
+  type AgentHandle,
+  type AgentOptions,
+  type AssistantStreamFrame,
+  type PreStepDecision,
+} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
-import { resolveSessionPreset, type AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -160,6 +167,13 @@ interface BridgeSession {
   sessionId: string
   pendingPrompt: string
   progress?: TurnProgress
+  /** Position of the process-local assistant stream currently feeding the progress card. */
+  activeStream?: {
+    attemptId: string
+    revision: number
+    turn: number
+    step: number
+  }
   progressTimer?: ReturnType<typeof setTimeout>
   activeTurnOrigin?: 'feishu' | 'gui'
   /** Monotonic event-seq watermark (per-session ordered dispatch → O(1) dedup). Starts at -1: seq 0 is a valid first event. */
@@ -238,6 +252,15 @@ function errorMessage(error: unknown): string {
   } catch {
     return '<无法呈现的错误>'
   }
+}
+
+/** Reconstruct the durable preset selection without depending on a removed rc helper. */
+function resolveLoggedSessionPreset(header: SessionHeader, events: readonly SessionEvent[]): string | undefined {
+  let preset = header.agentPreset
+  for (const event of events) {
+    if (event.type === 'agent-preset/selected') preset = event.data.agentPreset
+  }
+  return preset
 }
 
 function diagnosticId(value: string): string {
@@ -418,7 +441,20 @@ export class FeishuRemoteBridge {
   private freshHeaders(): Promise<SessionHeader[]> {
     const persistence = this.ctx.get('sessionPersistence')
     if (persistence === undefined) return Promise.resolve([])
-    return persistence.list()
+    return persistence.list().then(items => items.map(item => item.header))
+  }
+
+  /** Read one complete stored session through the 0.1.5 read-handle API. */
+  private async inspectSession(id: SessionId): Promise<{ header: SessionHeader; events: readonly SessionEvent[] }> {
+    const persistence = this.ctx.get('sessionPersistence')
+    if (persistence === undefined) throw new Error('Session persistence is unavailable')
+    const handle = await persistence.open(id, 'read')
+    try {
+      const { events } = await handle.read()
+      return { header: handle.header, events }
+    } finally {
+      await handle.close()
+    }
   }
 
   private archivedIds(): ReadonlySet<string> {
@@ -449,6 +485,9 @@ export class FeishuRemoteBridge {
 
     this.disposers.push(this.ctx.on('session/event', (session, event) => {
       this.onSessionEvent(session, event)
+    }))
+    this.disposers.push(this.ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+      this.onAssistantStream(agent, frame)
     }))
     // Exact turn ledger (rc.6): the loop claims one queued message per turn;
     // correlate OUR messages to their turn instead of guessing by count.
@@ -673,7 +712,7 @@ export class FeishuRemoteBridge {
     if (this.evicting.has(entry.key)) return false
     if (now - entry.lastActiveAt < this.idleSessionTtlMs) return false
     if (entry.handle.agent.status !== 'idle') return false
-    if (entry.handle.agent.inbox?.hasPending === true) return false
+    if (entry.handle.agent.inbox.nextTurn.length > 0 || entry.handle.agent.inbox.nextStep.length > 0) return false
     if (entry.pendingClaims.size > 0) return false
     // A finished turn leaves its terminal progress snapshot in place; only a
     // turn still in flight (or a finalizer still writing cards) blocks eviction.
@@ -1048,7 +1087,11 @@ export class FeishuRemoteBridge {
     if (entry.handle.agent.status === 'running') {
       throw new Error(`${what}：当前回合仍在运行，请先 /stop 并等待回合结束`)
     }
-    if (entry.pendingClaims.size > 0 || entry.handle.agent.inbox.hasPending === true) {
+    if (
+      entry.pendingClaims.size > 0
+      || entry.handle.agent.inbox.nextTurn.length > 0
+      || entry.handle.agent.inbox.nextStep.length > 0
+    ) {
       throw new Error(`${what}：当前飞书会话还有排队中的消息，请等待它们被处理后再切换`)
     }
   }
@@ -1841,6 +1884,7 @@ export class FeishuRemoteBridge {
         entry.workspaceId = String(workspace.id)
         entry.sessionId = String(probe.agent.id)
         entry.progress = undefined
+        entry.activeStream = undefined
         entry.pendingPrompt = '飞书任务'
         entry.lastSeq = -1
         entry.lastActiveAt = Date.now()
@@ -2082,8 +2126,8 @@ export class FeishuRemoteBridge {
     const persistence = this.ctx.get('sessionPersistence')
     let loggedPreset: string | undefined
     if (presets !== undefined && persistence !== undefined) {
-      const inspection = await persistence.inspect(target.id)
-      loggedPreset = resolveSessionPreset({ header: inspection.meta, events: inspection.events })
+      const inspection = await this.inspectSession(target.id)
+      loggedPreset = resolveLoggedSessionPreset(inspection.header, inspection.events)
     }
     const lease = this.acquireReservation(true)
     let freshHandle: AgentHandle | undefined
@@ -2108,6 +2152,7 @@ export class FeishuRemoteBridge {
         entry.handle = probe
         entry.sessionId = String(probe.agent.id)
         entry.progress = undefined
+        entry.activeStream = undefined
         entry.lastSeq = -1
         entry.lastActiveAt = Date.now()
         entry.activeTurnOrigin = undefined
@@ -2173,6 +2218,7 @@ export class FeishuRemoteBridge {
         entry.workspaceId = String(workspace.id)
         entry.sessionId = String(probe.agent.id)
         entry.progress = undefined
+        entry.activeStream = undefined
         entry.pendingPrompt = '飞书任务'
         entry.lastSeq = -1
         entry.lastActiveAt = Date.now()
@@ -2280,8 +2326,8 @@ export class FeishuRemoteBridge {
           if (presets !== undefined) {
             const persistence = this.ctx.get('sessionPersistence')
             if (persistence !== undefined) {
-              const inspection = await persistence.inspect(target.id)
-              loggedPreset = resolveSessionPreset({ header: inspection.meta, events: inspection.events })
+              const inspection = await this.inspectSession(target.id)
+              loggedPreset = resolveLoggedSessionPreset(inspection.header, inspection.events)
             }
           }
           await workspace.attachSession(target.id)
@@ -2373,7 +2419,7 @@ export class FeishuRemoteBridge {
           ...(presetId === undefined ? {} : { agentPreset: presetId }),
         },
         agentOptions: selection,
-        setup: agentCtx => this.setupAgent(agentCtx, presetId, profile),
+        setup: (agentCtx, agent) => this.setupAgent(agentCtx, agent, presetId, profile),
       })
       if (profile !== undefined) this.handleProfiles.set(handle, profile)
       try {
@@ -2398,7 +2444,7 @@ export class FeishuRemoteBridge {
     const handle = await this.ctx.agents.resume({
       resumeSessionId: sessionId,
       agentOptions: selection,
-      setup: agentCtx => this.setupAgent(agentCtx, presetId, profile),
+      setup: (agentCtx, agent) => this.setupAgent(agentCtx, agent, presetId, profile),
     })
     if (profile !== undefined) this.handleProfiles.set(handle, profile)
     return handle
@@ -2550,7 +2596,12 @@ export class FeishuRemoteBridge {
    * preset mount happens ONLY here; ask-user tools are restricted AFTER the
    * mount so the deny set covers the preset layer.
    */
-  private async setupAgent(agentCtx: Context, presetId?: string, profile?: ProfileSnapshot): Promise<void> {
+  private async setupAgent(
+    agentCtx: Context,
+    owner: Agent,
+    presetId?: string,
+    profile?: ProfileSnapshot,
+  ): Promise<void> {
     const presets = this.ctx.get('agentPresets')
     if (presets !== undefined && presetId !== undefined) {
       await presets.mount(agentCtx, presetId)
@@ -2582,8 +2633,6 @@ export class FeishuRemoteBridge {
         ? decision
         : { kind: 'enter', messages: separateFeishuContextMessages(decision.messages) }
     })
-    const owner = agentCtx.agent
-    if (owner === undefined) throw new Error('DSH Agent setup context is missing its owner')
     try {
       const assembly = await agentCtx.systemPrompt.assemble(assembleContextFor(owner))
       const names = new Set(assembly.sections.map(section => section.name))
@@ -2622,6 +2671,41 @@ export class FeishuRemoteBridge {
 
   // --------------------------------------------------------- progress cards
 
+  /** Consume 0.1.5's process-local stream frames; only final messages remain durable. */
+  private onAssistantStream(agent: Agent, frame: AssistantStreamFrame): void {
+    const entry = this.agents.get(String(agent.id))
+    if (entry === undefined) return
+    if (frame.type === 'start') {
+      entry.activeStream = {
+        attemptId: String(frame.attemptId),
+        revision: frame.revision,
+        turn: frame.turn,
+        step: frame.step,
+      }
+      return
+    }
+    const active = entry.activeStream
+    if (
+      active === undefined
+      || active.attemptId !== String(frame.attemptId)
+      || active.revision !== frame.revision
+    ) return
+    if (frame.type === 'end') {
+      entry.activeStream = undefined
+      return
+    }
+    const progress = entry.progress
+    if (
+      progress === undefined
+      || progress.turn !== active.turn
+      || frame.chunk.type !== 'text-delta'
+    ) return
+    const step = this.stepOf(progress, active.turn, active.step)
+    if (step.final === undefined) step.chunks += frame.chunk.text
+    this.refreshVisibleText(progress)
+    this.scheduleProgress(entry, progress)
+  }
+
   private onSessionEvent(session: Session, event: SessionEvent): void {
     const entry = this.agents.get(String(session.id))
     if (entry === undefined) return
@@ -2632,6 +2716,7 @@ export class FeishuRemoteBridge {
     entry.lastActiveAt = Date.now()
     switch (event.type) {
       case 'turn/start': {
+        entry.activeStream = undefined
         // Exact ledger: the claim event may arrive AFTER turn/start (rc.6 emits
         // turn/start before Inbox.claim), so default to gui; the claimed
         // handler upgrades the origin for our messages. No approval/output
@@ -2662,15 +2747,6 @@ export class FeishuRemoteBridge {
         // sends it, so the reply context is final by the time the card lands.
         break
       }
-      case 'assistant/chunk': {
-        const progress = entry.progress
-        if (progress === undefined || event.data.chunk.type !== 'text-delta') break
-        const step = this.stepOf(progress, event.data.turn, event.data.step)
-        if (step.final === undefined) step.chunks += event.data.chunk.text
-        this.refreshVisibleText(progress)
-        this.scheduleProgress(entry, progress)
-        break
-      }
       case 'assistant/message': {
         const progress = entry.progress
         if (progress === undefined) break
@@ -2699,6 +2775,7 @@ export class FeishuRemoteBridge {
       case 'turn/end': {
         const progress = entry.progress
         if (progress === undefined) break
+        entry.activeStream = undefined
         progress.terminal = true
         entry.turnOrigin.delete(event.data.turn)
         entry.turnReply.delete(event.data.turn)

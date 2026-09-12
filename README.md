@@ -1,6 +1,6 @@
 # dsh-feishu-remote
 
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--rc.1-4f46e5)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -39,7 +39,7 @@ Agent 插件一样审查源码。
 
 本项目目前是**源码安装的开发者预览版**：
 
-- 精确兼容 DSH `0.1.1-rc.2`，其他版本默认视为不兼容；
+- 精确兼容 DSH `0.1.5-rc.1`，其他版本默认视为不兼容；
 - 核心链路已经通过自动化测试、真实 `dsh web` 加载和企业自建飞书应用初验；
 - PersonalAgent 扫码开通、多机器人、Workspace 与 Markdown Profile 已实现并通过自动化测试；
 - PersonalAgent 的真实 Feishu/Lark 租户全矩阵验收、双真实 App 并发验收仍待完成；
@@ -85,7 +85,7 @@ DSH 仍处于 RC 阶段，相邻 RC 版本可能包含破坏性变化。安装�
 
 当前安装流程面向 macOS 上的 DSH Web/Mac App 环境，需要：
 
-- DeepSeek Harness `0.1.1-rc.2`；
+- DeepSeek Harness `0.1.5-rc.1`；
 - Node.js 22 或更高版本；
 - pnpm `11.22.0`（`dsh plugin` 本身也会调用 pnpm）；
 - 能访问飞书/Lark 的网络。

@@ -53,7 +53,7 @@
 
 ## 约束
 
-- **锁死 dsh 版本 `0.1.1-rc.2`**（本机当前安装版本），dsh 升级需自行适配后再解锁；飞书 SDK 精确版本一并锁死。
+- **锁死 dsh 版本 `0.1.5-rc.1`**（本机当前安装版本），dsh 升级需自行适配后再解锁；飞书 SDK 精确版本一并锁死。
 - **环境前置**：Node ≥22、pnpm（`dsh plugin` 依赖 pnpm）；SDK 构建期 bundle（external 仅 `@deepseek-ai/*`）。
 - 不绕过部署已有的审批/护栏策略：IM 消息视同普通用户输入。
 - 凭据不进仓库；扫码返回的 App Secret 只写 DSH credential provider 管理的本地私密文件，
